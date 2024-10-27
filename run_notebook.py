@@ -26,15 +26,22 @@ if __name__ == "__main__":
     parser.add_argument("--device", "-d", type=str, default="auto")
     parser.add_argument("--batch-size", "-b", type=int, default=32)
     parser.add_argument("--exp-id")
+    parser.add_argument("--generate-id", action="store_true")
+    parser.add_argument("--layer", type=int)
     args, unknown = parser.parse_known_args()
     kwargs = dict(vars(args))
     notebook = kwargs.pop("notebook")
+    gen_id = kwargs.pop("generate_id")
     save_path = root / "results" / notebook
     save_path.mkdir(exist_ok=True, parents=True)
     source_notebook_path = notebook_root / f"{notebook}.ipynb"
-    exp_id = str(int(time())) + "_" + (kwargs.get("exp_id", None) or generate_slug(2))
+    exp_id = ((str(int(time())) + "_") if gen_id else "") + (
+        kwargs.get("exp_id", None) or (generate_slug(2) if gen_id else "")
+    )
     target_notebook_path = save_path / (
-        "_".join(args.crosscoder_path.split("/")[-3:]) + f"_{exp_id}.ipynb"
+        "_".join(".".join(args.crosscoder_path.split(".")[:-1]).split("/")[-2:])
+        + (f"_{exp_id}" if exp_id else "")
+        + ".ipynb"
     )
     kwargs["exp_id"] = exp_id
     print(f"Saving to {target_notebook_path}")
