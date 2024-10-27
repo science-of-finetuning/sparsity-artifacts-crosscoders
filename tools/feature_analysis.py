@@ -221,8 +221,7 @@ def add_relative_annotations(fig):
     fig.update_xaxes(tickmode="array", tickvals=[0.0, 0.5, 1.0])
     return fig
 
-
-def plot_feature_diff(save_path, stats_fineweb, stats_lmsys, group_name=None):
+def filtered_stats(stats_fineweb, stats_lmsys, group_name, rescaled, indices_path):
     title_suffix = ""
     if group_name == "shared":
         title_suffix = " (Shared Features)"
@@ -231,16 +230,39 @@ def plot_feature_diff(save_path, stats_fineweb, stats_lmsys, group_name=None):
     elif group_name == "base":
         title_suffix = " (Base Only Features)"
     # Extract features for the last token position
-    dead_indices = dead_feature_indices(features=[stats_fineweb.rescaled.base_avg_activation, stats_fineweb.rescaled.instruction_avg_activation])
+    dead_indices = dead_feature_indices(combined_feature_statistics=[stats_fineweb, stats_lmsys], rescaled=rescaled)
+    only_base_indices = th.load(f"{indices_path}/only_base_decoder_feature_indices.pt").cpu()
+    only_it_indices = th.load(f"{indices_path}/only_it_decoder_feature_indices.pt").cpu()
+    shared_indices = th.load(f"{indices_path}/shared_decoder_feature_indices.pt").cpu()
 
-    fineweb_filtered_diff = remove_dead_and_filter(stats_fineweb.normal.rel_activation_diff, dead_indices, shared_indices)
-    lmsys_filtered_diff = remove_dead_and_filter(stats_lmsys.normal.rel_activation_diff, dead_indices, shared_indices)
+   
+    stats_fineweb = stats_fineweb.rescaled if rescaled else stats_fineweb.normal
+    stats_lmsys = stats_lmsys.rescaled if rescaled else stats_lmsys.normal
+
+    if group_name == "shared":
+        filter_indices = shared_indices
+    elif group_name == "instruction":
+        filter_indices = only_it_indices
+    elif group_name == "base":
+        filter_indices = only_base_indices
+    else:
+        group_name = "all"
+        filter_indices = th.arange(stats_fineweb.rel_activation_diff.shape[0])
+
+    return dead_indices, filter_indices, title_suffix
+
+def plot_feature_diff(save_dir, stats_fineweb, stats_lmsys, group_name=None, rescaled=True, indices_path=None):
 
     fineweb_color = COLORS.get_shade(3, 300)
     lmsys_color = COLORS.get_shade(6, 600)
     # Create subplots
     fig = go.Figure()
     fig = make_subplots(rows=1, cols=1, shared_yaxes=False)
+
+    dead_indices, filter_indices, title_suffix = filtered_stats(stats_fineweb, stats_lmsys, group_name, rescaled, indices_path)
+
+    fineweb_filtered_diff = remove_dead_and_filter(stats_fineweb.rel_activation_diff, dead_indices, filter_indices)
+    lmsys_filtered_diff = remove_dead_and_filter(stats_lmsys.rel_activation_diff, dead_indices, filter_indices)
 
     # Full range histogram
     fineweb_hist = go.Histogram(x=fineweb_filtered_diff.cpu().numpy(), nbinsx=50, name="Fineweb", marker_color=fineweb_color)
@@ -250,13 +272,12 @@ def plot_feature_diff(save_path, stats_fineweb, stats_lmsys, group_name=None):
 
 
     # Y axis 2 subplot
-
     fig.update_yaxes(row=1, col=1, type="log")
     fig.update_yaxes(row=1, col=1, title="Count")
     fig.update_xaxes(row=1, col=1, title="Feature Activation Difference")
     # Update layout
     fig.update_layout(
-        title=f"<b>Average Relative Feature Activation Difference (Shared Features)</b><br><sup>Number of Tokens: Fineweb {stats_fineweb.rescaled.total_tokens:.2e} - LMSYS {stats_lmsys.rescaled.total_tokens:.2e}</sup>",
+        title=f"<b>Average Relative Feature Activation Difference {title_suffix}</b><br><sup>Number of Tokens: Fineweb {stats_fineweb.joint.total_tokens:.2e} - LMSYS {stats_lmsys.joint.total_tokens:.2e}</sup>",
 
     )
 
@@ -269,6 +290,43 @@ def plot_feature_diff(save_path, stats_fineweb, stats_lmsys, group_name=None):
     fig = add_relative_annotations(fig)
 
     # save
-    fig.write_image("plots/feature_diff_shared.png", scale=2)
-    # Show the plot
-    # fig.show()
+    fig.write_image(f"{save_dir}/feature_diff_{group_name}.png", scale=2)
+    return fig
+
+def get_freq(stats, split="joint"):
+    if split == "base":
+        return stats.base.non_zero_counts / stats.base.total_tokens
+    elif split == "instruction":
+        return stats.instruction.non_zero_counts / stats.instruction.total_tokens
+    elif split == "joint":  
+        return (stats.joint.non_zero_counts / stats.joint.total_tokens)
+    else:
+        raise ValueError(f"Invalid split: {split}")
+
+
+def plot_feature_freq(save_dir, stats_fineweb, stats_lmsys, group_name=None, split="joint", rescaled=True, indices_path=None):
+    title_suffix = ""
+    if group_name == "shared":
+        title_suffix = " (Shared Features)"
+    elif group_name == "instruction":
+        title_suffix = " (Instruction Only Features)"
+    elif group_name == "base":
+        title_suffix = " (Base Only Features)"
+
+
+    stats_fineweb = stats_fineweb.rescaled if rescaled else stats_fineweb.normal
+    stats_lmsys = stats_lmsys.rescaled if rescaled else stats_lmsys.normal
+
+    dead_indices, filter_indices, title_suffix = filtered_stats(stats_fineweb, stats_lmsys, group_name, rescaled, indices_path)
+
+    fineweb_freq = get_freq(stats_fineweb, split=split)
+    lmsys_freq = get_freq(stats_lmsys, split=split)
+
+    fineweb_filtered_freq = remove_dead_and_filter(fineweb_freq, dead_indices, filter_indices)
+    lmsys_filtered_freq = remove_dead_and_filter(lmsys_freq, dead_indices, filter_indices)
+
+
+    fig = go.Figure()
+    fig = make_subplots(rows=1, cols=1, shared_yaxes=False)
+    
+    

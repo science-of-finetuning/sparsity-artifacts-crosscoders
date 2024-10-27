@@ -10,7 +10,7 @@ def dead_feature_indices(combined_feature_statistics, rescaled=False, non_zero_t
     if rescaled:
         mask = th.stack([statistic.rescaled.joint.non_zero_counts > non_zero_threshold for statistic in combined_feature_statistics]).all(dim=0)
     else:
-        mask = th.stack([statistic.normal.non_zero_counts > non_zero_threshold for statistic in combined_feature_statistics]).all(dim=0)
+        mask = th.stack([statistic.normal.joint.non_zero_counts > non_zero_threshold for statistic in combined_feature_statistics]).all(dim=0)
     return mask.logical_not().nonzero().flatten().tolist()
 
 def mask_to_indices(mask):
