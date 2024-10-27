@@ -88,6 +88,11 @@ class FeatureStatistic:
         self.non_zero_counts += other.non_zero_counts
         self.total_tokens += other.total_tokens
         return self
+    
+    def to(self, device):
+        self.avg_activation = self.avg_activation.to(device)
+        self.non_zero_counts = self.non_zero_counts.to(device)
+        return self
 
 @dataclass
 class FeatureStatistics:
@@ -120,6 +125,15 @@ class FeatureStatistics:
         self.either_non_zero_counts += other.either_non_zero_counts
         return self
 
+    def to(self, device):
+        self.base = self.base.to(device)
+        self.instruction = self.instruction.to(device)
+        self.joint = self.joint.to(device)
+        self.abs_activation_diff = self.abs_activation_diff.to(device)
+        self.rel_activation_diff = self.rel_activation_diff.to(device)
+        self.either_non_zero_counts = self.either_non_zero_counts.to(device)
+        return self
+
 @dataclass
 class CombinedFeatureStatistics:
     rescaled: FeatureStatistics
@@ -128,6 +142,11 @@ class CombinedFeatureStatistics:
     def normalize(self):
         self.rescaled.normalize()
         self.normal.normalize()
+        return self
+
+    def to(self, device):
+        self.rescaled = self.rescaled.to(device)
+        self.normal = self.normal.to(device)
         return self
 
 def compute_statistics(features, total_tokens, non_zero_threshold=1e-8):
@@ -251,8 +270,7 @@ def filtered_stats(stats_fineweb, stats_lmsys, group_name, rescaled, indices_pat
 
     return dead_indices, filter_indices, title_suffix
 
-def plot_feature_diff(save_dir, stats_fineweb, stats_lmsys, group_name=None, rescaled=True, indices_path=None):
-
+def plot_feature_diff(save_dir, stats_fineweb, stats_lmsys, group_name=None, rescaled=True, indices_path=None, save=True):
     fineweb_color = COLORS.get_shade(3, 300)
     lmsys_color = COLORS.get_shade(6, 600)
     # Create subplots
@@ -260,6 +278,9 @@ def plot_feature_diff(save_dir, stats_fineweb, stats_lmsys, group_name=None, res
     fig = make_subplots(rows=1, cols=1, shared_yaxes=False)
 
     dead_indices, filter_indices, title_suffix = filtered_stats(stats_fineweb, stats_lmsys, group_name, rescaled, indices_path)
+
+    stats_fineweb = stats_fineweb.rescaled if rescaled else stats_fineweb.normal
+    stats_lmsys = stats_lmsys.rescaled if rescaled else stats_lmsys.normal
 
     fineweb_filtered_diff = remove_dead_and_filter(stats_fineweb.rel_activation_diff, dead_indices, filter_indices)
     lmsys_filtered_diff = remove_dead_and_filter(stats_lmsys.rel_activation_diff, dead_indices, filter_indices)
@@ -290,7 +311,8 @@ def plot_feature_diff(save_dir, stats_fineweb, stats_lmsys, group_name=None, res
     fig = add_relative_annotations(fig)
 
     # save
-    fig.write_image(f"{save_dir}/feature_diff_{group_name}.png", scale=2)
+    if save:
+        fig.write_image(f"{save_dir}/feature_diff_{group_name}{'_rescaled' if rescaled else ''}.png", scale=2)
     return fig
 
 def get_freq(stats, split="joint"):
@@ -304,7 +326,7 @@ def get_freq(stats, split="joint"):
         raise ValueError(f"Invalid split: {split}")
 
 
-def plot_feature_freq(save_dir, stats_fineweb, stats_lmsys, group_name=None, split="joint", rescaled=True, indices_path=None):
+def plot_feature_freq(save_dir, stats_fineweb, stats_lmsys, group_name=None, split="joint", rescaled=True, indices_path=None, topk=100, save=True):
     title_suffix = ""
     if group_name == "shared":
         title_suffix = " (Shared Features)"
@@ -313,11 +335,16 @@ def plot_feature_freq(save_dir, stats_fineweb, stats_lmsys, group_name=None, spl
     elif group_name == "base":
         title_suffix = " (Base Only Features)"
 
+    fineweb_color = COLORS.get_shade(3, 300)
+    lmsys_color = COLORS.get_shade(6, 600)
+    # Create subplots
+    fig = go.Figure()
+    fig = make_subplots(rows=1, cols=2, shared_yaxes=False, horizontal_spacing=0.05)
 
+    dead_indices, filter_indices, title_suffix = filtered_stats(stats_fineweb, stats_lmsys, group_name, rescaled, indices_path)
     stats_fineweb = stats_fineweb.rescaled if rescaled else stats_fineweb.normal
     stats_lmsys = stats_lmsys.rescaled if rescaled else stats_lmsys.normal
 
-    dead_indices, filter_indices, title_suffix = filtered_stats(stats_fineweb, stats_lmsys, group_name, rescaled, indices_path)
 
     fineweb_freq = get_freq(stats_fineweb, split=split)
     lmsys_freq = get_freq(stats_lmsys, split=split)
@@ -325,8 +352,19 @@ def plot_feature_freq(save_dir, stats_fineweb, stats_lmsys, group_name=None, spl
     fineweb_filtered_freq = remove_dead_and_filter(fineweb_freq, dead_indices, filter_indices)
     lmsys_filtered_freq = remove_dead_and_filter(lmsys_freq, dead_indices, filter_indices)
 
+    sorted_indices = th.argsort(fineweb_filtered_freq, descending=True)[:topk]
+    fig.add_trace(go.Bar(x=th.arange(topk), y=fineweb_filtered_freq[sorted_indices], name="Fineweb", marker_color=fineweb_color), row=1, col=1)
+    sorted_indices = th.argsort(lmsys_filtered_freq, descending=True)[:topk]
+    fig.add_trace(go.Bar(x=th.arange(topk), y=lmsys_filtered_freq[sorted_indices], name="LMSYS", marker_color=lmsys_color), row=1, col=2)
 
-    fig = go.Figure()
-    fig = make_subplots(rows=1, cols=1, shared_yaxes=False)
-    
-    
+    fig.update_yaxes(title="Frequency")
+    fig.update_xaxes(title="Topk Features (Sorted)")
+
+    fig.update_layout(title=f"<b>Feature Frequency {title_suffix}</b><br><sup>Number of Tokens: Fineweb {stats_fineweb.joint.total_tokens:.2e} - LMSYS {stats_lmsys.joint.total_tokens:.2e}</sup>")
+
+    fig.update_layout(width=900, height=500)
+    fig.update_layout(legend=dict(x=0.76, y=0.95))
+    if save:
+        fig.write_image(f"{save_dir}/feature_freq_{group_name}_{split}{'_rescaled' if rescaled else ''}.png", scale=2)
+    return fig
+
