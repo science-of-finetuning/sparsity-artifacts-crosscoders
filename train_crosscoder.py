@@ -34,6 +34,7 @@ if __name__ == "__main__":
     parser.add_argument("--resample-steps", type=int, default=None)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--pretrained", type=str, default=None)
+    parser.add_argument("--encoder-layers", type=int, default=None, nargs="+")
     args = parser.parse_args()
 
     print(f"Training args: {args}")
@@ -81,8 +82,10 @@ if __name__ == "__main__":
             "same_init_for_all_layers": args.same_init_for_all_layers,
             "norm_init_scale": args.norm_init_scale,
             "init_with_transpose": args.init_with_transpose,
+            "encoder_layers": args.encoder_layers,
         },
         "pretrained_ae": CrossCoder.from_pretrained(args.pretrained) if args.pretrained is not None else None,
+
     }
 
     validation_size = 10**6
