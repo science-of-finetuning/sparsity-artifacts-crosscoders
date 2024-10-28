@@ -47,6 +47,7 @@ def clean_up_max_activating_examples2(max_activating, tokenizer, max_seq_len):
                     f"Warning: length of tokens {len(tokens)} does not match length of activation values {len(ex_act)} for example {i} of feature {feature_idx}"
                 )
             examples[i] = (ex_val, tokens, ex_act)
+    return max_activating
 
 
 @th.no_grad()
