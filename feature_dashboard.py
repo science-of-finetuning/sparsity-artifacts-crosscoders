@@ -156,6 +156,7 @@ class FeatureCentricDashboard:
                 .replace(">", "&gt;")
                 .replace("'", "&apos;")
                 .replace('"', "&quot;")
+                .replace("\n", "\\n\n")
             )
 
             color = f"rgba(255, 0, 0, {abs(norm_act):.3f})"
