@@ -15,14 +15,14 @@ class FeatureCentricDashboard:
 
     def __init__(
         self,
-        max_activation_examples: dict[int, list[tuple[float, str, list[float]]]],
+        max_activation_examples: dict[int, list[tuple[float, list[str], list[float]]]],
         tokenizer,
         window_size: int = 50,  # Number of tokens to show before/after max activation
     ):
         """
         Args:
             max_activation_examples: Dictionary mapping feature indices to lists of tuples
-                (max_activation_value, text, activation_values_of_each_token)
+                (max_activation_value, list of tokens, list of activation values)
             tokenizer: HuggingFace tokenizer for the model
             window_size: Number of tokens to show before/after the max activation token
         """
@@ -33,14 +33,14 @@ class FeatureCentricDashboard:
 
     def _setup_widgets(self):
         """Initialize the dashboard widgets"""
-        
+
         # Convert to list for easier validation
         self.available_features = sorted(self.max_activation_examples.keys())
-        
+
         self.feature_selector = widgets.Combobox(
             # Convert numbers to strings and create a tuple of options
             options=tuple(str(f) for f in self.available_features),
-            placeholder='Type a feature number...',
+            placeholder="Type a feature number...",
             description="Feature:",
             ensure_option=False,  # Allow typing values not in dropdown
             continuous_update=False,  # Only trigger on Enter/loss of focus
@@ -55,14 +55,16 @@ class FeatureCentricDashboard:
         try:
             # Try to convert input to integer
             feature_idx = int(change["new"])
-            
+
             # Validate feature exists
             if feature_idx in self.max_activation_examples:
                 self._update_examples({"new": feature_idx})
             else:
                 with self.examples_output:
                     self.examples_output.clear_output()
-                    print(f"Feature {feature_idx} not found. Available features: {self.available_features}")
+                    print(
+                        f"Feature {feature_idx} not found. Available features: {self.available_features}"
+                    )
         except ValueError:
             # Handle invalid input
             with self.examples_output:
@@ -77,7 +79,8 @@ class FeatureCentricDashboard:
         show_full: bool = False,
     ) -> str:
         # Update the CSS to blend the hover effect with the red background
-        html_parts = ["""
+        html_parts = [
+            """
             <style>
                 .token { 
                     transition: background-color 0.1s;
@@ -126,7 +129,8 @@ class FeatureCentricDashboard:
                 }
                 setupTokenTooltips();
             </script>
-        """]
+        """
+        ]
         # Determine window bounds
         if show_full:
             start_idx = 0
@@ -157,7 +161,7 @@ class FeatureCentricDashboard:
             color = f"rgba(255, 0, 0, {abs(norm_act):.3f})"
 
             # Create tooltip content with token ID, string, and activation
-            tok_id = self.tokenizer.convert_ids_to_tokens(i)
+            tok_id = self.tokenizer.convert_tokens_to_ids(tokens[i])
             tooltip_content = f"Token {tok_id}: '{token}'\nActivation: {act:.3f}"
             tooltip_content = tooltip_content.replace('"', "&quot;")
 
