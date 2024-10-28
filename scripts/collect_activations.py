@@ -5,6 +5,7 @@ from datasets import load_from_disk, load_dataset
 from loguru import logger
 import torch as th
 from nnsight import LanguageModel
+from dlabutils import model_path
 from pathlib import Path
 import os
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -15,8 +16,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
 
-    model = AutoModelForCausalLM.from_pretrained(args.model, device_map="auto", torch_dtype=th.bfloat16, attn_implementation="eager")
-    tokenizer = AutoTokenizer.from_pretrained(args.model)
+    model = AutoModelForCausalLM.from_pretrained(model_path(args.model), device_map="auto", torch_dtype=th.bfloat16, attn_implementation="eager")
+    tokenizer = AutoTokenizer.from_pretrained(model_path(args.model))
     model = LanguageModel(model, tokenizer=tokenizer)
     num_layers = int(len(model.model.layers))
     layers = [int(num_layers*i) for i in (0.2, 0.5, 0.8)]

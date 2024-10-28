@@ -243,11 +243,11 @@ def add_relative_annotations(fig):
 def filtered_stats(stats_fineweb, stats_lmsys, group_name, rescaled, indices_path):
     title_suffix = ""
     if group_name == "shared":
-        title_suffix = " (Shared Features)"
+        title_suffix = "(Shared Features)"
     elif group_name == "instruction":
-        title_suffix = " (Instruction Only Features)"
+        title_suffix = "(Instruction Only Features)"
     elif group_name == "base":
-        title_suffix = " (Base Only Features)"
+        title_suffix = "(Base Only Features)"
     # Extract features for the last token position
     dead_indices = dead_feature_indices(combined_feature_statistics=[stats_fineweb, stats_lmsys], rescaled=rescaled)
     only_base_indices = th.load(f"{indices_path}/only_base_decoder_feature_indices.pt").cpu()
@@ -298,8 +298,7 @@ def plot_feature_diff(save_dir, stats_fineweb, stats_lmsys, group_name=None, res
     fig.update_xaxes(row=1, col=1, title="Feature Activation Difference")
     # Update layout
     fig.update_layout(
-        title=f"<b>Average Relative Feature Activation Difference {title_suffix}</b><br><sup>Number of Tokens: Fineweb {stats_fineweb.joint.total_tokens:.2e} - LMSYS {stats_lmsys.joint.total_tokens:.2e}</sup>",
-
+        title=f"<b>Average Relative Feature Activation Difference <br>{title_suffix}</b><br><sup>Number of Tokens: Fineweb {stats_fineweb.joint.total_tokens:.2e} - LMSYS {stats_lmsys.joint.total_tokens:.2e}</sup>",
     )
 
     # subtitle 
