@@ -1,0 +1,5 @@
+nnterp
+jupyter
+seaborn
+coolname
+papermill
