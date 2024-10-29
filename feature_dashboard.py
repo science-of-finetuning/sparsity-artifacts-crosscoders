@@ -2,6 +2,7 @@ from IPython.display import HTML, display
 import numpy as np
 import ipywidgets as widgets
 import urllib.parse
+from pathlib import Path
 
 
 class FeatureCentricDashboard:
@@ -17,7 +18,7 @@ class FeatureCentricDashboard:
         self,
         max_activation_examples: dict[int, list[tuple[float, list[str], list[float]]]],
         tokenizer,
-        window_size: int = 50,  # Number of tokens to show before/after max activation
+        window_size: int = 50,
     ):
         """
         Args:
@@ -29,6 +30,14 @@ class FeatureCentricDashboard:
         self.max_activation_examples = max_activation_examples
         self.tokenizer = tokenizer
         self.window_size = window_size
+        # Load templates at initialization
+        template_dir = Path(__file__).parent / "templates"
+        with open(template_dir / "styles.css", "r") as f:
+            self.styles = f.read()
+        with open(template_dir / "tooltips.js", "r") as f:
+            self.scripts = f.read()
+        with open(template_dir / "base.html", "r") as f:
+            self.base_template = f.read()
         self._setup_widgets()
 
     def _setup_widgets(self):
@@ -37,12 +46,9 @@ class FeatureCentricDashboard:
         # Convert to list for easier validation
         self.available_features = sorted(self.max_activation_examples.keys())
 
-        self.feature_selector = widgets.Combobox(
-            # Convert numbers to strings and create a tuple of options
-            options=tuple(str(f) for f in self.available_features),
+        self.feature_selector = widgets.Text(
             placeholder="Type a feature number...",
             description="Feature:",
-            ensure_option=False,  # Allow typing values not in dropdown
             continuous_update=False,  # Only trigger on Enter/loss of focus
             style={"description_width": "initial"},
         )
@@ -78,58 +84,9 @@ class FeatureCentricDashboard:
         max_idx: int,
         show_full: bool = False,
     ) -> str:
-        # Update the CSS to blend the hover effect with the red background
         html_parts = [
-            """
-            <style>
-                .token { 
-                    transition: background-color 0.1s;
-                    position: relative;  /* For proper hover effect layering */
-                }
-                .token:hover { 
-                    background-image: linear-gradient(rgba(128, 128, 128, 0.3), rgba(128, 128, 128, 0.3));
-                }
-                .token-tooltip {
-                    position: absolute;
-                    background: black;
-                    color: white;
-                    padding: 4px 8px;
-                    border-radius: 4px;
-                    font-size: 12px;
-                    pointer-events: none;
-                    z-index: 1000;
-                    white-space: pre-wrap;
-                }
-            </style>
-            <script>
-                function setupTokenTooltips() {
-                    // Create tooltip element if it doesn't exist
-                    if (!document.querySelector('.token-tooltip')) {
-                        const tooltip = document.createElement('div');
-                        tooltip.className = 'token-tooltip';
-                        tooltip.style.display = 'none';
-                        document.body.appendChild(tooltip);
-                    }
-                    
-                    // Add event listeners for all tokens
-                    document.querySelectorAll('.token').forEach(token => {
-                        token.addEventListener('mousemove', (e) => {
-                            const tooltip = document.querySelector('.token-tooltip');
-                            tooltip.textContent = token.dataset.tooltip;
-                            tooltip.style.display = 'block';
-                            tooltip.style.left = e.pageX + 10 + 'px';
-                            tooltip.style.top = e.pageY + 10 + 'px';
-                        });
-                        
-                        token.addEventListener('mouseleave', () => {
-                            const tooltip = document.querySelector('.token-tooltip');
-                            tooltip.style.display = 'none';
-                        });
-                    });
-                }
-                setupTokenTooltips();
-            </script>
-        """
+            f"<style>{self.styles}</style>",
+            f"<script>{self.scripts}</script>",
         ]
         # Determine window bounds
         if show_full:
@@ -221,3 +178,50 @@ class FeatureCentricDashboard:
 
         dashboard = widgets.VBox([self.feature_selector, self.examples_output])
         display(dashboard)
+
+    def export_to_html(self, output_path: str, features_to_export: list[int]):
+        """
+        Export the dashboard data to a static HTML file.
+        Creates a single self-contained HTML file with embedded CSS and JavaScript.
+        """
+        # Generate content
+        content_parts = []
+
+        for feature_idx in features_to_export:
+            examples = self.max_activation_examples[feature_idx]
+            content_parts.append(
+                f'<div class="feature-section"><h2>Feature {feature_idx}</h2>'
+            )
+
+            for max_act, tokens, token_acts in examples:
+                max_idx = np.argmax(token_acts)
+                full_html = self._create_html_highlight(
+                    tokens, token_acts, max_idx, True
+                )
+
+                content_parts.append(
+                    f"""
+                    <div style="margin: 10px 0; padding: 10px; border: 1px solid #ccc;">
+                        <p style="margin: 0 0 5px 0;"><b>Max Activation: {max_act:.2f}</b></p>
+                        <div class="text-sample" style="white-space: pre-wrap;">
+                            {full_html}
+                        </div>
+                    </div>
+                """
+                )
+
+            content_parts.append("</div>")
+
+        # Replace placeholders in base template
+        html_content = (
+            self.base_template.replace("{{content}}", "\n".join(content_parts))
+            .replace("{{styles}}", self.styles)
+            .replace("{{scripts}}", self.scripts)
+        )
+
+        # Create output directory and write file
+        output_dir = Path(output_path).parent
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write(html_content)

@@ -50,6 +50,17 @@ def clean_up_max_activating_examples2(max_activating, tokenizer, max_seq_len):
     return max_activating
 
 
+def merge_max_examples(*max_dicts):
+    merged_dict = {}
+    for d in max_dicts:
+        for k, v in d.items():
+            merged_dict[k] = merged_dict.get(k, []) + v
+    # sort each list
+    for k in merged_dict:
+        merged_dict[k] = sorted(merged_dict[k], key=lambda x: x[0], reverse=True)
+    return merged_dict
+
+
 @th.no_grad()
 def compute_max_activating_examples(
     dataset,

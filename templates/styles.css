@@ -1,0 +1,23 @@
+.token { 
+    transition: background-color 0.1s;
+    position: relative;
+}
+.token:hover { 
+    background-image: linear-gradient(rgba(128, 128, 128, 0.3), rgba(128, 128, 128, 0.3));
+}
+.token-tooltip {
+    position: absolute;
+    background: black;
+    color: white;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    pointer-events: none;
+    z-index: 1000;
+    white-space: pre-wrap;
+}
+.feature-section {
+    margin: 20px 0;
+    padding: 10px;
+    border: 1px solid #ccc;
+} 
