@@ -15,7 +15,6 @@ def model_first_half_forward(
         inputs_embeds: Optional[torch.FloatTensor] = None,
         layer_idx: int = 13,
     ) -> Union[Tuple, BaseModelOutputWithPast]:
-        print(position_ids)
         if (input_ids is None) ^ (inputs_embeds is not None):
             raise ValueError(
                 "You cannot specify both input_ids and inputs_embeds at the same time, and must specify either one"
