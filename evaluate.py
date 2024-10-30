@@ -506,6 +506,49 @@ def create_half_fn_dict_no_cross() -> dict[str, HalfStepPreprocessFn]:
     return half_fns
 
 
+def create_it_only_ft_fn_dict(
+    crosscoder: CrossCoder, it_only_features: list[int], base_only_features: list[int]
+) -> dict[str, HalfStepPreprocessFn]:
+    half_fns = {
+        "remove_it_only_custom": CrossCoderSteeringFeature(
+            crosscoder,
+            steer_base_activations=False,
+            steer_with_base_features=True,
+            continue_with_base=False,
+            features_to_steer=it_only_features,
+        ),
+        "remove_it_and_base_only_custom": CrossCoderSteeringFeature(
+            crosscoder,
+            steer_base_activations=False,
+            steer_with_base_features=True,
+            continue_with_base=False,
+            features_to_steer=it_only_features + base_only_features,
+        ),
+        "steer_it_only_custom_to_base": CrossCoderSteeringFeature(
+            crosscoder,
+            steer_base_activations=True,
+            steer_with_base_features=False,
+            continue_with_base=True,
+            features_to_steer=it_only_features,
+        ),
+        "steer_it_only_custom": CrossCoderSteeringFeature(
+            crosscoder,
+            steer_base_activations=True,
+            steer_with_base_features=False,
+            continue_with_base=False,
+            features_to_steer=it_only_features,
+        ),
+        "steer_it_and_base_only_custom": CrossCoderSteeringFeature(
+            crosscoder,
+            steer_base_activations=True,
+            steer_with_base_features=False,
+            continue_with_base=False,
+            features_to_steer=it_only_features + base_only_features,
+        ),
+    }
+    return half_fns
+
+
 from datasets import load_from_disk
 
 # from nnsight import LanguageModel
@@ -535,6 +578,7 @@ if __name__ == "__main__":
             "/dlabscratch1/cdumas/representation-structure-comparison/notebooks/results/eval_crosscoder/l13-mu4.1e-02-lr1e-04_ae_final/data/feature_df.csv"
         ),
     )
+    parser.add_argument("--it-only-feature-list-path", type=Path, default=None)
     parser.add_argument("--name", type=str, default=None)
     parser.add_argument("--log-every", type=int, default=10)
     parser.add_argument("--save-path", type=Path, default=Path("results-runai"))
@@ -545,6 +589,7 @@ if __name__ == "__main__":
         device_map="cuda",
         attn_implementation="eager",
     )
+
     tokenizer = AutoTokenizer.from_pretrained(model_path("google/gemma-2-2b-it"))
     instruct_model.tokenizer = tokenizer
 
@@ -566,6 +611,9 @@ if __name__ == "__main__":
     df = pd.read_csv(args.feature_df_path)
     it_only_features = df[df["tag"] == "IT only"].index.tolist()
     base_only_features = df[df["tag"] == "Base only"].index.tolist()
+    if args.it_only_feature_list_path is not None:
+        it_only_features = pd.read_json(args.it_only_feature_list_path).index.tolist()
+        print(f"Using IT only features: {it_only_features}")
     if args.name is None and args.test:
         args.name = "test"
     wandb.init(project="perplexity-comparison", name=args.name)
@@ -573,10 +621,11 @@ if __name__ == "__main__":
     fn_dict = {}
     # fn_dict = create_half_fn_dict_main(crosscoder, it_only_features, base_only_features)
     # fn_dict.update(create_half_fn_dict_no_cross())
-    fn_dict.update(create_half_fn_dict_seeds(crosscoder, seeds, len(it_only_features)))
-    fn_dict.update(
-        create_half_fn_dict_secondary(crosscoder, it_only_features, base_only_features)
-    )
+    # fn_dict.update(create_half_fn_dict_seeds(crosscoder, seeds, len(it_only_features)))
+    # fn_dict.update(
+    #     create_half_fn_dict_secondary(crosscoder, it_only_features, base_only_features)
+    # )
+    fn_dict.update(create_it_only_ft_fn_dict(crosscoder, it_only_features, base_only_features))
     result = evaluate_interventions(
         base_model,
         instruct_model,
