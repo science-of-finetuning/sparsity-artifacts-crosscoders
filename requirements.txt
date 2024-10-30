@@ -3,3 +3,5 @@ jupyter
 seaborn
 coolname
 papermill
+pycolors @ git+https://github.com/jkminder/pycolors.git
+torchmetrics
