@@ -19,6 +19,7 @@ class FeatureCentricDashboard:
         max_activation_examples: dict[int, list[tuple[float, list[str], list[float]]]],
         tokenizer,
         window_size: int = 50,
+        max_examples: int = 30,
     ):
         """
         Args:
@@ -30,6 +31,7 @@ class FeatureCentricDashboard:
         self.max_activation_examples = max_activation_examples
         self.tokenizer = tokenizer
         self.window_size = window_size
+        self.max_examples = max_examples
         # Load templates at initialization
         template_dir = Path(__file__).parent / "templates"
         with open(template_dir / "styles.css", "r") as f:
@@ -142,7 +144,7 @@ class FeatureCentricDashboard:
         with self.examples_output:
             self.examples_output.clear_output()
 
-            for max_act, tokens, token_acts in examples:
+            for max_act, tokens, token_acts in list(examples)[:self.max_examples]:
                 # Find max activation index
                 max_idx = np.argmax(token_acts)
 
@@ -161,7 +163,7 @@ class FeatureCentricDashboard:
                     HTML(
                         f"""
                 <div style="margin: 10px 0; padding: 10px; border: 1px solid #ccc;">
-                    <p style="margin: 0 0 5px 0;"><b>Max Activation: {max_act:.2f}</b></p>
+                    <p style="margin: 0 0 2px 0;"><b>Max Activation: {max_act:.2f}</b></p>
                     <div class="text-sample" style="white-space: pre-wrap;" 
                          onclick="this.innerHTML=decodeURIComponent(this.dataset.fullText); setupTokenTooltips();" 
                          data-full-text="{urllib.parse.quote(full_html)}">
@@ -202,7 +204,7 @@ class FeatureCentricDashboard:
                 content_parts.append(
                     f"""
                     <div style="margin: 10px 0; padding: 10px; border: 1px solid #ccc;">
-                        <p style="margin: 0 0 5px 0;"><b>Max Activation: {max_act:.2f}</b></p>
+                        <p style="margin: 0 0 2px 0;"><b>Max Activation: {max_act:.2f}</b></p>
                         <div class="text-sample" style="white-space: pre-wrap;">
                             {full_html}
                         </div>
