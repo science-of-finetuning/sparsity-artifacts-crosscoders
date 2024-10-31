@@ -3,6 +3,22 @@ import numpy as np
 import ipywidgets as widgets
 import urllib.parse
 from pathlib import Path
+from nnsight import LanguageModel
+from functools import cache
+import torch as th
+import ast
+
+import traceback
+from nnterp.nnsight_utils import get_layer, get_layer_output
+import einops
+
+
+def parse_list_str(s: str) -> list[int]:
+    if not s.startswith("["):
+        s = "[" + s
+    if not s.endswith("]"):
+        s = s + "]"
+    return ast.literal_eval(s)
 
 
 class FeatureCentricDashboard:
@@ -144,7 +160,7 @@ class FeatureCentricDashboard:
         with self.examples_output:
             self.examples_output.clear_output()
 
-            for max_act, tokens, token_acts in list(examples)[:self.max_examples]:
+            for max_act, tokens, token_acts in list(examples)[: self.max_examples]:
                 # Find max activation index
                 max_idx = np.argmax(token_acts)
 
@@ -227,3 +243,241 @@ class FeatureCentricDashboard:
 
         with open(output_path, "w", encoding="utf-8") as f:
             f.write(html_content)
+
+
+class OnlineFeatureCentricDashboard:
+    """
+    This Dashboard allows real-time analysis of text for specific features.
+    Users can input text, select a feature, and see the activation patterns
+    highlighted directly in the text with the same visualization style as
+    the FeatureCentricDashboard.
+    """
+
+    def __init__(
+        self,
+        base_model: LanguageModel,
+        instruct_model: LanguageModel,
+        crosscoder,
+        collect_layer: int,
+        window_size: int = 50,
+    ):
+        """
+        Args:
+            model: nnsight LanguageModel
+            window_size: Number of tokens to show before/after the max activation token
+        """
+        self.tokenizer = instruct_model.tokenizer
+        self.instruct_model = instruct_model
+        self.base_model = base_model
+        self.crosscoder = crosscoder
+        self.layer = collect_layer
+        self.window_size = window_size
+
+        # Load templates
+        template_dir = Path(__file__).parent / "templates"
+        with open(template_dir / "styles.css", "r") as f:
+            self.styles = f.read()
+        with open(template_dir / "tooltips.js", "r") as f:
+            self.scripts = f.read()
+
+        self._setup_widgets()
+
+    def _setup_widgets(self):
+        """Initialize the dashboard widgets"""
+        self.text_input = widgets.Textarea(
+            placeholder="Enter text to analyze...",
+            description="Text:",
+            layout=widgets.Layout(
+                width="800px", height="100px", font_family="sans-serif"
+            ),
+            style={"description_width": "initial"},
+        )
+
+        # Widget for features to compute
+        self.feature_input = widgets.Text(
+            placeholder="Enter features to compute [1,2,3]",
+            description="Features to compute:",
+            continuous_update=False,
+            style={"description_width": "initial"},
+        )
+
+        # New widgets for display control
+        self.highlight_feature = widgets.Text(
+            placeholder="Enter feature to highlight in red",
+            description="Highlight feature:",
+            continuous_update=False,
+            style={"description_width": "initial"},
+        )
+
+        self.tooltip_features = widgets.Text(
+            placeholder="Enter features to show in tooltip [1,2,3]",
+            description="Tooltip features:",
+            continuous_update=False,
+            style={"description_width": "initial"},
+        )
+
+        self.analyze_button = widgets.Button(
+            description="Analyze",
+            button_style="primary",
+        )
+
+        self.output_area = widgets.Output()
+        self.analyze_button.on_click(self._handle_analysis)
+
+    @cache
+    @th.no_grad
+    def get_feature_activation(
+        self, text: str, feature_indicies: tuple[int, ...]
+    ) -> th.Tensor:
+        """Get the activation values for a given feature"""
+        with self.instruct_model.trace(text):
+            instruct_activations = get_layer_output(self.instruct_model, self.layer)[
+                0
+            ].save()
+            get_layer(self.instruct_model, self.layer).output.stop()
+        with self.base_model.trace(text):
+            base_activations = get_layer_output(self.base_model, self.layer)[0].save()
+            get_layer(self.base_model, self.layer).output.stop()
+        print(base_activations.shape)
+        cc_input = th.stack(
+            [base_activations, instruct_activations], dim=1
+        ).float()  # seq, 2, d
+        features_acts = self.crosscoder.get_activations(
+            cc_input, select_features=feature_indicies
+        )  # seq, f
+        return features_acts
+
+    def _create_html_highlight(
+        self,
+        tokens: list[str],
+        activations: th.Tensor,
+        all_feature_indicies: list[int],
+        highlight_feature_idx: int,
+        tooltip_features: list[int],
+    ) -> str:
+        """Create HTML with highlighted tokens based on activation values"""
+        html_parts = [
+            f"<style>{self.styles}</style>",
+            f"<script>{self.scripts}</script>",
+        ]
+
+        # Find highlight feature index in the activation tensor
+        highlight_idx = all_feature_indicies.index(highlight_feature_idx)
+        # Normalize activations for color intensity (only for highlight feature)
+        highlight_acts = activations[:, highlight_idx]
+        max_highlight = highlight_acts.max()
+        norm_acts = highlight_acts / (max_highlight + 1e-6)
+
+        # Create HTML spans with activation values
+        for i in range(len(tokens)):
+            token = (
+                tokens[i]
+                .replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+                .replace("'", "&apos;")
+                .replace('"', "&quot;")
+                .replace("\n", "\\n\n")
+            )
+
+            color = f"rgba(255, 0, 0, {norm_acts[i].item():.3f})"
+
+            # Create tooltip content only for requested features
+            tok_id = self.tokenizer.convert_tokens_to_ids(tokens[i])
+            tooltip_lines = [f"Token {tok_id}: '{token}'"]
+            for feat in tooltip_features:
+                feat_idx = all_feature_indicies.index(feat)
+                act_value = activations[i, feat_idx].item()
+                tooltip_lines.append(f"Feature {feat}: {act_value:.3f}")
+
+            tooltip_content = "\n".join(tooltip_lines).replace('"', "&quot;")
+
+            html_parts.append(
+                f'<span class="token" style="background-color: {color};" '
+                f'data-tooltip="{tooltip_content}">{token}</span>'
+            )
+
+        return "".join(html_parts)
+
+    def _handle_analysis(self, _):
+        """Handle the analysis button click"""
+        try:
+            # Parse feature indices for computation
+            f_idx_str = self.feature_input.value.strip()
+            feature_indicies = parse_list_str(f_idx_str)
+            if len(feature_indicies) == 0:
+                raise ValueError("No feature indicies provided")
+            # Parse display control features
+            highlight_feature = int(self.highlight_feature.value.strip())
+            tooltip_features = parse_list_str(self.tooltip_features.value.strip())
+            text = self.text_input.value
+            tokens = self.tokenizer.tokenize(text, add_special_tokens=True)
+            all_features = (
+                set(feature_indicies) | set(tooltip_features) | {highlight_feature}
+            )
+            activations = self.get_feature_activation(text, tuple(all_features))
+
+            with self.output_area:
+                self.output_area.clear_output()
+
+                # Display max activations for tooltip features
+                max_acts_html = []
+                for feat in tooltip_features:
+                    if feat in feature_indicies:
+                        feat_idx = feature_indicies.index(feat)
+                        max_act = activations[:, feat_idx].max().item()
+                        max_acts_html.append(f"Feature {feat} max: {max_act:.3f}")
+
+                max_acts_display = (
+                    "<div style='margin-bottom: 10px'><b>"
+                    + " | ".join(max_acts_html)
+                    + "</b></div>"
+                )
+
+                # Create and display the highlighted text
+                html_content = self._create_html_highlight(
+                    tokens,
+                    activations,
+                    feature_indicies,
+                    highlight_feature,
+                    tooltip_features,
+                )
+                display(
+                    HTML(
+                        f"""
+                    <div style="margin: 10px 0; padding: 10px; border: 1px solid #ccc;">
+                        {max_acts_display}
+                        <div class="text-sample" style="white-space: pre-wrap;">
+                            {html_content}
+                        </div>
+                    </div>
+                    """
+                    )
+                )
+
+        except ValueError:
+            with self.output_area:
+                self.output_area.clear_output()
+                print("Please enter a valid feature number")
+        except Exception as e:
+            with self.output_area:
+                self.output_area.clear_output()
+                traceback.print_exc()
+
+    def display(self):
+        """Display the dashboard"""
+        dashboard = widgets.VBox(
+            [
+                widgets.HBox([self.text_input]),
+                widgets.HBox(
+                    [
+                        self.feature_input,
+                        self.highlight_feature,
+                        self.tooltip_features,
+                        self.analyze_button,
+                    ]
+                ),
+                self.output_area,
+            ]
+        )
+        display(dashboard)
