@@ -110,27 +110,33 @@ class CrossCoderSteeringFeature(IdentityPreprocessFn):
         features_to_steer: list[int] | None,
         continue_with_base: bool,
         filter_treshold: float | None = None,
+        scale_steering_feature: float = 1.0,
     ):
         super().__init__(continue_with_base)
         if features_to_steer is None:
             features_to_steer = list(range(crosscoder.decoder.weight.shape[1]))
         self.encoder_weight = crosscoder.encoder.weight[:, :, features_to_steer]  # ldf
+        self.encoder_bias = crosscoder.encoder.bias[features_to_steer]  # ld
         self.decoder_weight = crosscoder.decoder.weight[:, features_to_steer]  # lfd
         self.steer_with_base_features = steer_with_base_features
         self.steer_base_activations = steer_base_activations
         self.filter_treshold = filter_treshold
+        self.scale_steering_feature = scale_steering_feature
+
     def preprocess(self, base_activations, instruct_activations):
         cc_input = th.stack(
             [base_activations, instruct_activations], dim=2
         ).float()  # b, seq, 2, d
         f = relu(
-            th.einsum("bsld, ldf -> bsf", cc_input, self.encoder_weight)
-        )  # b, seq, f
+            th.einsum("bsld, ldf -> bsf", cc_input, self.encoder_weight) + self.encoder_bias
+        ) * self.scale_steering_feature  # b, seq, f
         if self.filter_treshold is not None:
             mask = f.sum(dim=-1).max(dim=-1).values > self.filter_treshold
             if not mask.any():
                 return None, None, None
             f = f[mask]
+        else:
+            mask = th.ones_like(f.sum(dim=-1), dtype=th.bool)
         decoded = th.einsum("bsf, lfd -> bsld", f, self.decoder_weight)
         steering_feature = decoded[:, :, 1, :] - decoded[:, :, 0, :]
         if self.steer_with_base_features:
