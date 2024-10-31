@@ -22,16 +22,28 @@ class HalfStepPreprocessFn(ABC):
     @abstractmethod
     def preprocess(
         self, base_activations, instruct_activations
-    ) -> tuple[th.Tensor, None] | tuple[None, th.Tensor]:
+    ) -> (
+        tuple[th.Tensor, None]
+        | tuple[None, th.Tensor]
+        | tuple[None, th.Tensor, th.Tensor | None]
+        | tuple[th.Tensor, None, th.Tensor | None]
+    ):
         """
         Preprocess the activations before the last half forward.
         Returns activations, None if the base model should finish the forward pass.
         Returns None, activations if the instruct model should finish the forward pass.
+        Can also return a third element which is the batch mask of activations that were selected.
         """
         raise NotImplementedError
 
     def __call__(self, base_activations, instruct_activations):
-        return self.preprocess(base_activations, instruct_activations)
+        res = self.preprocess(base_activations, instruct_activations)
+        if len(res) == 2:  # no mask
+            return res[0], res[1], None
+        elif len(res) == 3:  # mask
+            return res
+        else:
+            raise ValueError(f"Expected 2 or 3 elements, got {len(res)}")
 
 
 class IdentityPreprocessFn(HalfStepPreprocessFn):
@@ -97,6 +109,7 @@ class CrossCoderSteeringFeature(IdentityPreprocessFn):
         steer_with_base_features: bool,
         features_to_steer: list[int] | None,
         continue_with_base: bool,
+        filter_treshold: float | None = None,
     ):
         super().__init__(continue_with_base)
         if features_to_steer is None:
@@ -105,7 +118,7 @@ class CrossCoderSteeringFeature(IdentityPreprocessFn):
         self.decoder_weight = crosscoder.decoder.weight[:, features_to_steer]  # lfd
         self.steer_with_base_features = steer_with_base_features
         self.steer_base_activations = steer_base_activations
-
+        self.filter_treshold = filter_treshold
     def preprocess(self, base_activations, instruct_activations):
         cc_input = th.stack(
             [base_activations, instruct_activations], dim=2
@@ -113,12 +126,17 @@ class CrossCoderSteeringFeature(IdentityPreprocessFn):
         f = relu(
             th.einsum("bsld, ldf -> bsf", cc_input, self.encoder_weight)
         )  # b, seq, f
+        if self.filter_treshold is not None:
+            mask = f.sum(dim=-1).max(dim=-1).values > self.filter_treshold
+            if not mask.any():
+                return None, None, None
+            f = f[mask]
         decoded = th.einsum("bsf, lfd -> bsld", f, self.decoder_weight)
         steering_feature = decoded[:, :, 1, :] - decoded[:, :, 0, :]
         if self.steer_with_base_features:
             steering_feature = -steering_feature
         act = base_activations if self.steer_base_activations else instruct_activations
-        res = act + steering_feature
+        res = act[mask] + steering_feature
         return self.continue_with_model(res.bfloat16())
 
 
@@ -133,6 +151,7 @@ def evaluate_interventions(
     device="cuda",
     max_seq_len=1024,
     log_every=100,
+    checkpoint_every=2000,
     save_path: Path | None = None,
 ):
     MeanMetricToDevice = lambda: MeanMetric().to(device)
@@ -142,6 +161,7 @@ def evaluate_interventions(
     base_kl = defaultdict(MeanMetricToDevice)
     nlls_wrt_instruct_pred = defaultdict(MeanMetricToDevice)
     perplexity_wrt_instruct_pred = defaultdict(MeanMetricToDevice)
+    num_samples = defaultdict(int)
     base_model = split_gemma(base_model)
     instruct_model = split_gemma(instruct_model)
 
@@ -295,6 +315,7 @@ def evaluate_interventions(
                     },
                     step=i,
                 )
+                wandb.incr
 
                 wandb.log({f"loss/{fn_name}": loss.item()}, step=i)
                 wandb.log({f"perplexity/{fn_name}": th.exp(loss).item()}, step=i)
@@ -358,9 +379,13 @@ def evaluate_interventions(
                     step=i,
                 )
                 if save_path is not None:
-                    with open(save_path / f"{wandb.run.name}_result.json", "w") as f:
+                    with open(
+                        save_path / f"{wandb.run.name}_latest_result.json", "w"
+                    ) as f:
                         json.dump(compute_result(), f)
-
+            if i % checkpoint_every == 0 and save_path is not None and i != 0:
+                with open(save_path / f"{wandb.run.name}_{i}_result.json", "w") as f:
+                    json.dump(compute_result(), f)
     return compute_result()
 
 
@@ -625,7 +650,9 @@ if __name__ == "__main__":
     # fn_dict.update(
     #     create_half_fn_dict_secondary(crosscoder, it_only_features, base_only_features)
     # )
-    fn_dict.update(create_it_only_ft_fn_dict(crosscoder, it_only_features, base_only_features))
+    fn_dict.update(
+        create_it_only_ft_fn_dict(crosscoder, it_only_features, base_only_features)
+    )
     result = evaluate_interventions(
         base_model,
         instruct_model,
