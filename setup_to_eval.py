@@ -16,6 +16,7 @@ class HalfStepPreprocessFn(ABC):
         | tuple[None, th.Tensor]
         | tuple[None, th.Tensor, th.Tensor | None]
         | tuple[th.Tensor, None, th.Tensor | None]
+        | tuple[None, None, None]
     ):
         """
         Preprocess the activations before the last half forward.
@@ -30,6 +31,14 @@ class HalfStepPreprocessFn(ABC):
         if len(res) == 2:  # no mask
             return res[0], res[1], None
         elif len(res) == 3:  # mask
+            assert (isinstance(res[2], th.Tensor) and res[2].dtype == th.bool) or res[
+                2
+            ] is None, "Mask must be a boolean tensor"
+            assert res[2] is None or res[2].shape[0] == base_activations.shape[0], (
+                "Mask must have the same number of elements as the input activations"
+                if res[2] is not None
+                else "Mask can be None"
+            )
             return res
         else:
             raise ValueError(f"Expected 2 or 3 elements, got {len(res)}")
@@ -62,6 +71,19 @@ class SwitchPreprocessFn(HalfStepPreprocessFn):
         )
 
 
+class TestMaskPreprocessFn(IdentityPreprocessFn):
+    def preprocess(self, base_activations, instruct_activations):
+        mask = th.randint(
+            0, 2, (base_activations.shape[0],), device=base_activations.device
+        ).bool()
+        if not mask.any():
+            return None, None, None
+        return (
+            *super().preprocess(base_activations[mask], instruct_activations[mask]),
+            mask,
+        )
+
+
 class CrossCoderReconstruction(IdentityPreprocessFn):
     def __init__(
         self,
@@ -86,7 +108,7 @@ class CrossCoderReconstruction(IdentityPreprocessFn):
         )  # (b s) d
         reconstruction = einops.rearrange(
             reconstruction, "(b s) d -> b s d", b=base_activations.shape[0]
-        )
+        )  # todo add biases
         return self.continue_with_model(reconstruction.bfloat16())
 
 
@@ -105,15 +127,19 @@ class CrossCoderSteeringFeature(IdentityPreprocessFn):
             features_to_steer = list(range(crosscoder.decoder.weight.shape[1]))
         self.encoder_weight = crosscoder.encoder.weight[:, :, features_to_steer]  # ldf
         self.decoder_weight = crosscoder.decoder.weight[:, features_to_steer]  # lfd
+        self.crosscoder = crosscoder
         self.steer_with_base_features = steer_with_base_features
         self.steer_base_activations = steer_base_activations
         self.filter_treshold = filter_treshold
+        self.features_to_steer = features_to_steer
 
     def preprocess(self, base_activations, instruct_activations):
         cc_input = th.stack(
             [base_activations, instruct_activations], dim=2
         ).float()  # b, seq, 2, d
-        f = relu(
+
+        f = self.crosscoder.encode(cc_input)
+        relu(
             th.einsum("bsld, ldf -> bsf", cc_input, self.encoder_weight)
         )  # b, seq, f
         if self.filter_treshold is not None:
@@ -121,13 +147,13 @@ class CrossCoderSteeringFeature(IdentityPreprocessFn):
             if not mask.any():
                 return None, None, None
             f = f[mask]
-        decoded = th.einsum("bsf, lfd -> bsld", f, self.decoder_weight)
+        decoded = th.einsum("Bsf, lfd -> Bsld", f, self.decoder_weight)
         steering_feature = decoded[:, :, 1, :] - decoded[:, :, 0, :]
         if self.steer_with_base_features:
             steering_feature = -steering_feature
         act = base_activations if self.steer_base_activations else instruct_activations
         res = act[mask] + steering_feature
-        return self.continue_with_model(res.bfloat16())
+        return *self.continue_with_model(res.bfloat16()), mask
 
 
 def create_half_fn_dict_main(

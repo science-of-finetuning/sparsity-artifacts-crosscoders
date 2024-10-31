@@ -81,7 +81,6 @@ def model_first_half_forward(
         hidden_states = layer_outputs[0]
         if i == layer_idx:
             break
-
     return hidden_states, causal_mask, position_ids
 
 

@@ -98,42 +98,35 @@ def evaluate_interventions(
             .to(device)
         )
         # manual truncation because return_assistant_tokens_mask + truncate = 🤮
-        base_activations, *base_other_outputs = base_model.first_half_forward(
-            input_ids=batch_tokens["input_ids"],
-            attention_mask=batch_tokens["attention_mask"],
-            layer_idx=layer_to_stop,
+        base_activations, base_causal_mask_raw, base_position_ids = (
+            base_model.first_half_forward(
+                input_ids=batch_tokens["input_ids"],
+                attention_mask=batch_tokens["attention_mask"],
+                layer_idx=layer_to_stop,
+            )
         )
-        instruct_activations, *instruct_other_outputs = (
+        instruct_activations, instruct_causal_mask_raw, instruct_position_ids = (
             instruct_model.first_half_forward(
                 input_ids=batch_tokens["input_ids"],
                 attention_mask=batch_tokens["attention_mask"],
                 layer_idx=layer_to_stop,
             )
         )
-        base_logits = (
-            base_model.second_half_forward(
-                base_activations,
-                *base_other_outputs,
-                layer_idx=layer_to_stop,
-                return_dict=True,
-            )
-            .logits[batch_tokens["assistant_masks"]]
-            .float()
-        )
-        base_log_probs = th.log_softmax(base_logits, dim=-1)
-        instruct_logits = instruct_model.second_half_forward(
-            instruct_activations,
-            *instruct_other_outputs,
+        base_logits_raw = base_model.second_half_forward(
+            base_activations,
+            base_causal_mask_raw,
+            base_position_ids,
             layer_idx=layer_to_stop,
             return_dict=True,
         ).logits
-        instruct_preds = th.argmax(instruct_logits, dim=-1)[
-            batch_tokens["assistant_masks"]
-        ]
-        instruct_logits = instruct_logits[
-            batch_tokens["assistant_masks"]
-        ].float()  # num_mask=1, d_vocab
-        instruct_log_probs = th.log_softmax(instruct_logits, dim=-1)
+        instruct_logits_raw = instruct_model.second_half_forward(
+            instruct_activations,
+            instruct_causal_mask_raw,
+            instruct_position_ids,
+            layer_idx=layer_to_stop,
+            return_dict=True,
+        ).logits
+
         for (
             fn_name,
             preprocess_before_last_half_fn,
@@ -142,24 +135,47 @@ def evaluate_interventions(
                 preprocess_before_last_half_fn(base_activations, instruct_activations)
             )
             if mask is not None:
-                
+                base_logits = base_logits_raw[mask]
+                instruct_logits = instruct_logits_raw[mask]
+                base_causal_mask = base_causal_mask_raw[mask]
+                instruct_causal_mask = instruct_causal_mask_raw[mask]
+                assistant_mask = batch_tokens["assistant_masks"][mask]
+                labels = batch_tokens["input_ids"][mask][assistant_mask]
+            else:
+                base_logits = base_logits_raw
+                instruct_logits = instruct_logits_raw
+                base_causal_mask = base_causal_mask_raw
+                instruct_causal_mask = instruct_causal_mask_raw
+                assistant_mask = batch_tokens["assistant_masks"]
+                labels = batch_tokens["input_ids"][assistant_mask]
             final_out = None
             if base_activations_edited is not None:
                 final_out = base_model.second_half_forward(
                     base_activations_edited,
-                    *base_other_outputs,
+                    base_causal_mask,
+                    base_position_ids,
                     layer_idx=layer_to_stop,
                     return_dict=True,
                 )
+                n_pred = base_activations_edited.shape[0]
             elif instruct_activations_edited is not None:
                 final_out = instruct_model.second_half_forward(
                     instruct_activations_edited,
-                    *instruct_other_outputs,
+                    instruct_causal_mask,
+                    instruct_position_ids,
                     layer_idx=layer_to_stop,
                     return_dict=True,
                 )
+                n_pred = instruct_activations_edited.shape[0]
             if final_out is not None:
-                logits = final_out.logits[batch_tokens["assistant_masks"]].float()
+                base_log_probs = th.log_softmax(
+                    base_logits[assistant_mask].float(), dim=-1
+                )
+                instruct_preds = th.argmax(instruct_logits, dim=-1)[assistant_mask]
+                instruct_log_probs = th.log_softmax(
+                    instruct_logits[assistant_mask].float(), dim=-1
+                )
+                logits = final_out.logits[assistant_mask].float()
                 log_probs = th.log_softmax(logits, dim=-1)
                 it_kl = kl_div(
                     log_probs,
@@ -173,9 +189,7 @@ def evaluate_interventions(
                     log_target=True,
                     reduction="none",
                 ).sum(dim=-1)
-                loss = instruct_model.compute_loss(
-                    logits, batch_tokens["input_ids"][batch_tokens["assistant_masks"]]
-                )
+                loss = instruct_model.compute_loss(logits, labels)
                 loss_wrt_instruct_pred = instruct_model.compute_loss(
                     logits, instruct_preds, already_shifted=True
                 )
@@ -193,11 +207,9 @@ def evaluate_interventions(
                     },
                     step=i,
                 )
-                wandb.incr
 
                 wandb.log({f"loss/{fn_name}": loss.item()}, step=i)
                 wandb.log({f"perplexity/{fn_name}": th.exp(loss).item()}, step=i)
-                n_pred = log_probs.shape[0]
                 assert log_probs.dim() == 2
                 wandb.log(
                     {f"kl-instruct/{fn_name}": (it_kl.sum() / n_pred).item()}, step=i
@@ -277,7 +289,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("--layer-to-stop", type=int, default=13)
-    parser.add_argument("--batch-size", type=int, default=8)
+    parser.add_argument("--batch-size", type=int, default=6)
     parser.add_argument("--device", type=str, default="auto")
     parser.add_argument("--max-seq-len", type=int, default=1024)
     parser.add_argument("--test", action="store_true")
@@ -312,7 +324,6 @@ if __name__ == "__main__":
 
     tokenizer = AutoTokenizer.from_pretrained(model_path("google/gemma-2-2b-it"))
     instruct_model.tokenizer = tokenizer
-
     base_model = AutoModelForCausalLM.from_pretrained(
         model_path("google/gemma-2-2b"),
         device_map="cuda",
@@ -336,7 +347,10 @@ if __name__ == "__main__":
         print(f"Using IT only features: {it_only_features}")
     if args.name is None and args.test:
         args.name = "test"
-    wandb.init(project="perplexity-comparison", name=args.name)
+    project = "perplexity-comparison"
+    if args.test:
+        project += "-test"
+    wandb.init(project=project, name=args.name)
     seeds = list(range(10))
     fn_dict = {}
     # fn_dict = create_half_fn_dict_main(crosscoder, it_only_features, base_only_features)
@@ -348,6 +362,7 @@ if __name__ == "__main__":
     # fn_dict.update(
     #     create_it_only_ft_fn_dict(crosscoder, it_only_features, base_only_features)
     # )
+
     fn_dict.update(create_half_fn_thresholded_features(crosscoder))
     fn_dict.update(
         create_half_fn_dict_steer_seeds(
@@ -361,6 +376,7 @@ if __name__ == "__main__":
     )
     fn_dict.update(create_half_fn_dict_steer_seeds(crosscoder, seeds, 1, threshold=10))
     fn_dict.update(create_half_fn_dict_remove_seeds(crosscoder, seeds, 1, threshold=10))
+    fn_dict["test-mask"] = TestMaskPreprocessFn()
     result = evaluate_interventions(
         base_model,
         instruct_model,
