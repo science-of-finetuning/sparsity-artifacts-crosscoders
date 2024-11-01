@@ -329,13 +329,15 @@ if __name__ == "__main__":
             layer_to_stop=args.layer_to_stop,
             device=device,
             max_seq_len=args.max_seq_len,
-            max_new_tokens=200,
+            max_new_tokens=100,
             add_few_shot=args.few_shot,
         )
         # name of the file is the name of the feature ablation file
-        postfix = ""
+        postfix = f"{args.feature_index}"
         if args.to_base:
             postfix += "_to_base"
+        if args.scale != 1.0:
+            postfix += f"_scale_{args.scale}"
         with open(args.save_path / f"{args.feature_ablation_file.stem}_ablation_{postfix}.json", "w") as f:
             json.dump(results, f, indent=4)
     else:
