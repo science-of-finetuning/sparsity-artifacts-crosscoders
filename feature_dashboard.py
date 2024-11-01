@@ -24,7 +24,7 @@ def parse_list_str(s: str) -> list[int]:
     return ast.literal_eval(s)
 
 
-def apply_chat(text: str, tokenizer, add_special_tokens: bool = True) -> tuple[str, list[str]]:
+def apply_chat(text: str, tokenizer, add_bos: bool = True) -> str:
     """Apply chat formatting to text using the tokenizer"""
     splitted = text.split("<eot>")
     is_user = True
@@ -33,16 +33,9 @@ def apply_chat(text: str, tokenizer, add_special_tokens: bool = True) -> tuple[s
         role = "user" if is_user else "assistant"
         chat.append({"role": role, "content": s})
         is_user = not is_user
-    return (
-        tokenizer.apply_chat_template(
-            chat, tokenize=False, add_special_tokens=add_special_tokens, add_generation_prompt=True
-        ),
-        tokenizer.convert_ids_to_tokens(
-            tokenizer.apply_chat_template(
-                chat, tokenize=True, add_special_tokens=add_special_tokens, add_generation_prompt=True
-            )
-        ),
-    )
+    return tokenizer.apply_chat_template(
+        chat, tokenize=False, add_generation_prompt=True
+    )[0 if add_bos else 5 :]
 
 
 class FeatureCentricDashboard:
@@ -380,6 +373,7 @@ class OnlineFeatureCentricDashboard:
         self, text: str, feature_indicies: tuple[int, ...]
     ) -> th.Tensor:
         """Get the activation values for a given feature"""
+        print(f"analyzing {text}")
         with self.instruct_model.trace(text):
             instruct_activations = get_layer_output(self.instruct_model, self.layer)[
                 0
@@ -481,21 +475,22 @@ class OnlineFeatureCentricDashboard:
                 )  # Add highlight feature as first
             text = self.text_input.value
             if self.chat_formatting.value:
-                text, tokens = apply_chat(
+                text = apply_chat(
                     text,
                     self.tokenizer,
-                    add_special_tokens=not self.generate_response.value,
+                    add_bos=False,
                 )
-            else:
-                tokens = self.tokenizer.tokenize(text, add_special_tokens=True)
+            tokens = self.tokenizer.tokenize(text, add_special_tokens=True)
             if self.generate_response.value:
                 # Generate and append model's response
-                full_response = self.generate_model_response(text)
+                full_response = self.generate_model_response(text)[5:]
                 text = full_response
-                tokens = self.tokenizer.tokenize(text, add_special_tokens=False)
+                tokens = self.tokenizer.tokenize(text, add_special_tokens=True)
 
             activations = self.get_feature_activation(text, tuple(feature_indicies))
-
+            assert (
+                len(tokens) == activations.shape[0]
+            ), f"Tokens are not the same length as activations, got {len(tokens)} and {activations.shape[0]}"
             with self.output_area:
                 self.output_area.clear_output()
 
@@ -562,7 +557,7 @@ class OnlineFeatureCentricDashboard:
         # Generate filename with timestamp
         timestamp = int(time.time())
         filename = save_dir / str(self.feature_to_highlight) / f"{timestamp}.html"
-
+        filename.parent.mkdir(parents=True, exist_ok=True)
         # Write the HTML file
         with open(filename, "w", encoding="utf-8") as f:
             f.write(
