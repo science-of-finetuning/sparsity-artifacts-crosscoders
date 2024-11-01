@@ -333,6 +333,8 @@ if __name__ == "__main__":
     dataset = load_from_disk(args.dataset_path)
     if args.test:
         dataset = dataset.select(range(300))
+    else:
+        dataset = dataset.select(range(30_000))
     device = (
         args.device
         if args.device != "auto"
@@ -355,7 +357,8 @@ if __name__ == "__main__":
     fn_dict = {}
     # fn_dict = create_half_fn_dict_main(crosscoder, it_only_features, base_only_features)
     # fn_dict.update(create_half_fn_dict_no_cross())
-    # fn_dict.update(create_half_fn_dict_seeds(crosscoder, seeds, len(it_only_features)))
+    # fn_dict.update(create_half_fn_dict_steer_seeds(crosscoder, seeds, len(it_only_features)))
+    # fn_dict.update(create_half_fn_dict_remove_seeds(crosscoder, seeds, len(it_only_features)))
     # fn_dict.update(
     #     create_half_fn_dict_secondary(crosscoder, it_only_features, base_only_features)
     # )

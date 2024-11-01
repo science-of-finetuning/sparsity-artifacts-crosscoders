@@ -106,9 +106,12 @@ class CrossCoderReconstruction(IdentityPreprocessFn):
             f,
             self.crosscoder.decoder.weight[0 if self.reconstruct_with_base else 1],
         )  # (b s) d
-        reconstruction = einops.rearrange(
-            reconstruction, "(b s) d -> b s d", b=base_activations.shape[0]
-        )  # todo add biases
+        reconstruction = (
+            einops.rearrange(
+                reconstruction, "(b s) d -> b s d", b=base_activations.shape[0]
+            )
+            + self.crosscoder.decoder.bias[0 if self.reconstruct_with_base else 1]
+        )
         return self.continue_with_model(reconstruction.bfloat16())
 
 
@@ -125,7 +128,6 @@ class CrossCoderSteeringFeature(IdentityPreprocessFn):
         super().__init__(continue_with_base)
         if features_to_steer is None:
             features_to_steer = list(range(crosscoder.decoder.weight.shape[1]))
-        self.encoder_weight = crosscoder.encoder.weight[:, :, features_to_steer]  # ldf
         self.decoder_weight = crosscoder.decoder.weight[:, features_to_steer]  # lfd
         self.crosscoder = crosscoder
         self.steer_with_base_features = steer_with_base_features
@@ -137,11 +139,12 @@ class CrossCoderSteeringFeature(IdentityPreprocessFn):
         cc_input = th.stack(
             [base_activations, instruct_activations], dim=2
         ).float()  # b, seq, 2, d
-
-        f = self.crosscoder.encode(cc_input)
-        relu(
-            th.einsum("bsld, ldf -> bsf", cc_input, self.encoder_weight)
-        )  # b, seq, f
+        cc_input = einops.rearrange(cc_input, "b s m d -> (b s) m d")
+        f = self.crosscoder.encode(
+            cc_input, select_features=self.features_to_steer
+        )  # (b s) f
+        f = einops.rearrange(f, "(b s) f -> b s f", b=base_activations.shape[0])
+        mask = None
         if self.filter_treshold is not None:
             mask = f.sum(dim=-1).max(dim=-1).values > self.filter_treshold
             if not mask.any():
@@ -152,7 +155,9 @@ class CrossCoderSteeringFeature(IdentityPreprocessFn):
         if self.steer_with_base_features:
             steering_feature = -steering_feature
         act = base_activations if self.steer_base_activations else instruct_activations
-        res = act[mask] + steering_feature
+        if self.filter_treshold is not None:
+            act = act[mask]
+        res = act + steering_feature
         return *self.continue_with_model(res.bfloat16()), mask
 
 
