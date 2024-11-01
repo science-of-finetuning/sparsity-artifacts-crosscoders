@@ -124,6 +124,7 @@ class CrossCoderSteeringFeature(IdentityPreprocessFn):
         features_to_steer: list[int] | None,
         continue_with_base: bool,
         filter_treshold: float | None = None,
+        scale_steering_feature: float = 1.0,
     ):
         super().__init__(continue_with_base)
         if features_to_steer is None:
@@ -134,7 +135,8 @@ class CrossCoderSteeringFeature(IdentityPreprocessFn):
         self.steer_base_activations = steer_base_activations
         self.filter_treshold = filter_treshold
         self.features_to_steer = features_to_steer
-
+        self.scale_steering_feature = scale_steering_feature
+        
     def preprocess(self, base_activations, instruct_activations):
         cc_input = th.stack(
             [base_activations, instruct_activations], dim=2
