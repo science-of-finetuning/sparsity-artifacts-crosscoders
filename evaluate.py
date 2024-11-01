@@ -362,9 +362,9 @@ if __name__ == "__main__":
     # fn_dict.update(
     #     create_half_fn_dict_secondary(crosscoder, it_only_features, base_only_features)
     # )
-    # fn_dict.update(
-    #     create_it_only_ft_fn_dict(crosscoder, it_only_features, base_only_features)
-    # )
+    ## fn_dict.update(
+    ##     create_it_only_ft_fn_dict(crosscoder, it_only_features, base_only_features)
+    ## )
 
     fn_dict.update(create_half_fn_thresholded_features(crosscoder))
     fn_dict.update(

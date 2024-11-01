@@ -355,47 +355,47 @@ def create_half_fn_dict_no_cross() -> dict[str, HalfStepPreprocessFn]:
     return half_fns
 
 
-def create_it_only_ft_fn_dict(
-    crosscoder: CrossCoder, it_only_features: list[int], base_only_features: list[int]
-) -> dict[str, HalfStepPreprocessFn]:
-    half_fns = {
-        "remove_it_only_custom": CrossCoderSteeringFeature(
-            crosscoder,
-            steer_activations_of="instruct",
-            steer_with_features_from="base",
-            continue_with="instruct",
-            features_to_steer=it_only_features,
-        ),
-        "remove_it_and_base_only_custom": CrossCoderSteeringFeature(
-            crosscoder,
-            steer_activations_of="instruct",
-            steer_with_features_from="base",
-            continue_with="instruct",
-            features_to_steer=it_only_features + base_only_features,
-        ),
-        "steer_it_only_custom_to_base": CrossCoderSteeringFeature(
-            crosscoder,
-            steer_activations_of="base",
-            steer_with_features_from="instruct",
-            continue_with="base",
-            features_to_steer=it_only_features,
-        ),
-        "steer_it_only_custom": CrossCoderSteeringFeature(
-            crosscoder,
-            steer_activations_of="base",
-            steer_with_features_from="instruct",
-            continue_with="instruct",
-            features_to_steer=it_only_features,
-        ),
-        "steer_it_and_base_only_custom": CrossCoderSteeringFeature(
-            crosscoder,
-            steer_activations_of="base",
-            steer_with_features_from="instruct",
-            continue_with="instruct",
-            features_to_steer=it_only_features + base_only_features,
-        ),
-    }
-    return half_fns
+# def create_it_only_ft_fn_dict(
+#     crosscoder: CrossCoder, it_only_features: list[int], base_only_features: list[int]
+# ) -> dict[str, HalfStepPreprocessFn]:
+#     half_fns = {
+#         "remove_it_only_custom": CrossCoderSteeringFeature(
+#             crosscoder,
+#             steer_activations_of="instruct",
+#             steer_with_features_from="base",
+#             continue_with="instruct",
+#             features_to_steer=it_only_features,
+#         ),
+#         "remove_it_and_base_only_custom": CrossCoderSteeringFeature(
+#             crosscoder,
+#             steer_activations_of="instruct",
+#             steer_with_features_from="base",
+#             continue_with="instruct",
+#             features_to_steer=it_only_features + base_only_features,
+#         ),
+#         "steer_it_only_custom_to_base": CrossCoderSteeringFeature(
+#             crosscoder,
+#             steer_activations_of="base",
+#             steer_with_features_from="instruct",
+#             continue_with="base",
+#             features_to_steer=it_only_features,
+#         ),
+#         "steer_it_only_custom": CrossCoderSteeringFeature(
+#             crosscoder,
+#             steer_activations_of="base",
+#             steer_with_features_from="instruct",
+#             continue_with="instruct",
+#             features_to_steer=it_only_features,
+#         ),
+#         "steer_it_and_base_only_custom": CrossCoderSteeringFeature(
+#             crosscoder,
+#             steer_activations_of="base",
+#             steer_with_features_from="instruct",
+#             continue_with="instruct",
+#             features_to_steer=it_only_features + base_only_features,
+#         ),
+#     }
+#     return half_fns
 
 
 def create_half_fn_thresholded_features(
