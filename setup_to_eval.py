@@ -158,7 +158,7 @@ class CrossCoderSteeringFeature(IdentityPreprocessFn):
             ) * self.scale_steering_feature
             if self.steer_with_features_from == "base":
                 steering = -steering
-            return *self.continue_with_model(act + steering), None
+            return *self.continue_with_model((act + steering).bfloat16()), None
         cc_input = th.stack(
             [base_activations, instruct_activations], dim=2
         ).float()  # b, seq, 2, d
@@ -439,5 +439,65 @@ def create_half_fn_thresholded_features(
             continue_with="instruct",
             features_to_steer=[feature],
             filter_treshold=threshold,
+        )
+    return half_fns
+
+
+def create_tresholded_baseline_half_fns(
+    crosscoder: CrossCoder,
+    threshold: float = 10,
+    features_to_steer: list[int] | None = None,
+):
+    if features_to_steer is None:
+        features_to_steer = INTERESTING_FEATURES
+    half_fns = {
+        f"baseline_t{threshold}_all": CrossCoderSteeringFeature(
+            crosscoder,
+            steer_activations_of="base",
+            steer_with_features_from="instruct",
+            continue_with="instruct",
+            features_to_steer=features_to_steer,
+            filter_treshold=threshold,
+            ignore_encoder=True,
+            scale_steering_feature=0,
+        )
+    }
+    for feature in features_to_steer:
+        half_fns[f"baseline_t{threshold}_{feature}"] = CrossCoderSteeringFeature(
+            crosscoder,
+            steer_activations_of="base",
+            steer_with_features_from="instruct",
+            continue_with="instruct",
+            features_to_steer=[feature],
+            filter_treshold=threshold,
+            ignore_encoder=True,
+            scale_steering_feature=0,
+        )
+    return half_fns
+
+
+def create_tresholded_baseline_random_half_fns(
+    crosscoder: CrossCoder,
+    seeds: list[int],
+    num_features: int,
+    threshold: float = 10,
+):
+    half_fns = {}
+    for seed in seeds:
+        th.manual_seed(seed)
+        features_to_steer = th.randperm(crosscoder.decoder.weight.shape[1])[
+            :num_features
+        ]
+        half_fns[f"baseline_t{threshold}_s{seed}_n{num_features}"] = (
+            CrossCoderSteeringFeature(
+                crosscoder,
+                steer_activations_of="base",
+                steer_with_features_from="instruct",
+                continue_with="instruct",
+                features_to_steer=features_to_steer,
+                filter_treshold=threshold,
+                ignore_encoder=True,
+                scale_steering_feature=0,
+            )
         )
     return half_fns
