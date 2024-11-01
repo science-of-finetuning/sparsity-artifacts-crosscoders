@@ -12,6 +12,9 @@ import traceback
 from nnterp.nnsight_utils import get_layer, get_layer_output
 import einops
 
+import time
+import os
+
 
 def parse_list_str(s: str) -> list[int]:
     if not s.startswith("["):
@@ -19,6 +22,27 @@ def parse_list_str(s: str) -> list[int]:
     if not s.endswith("]"):
         s = s + "]"
     return ast.literal_eval(s)
+
+
+def apply_chat(text: str, tokenizer, add_special_tokens: bool = True) -> tuple[str, list[str]]:
+    """Apply chat formatting to text using the tokenizer"""
+    splitted = text.split("<eot>")
+    is_user = True
+    chat = []
+    for s in splitted:
+        role = "user" if is_user else "assistant"
+        chat.append({"role": role, "content": s})
+        is_user = not is_user
+    return (
+        tokenizer.apply_chat_template(
+            chat, tokenize=False, add_special_tokens=add_special_tokens, add_generation_prompt=True
+        ),
+        tokenizer.convert_ids_to_tokens(
+            tokenizer.apply_chat_template(
+                chat, tokenize=True, add_special_tokens=add_special_tokens, add_generation_prompt=True
+            )
+        ),
+    )
 
 
 class FeatureCentricDashboard:
@@ -272,13 +296,15 @@ class OnlineFeatureCentricDashboard:
         self.crosscoder = crosscoder
         self.layer = collect_layer
         self.window_size = window_size
-
+        self.use_chat_formatting = False
         # Load templates
         template_dir = Path(__file__).parent / "templates"
         with open(template_dir / "styles.css", "r") as f:
             self.styles = f.read()
         with open(template_dir / "tooltips.js", "r") as f:
             self.scripts = f.read()
+
+        self.current_html = None  # Store the current HTML output
 
         self._setup_widgets()
 
@@ -324,6 +350,30 @@ class OnlineFeatureCentricDashboard:
         self.output_area = widgets.Output()
         self.analyze_button.on_click(self._handle_analysis)
 
+        # Replace the chat formatting button with a checkbox
+        self.chat_formatting = widgets.Checkbox(
+            value=False,
+            description="Use Chat Formatting",
+            indent=False,
+            style={"description_width": "initial"},
+        )
+
+        # Add generate response checkbox
+        self.generate_response = widgets.Checkbox(
+            value=False,
+            description="Generate Response",
+            indent=False,
+            style={"description_width": "initial"},
+        )
+
+        # Add save button
+        self.save_button = widgets.Button(
+            description="Save HTML",
+            button_style="success",
+            disabled=True,  # Initially disabled until analysis is run
+        )
+        self.save_button.on_click(self._handle_save)
+
     @cache
     @th.no_grad
     def get_feature_activation(
@@ -338,12 +388,11 @@ class OnlineFeatureCentricDashboard:
         with self.base_model.trace(text):
             base_activations = get_layer_output(self.base_model, self.layer)[0].save()
             get_layer(self.base_model, self.layer).output.stop()
-        print(base_activations.shape)
         cc_input = th.stack(
             [base_activations, instruct_activations], dim=1
         ).float()  # seq, 2, d
         features_acts = self.crosscoder.get_activations(
-            cc_input, select_features=feature_indicies
+            cc_input, select_features=list(feature_indicies)
         )  # seq, f
         return features_acts
 
@@ -378,6 +427,7 @@ class OnlineFeatureCentricDashboard:
                 .replace("'", "&apos;")
                 .replace('"', "&quot;")
                 .replace("\n", "\\n\n")
+                .replace("▁", " ")
             )
 
             color = f"rgba(255, 0, 0, {norm_acts[i].item():.3f})"
@@ -399,28 +449,57 @@ class OnlineFeatureCentricDashboard:
 
         return "".join(html_parts)
 
+    @th.no_grad
+    def generate_model_response(self, text: str) -> str:
+        """Generate model's response to the input text"""
+        with self.instruct_model.generate(text, max_new_tokens=512):
+            output = self.instruct_model.generator.output.save()
+        return self.tokenizer.decode(output[0])
+
     def _handle_analysis(self, _):
         """Handle the analysis button click"""
         try:
             # Parse feature indices for computation
             f_idx_str = self.feature_input.value.strip()
             feature_indicies = parse_list_str(f_idx_str)
-            if len(feature_indicies) == 0:
-                raise ValueError("No feature indicies provided")
+
             # Parse display control features
             highlight_feature = int(self.highlight_feature.value.strip())
+            self.feature_to_highlight = highlight_feature
             tooltip_features = parse_list_str(self.tooltip_features.value.strip())
+
+            # Ensure highlighted feature is included in tooltip features
+
+            for h in tooltip_features:
+                if h not in feature_indicies:
+                    feature_indicies.append(h)
+            if highlight_feature not in feature_indicies:
+                feature_indicies.insert(0, highlight_feature)
+            if highlight_feature not in tooltip_features:
+                tooltip_features.insert(
+                    0, highlight_feature
+                )  # Add highlight feature as first
             text = self.text_input.value
-            tokens = self.tokenizer.tokenize(text, add_special_tokens=True)
-            all_features = (
-                set(feature_indicies) | set(tooltip_features) | {highlight_feature}
-            )
-            activations = self.get_feature_activation(text, tuple(all_features))
+            if self.chat_formatting.value:
+                text, tokens = apply_chat(
+                    text,
+                    self.tokenizer,
+                    add_special_tokens=not self.generate_response.value,
+                )
+            else:
+                tokens = self.tokenizer.tokenize(text, add_special_tokens=True)
+            if self.generate_response.value:
+                # Generate and append model's response
+                full_response = self.generate_model_response(text)
+                text = full_response
+                tokens = self.tokenizer.tokenize(text, add_special_tokens=False)
+
+            activations = self.get_feature_activation(text, tuple(feature_indicies))
 
             with self.output_area:
                 self.output_area.clear_output()
 
-                # Display max activations for tooltip features
+                # Create the HTML content as before
                 max_acts_html = []
                 for feat in tooltip_features:
                     if feat in feature_indicies:
@@ -434,7 +513,6 @@ class OnlineFeatureCentricDashboard:
                     + "</b></div>"
                 )
 
-                # Create and display the highlighted text
                 html_content = self._create_html_highlight(
                     tokens,
                     activations,
@@ -442,27 +520,69 @@ class OnlineFeatureCentricDashboard:
                     highlight_feature,
                     tooltip_features,
                 )
-                display(
-                    HTML(
-                        f"""
+
+                # Store the complete HTML for saving
+                self.current_html = f"""
                     <div style="margin: 10px 0; padding: 10px; border: 1px solid #ccc;">
                         {max_acts_display}
                         <div class="text-sample" style="white-space: pre-wrap;">
                             {html_content}
                         </div>
                     </div>
-                    """
-                    )
-                )
+                """
+
+                # Enable the save button now that we have content
+                self.save_button.disabled = False
+
+                # Display the HTML
+                display(HTML(self.current_html))
 
         except ValueError:
+            self.current_html = None
+            self.save_button.disabled = True
             with self.output_area:
                 self.output_area.clear_output()
                 print("Please enter a valid feature number")
         except Exception as e:
+            self.current_html = None
+            self.save_button.disabled = True
             with self.output_area:
                 self.output_area.clear_output()
                 traceback.print_exc()
+
+    def _handle_save(self, _):
+        """Handle saving the current HTML output"""
+        if self.current_html is None:
+            return
+
+        # Create directory if it doesn't exist
+        save_dir = Path("results") / "features"
+        save_dir.mkdir(parents=True, exist_ok=True)
+
+        # Generate filename with timestamp
+        timestamp = int(time.time())
+        filename = save_dir / str(self.feature_to_highlight) / f"{timestamp}.html"
+
+        # Write the HTML file
+        with open(filename, "w", encoding="utf-8") as f:
+            f.write(
+                f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Feature Analysis - {timestamp}</title>
+    <style>{self.styles}</style>
+    <script>{self.scripts}</script>
+</head>
+<body>
+    {self.current_html}
+    <script>setupTokenTooltips();</script>
+</body>
+</html>
+"""
+            )
+        print(f"Saved analysis to {filename}")
 
     def display(self):
         """Display the dashboard"""
@@ -475,6 +595,9 @@ class OnlineFeatureCentricDashboard:
                         self.highlight_feature,
                         self.tooltip_features,
                         self.analyze_button,
+                        self.chat_formatting,
+                        self.generate_response,
+                        self.save_button,  # Add the save button
                     ]
                 ),
                 self.output_area,
