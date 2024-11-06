@@ -9,7 +9,7 @@ from transformers.cache_utils import Cache as HybridCache
 from loguru import logger
 from torch.nn import CrossEntropyLoss
 from types import MethodType
-
+from typing import Callable
 
 def model_first_half_forward(
     self,
@@ -91,6 +91,7 @@ def model_second_half_forward(
     position_ids,
     layer_idx: int = 13,
     return_dict: bool = False,
+    all_layers_process_fn: Callable[[torch.Tensor], torch.Tensor] | None = None,
 ):
 
     for i, decoder_layer in enumerate(self.layers[layer_idx + 1 :]):
@@ -117,6 +118,8 @@ def model_second_half_forward(
             )
 
         hidden_states = layer_outputs[0]
+        if all_layers_process_fn is not None:
+            hidden_states = all_layers_process_fn(hidden_states)
 
     hidden_states = self.norm(hidden_states)
 
@@ -213,6 +216,7 @@ def causal_lm_second_half_forward(
     num_logits_to_keep: int = 0,
     return_dict: bool = False,
     layer_idx: int = 13,
+    all_layers_process_fn: Callable[[torch.Tensor], torch.Tensor] | None = None,
 ):
     outputs = self.model.second_half_forward(
         hidden_states=hidden_states,
@@ -220,6 +224,7 @@ def causal_lm_second_half_forward(
         position_ids=position_ids,
         layer_idx=layer_idx,
         return_dict=return_dict,
+        all_layers_process_fn=all_layers_process_fn,
     )
     hidden_states = outputs[0]
     # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
