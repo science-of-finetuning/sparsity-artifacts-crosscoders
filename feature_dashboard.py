@@ -277,6 +277,7 @@ class OnlineFeatureCentricDashboard:
         crosscoder,
         collect_layer: int,
         window_size: int = 50,
+        crosscoder_device: str | None = None,
     ):
         """
         Args:
@@ -287,6 +288,7 @@ class OnlineFeatureCentricDashboard:
         self.instruct_model = instruct_model
         self.base_model = base_model
         self.crosscoder = crosscoder
+        self.crosscoder_device = crosscoder_device
         self.layer = collect_layer
         self.window_size = window_size
         self.use_chat_formatting = False
@@ -373,7 +375,6 @@ class OnlineFeatureCentricDashboard:
         self, text: str, feature_indicies: tuple[int, ...]
     ) -> th.Tensor:
         """Get the activation values for a given feature"""
-        print(f"analyzing {text}")
         with self.instruct_model.trace(text):
             instruct_activations = get_layer_output(self.instruct_model, self.layer)[
                 0
@@ -382,6 +383,9 @@ class OnlineFeatureCentricDashboard:
         with self.base_model.trace(text):
             base_activations = get_layer_output(self.base_model, self.layer)[0].save()
             get_layer(self.base_model, self.layer).output.stop()
+        if self.crosscoder_device is not None:
+            base_activations = base_activations.to(self.crosscoder_device)
+            instruct_activations = instruct_activations.to(self.crosscoder_device)
         cc_input = th.stack(
             [base_activations, instruct_activations], dim=1
         ).float()  # seq, 2, d
