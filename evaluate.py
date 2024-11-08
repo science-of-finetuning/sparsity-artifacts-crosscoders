@@ -13,7 +13,82 @@ from torch.nn.functional import kl_div
 from torchmetrics.aggregation import MeanMetric
 from setup_to_eval import *
 
-CHAT_TEMPLATE = open("templates/gemma_chat_template.jinja").read()
+ROOT_PATH = Path(__file__).parent
+CHAT_TEMPLATE = open(ROOT_PATH / "templates/gemma_chat_template.jinja").read()
+
+
+def MeanMetricToDevice(device):
+    return lambda: MeanMetric().to(device)
+
+
+@th.inference_mode()
+def evaluate_interpretation(
+    base_model,
+    instruct_model,
+    crosscoder,
+    dataset,
+    feature_index,
+    get_predicted_mask,
+    batch_size=8,
+    device="cuda",
+    # max_seq_len=1024,
+    layer_to_stop=13,
+):
+    """
+    Evaluate the interpretation of a feature. Return the activation of a feature over the predicted to be active tokens
+    and the activation of the feature over the other tokens.
+
+    Args:
+        base_model: The base model to evaluate.
+        instruct_model: The instruct model to evaluate.
+        dataset: The dataset to evaluate on.
+        feature_index: The index of the feature to evaluate.
+        get_predicted_mask: A function that takes an input_ids tensor and returns a predicted mask. 
+        The mask should be a boolean tensor of shape (batch_size, seq_len) where True indicates the token is predicted to be active.
+        batch_size: The batch size to use for evaluation.
+        device: The device to use for evaluation.
+        layer_to_stop: The layer to take the activations from.
+    """
+    base_model = split_gemma(base_model)
+    instruct_model = split_gemma(instruct_model)
+    true_activations = []
+    false_activations = []
+    for i in tqdm(range(0, len(dataset), batch_size)):
+        batch = dataset[i : i + batch_size]
+        batch_tokens = instruct_model.tokenizer(
+            batch,
+            # return_assistant_tokens_mask=True,
+            # chat_template=CHAT_TEMPLATE,
+            # return_dict=True,
+            return_tensors="pt",
+            padding=True,
+        )
+        input_ids = batch_tokens["input_ids"].to(device)
+        attention_mask = batch_tokens["attention_mask"].to(device)
+        # assistant_mask = th.tensor(batch_tokens["assistant_masks"]).bool().to(device)
+        predicted_mask = get_predicted_mask(input_ids)
+        base_activations, *_ = base_model.first_half_forward(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            layer_idx=layer_to_stop,
+        )
+        instruct_activations, *_ = instruct_model.first_half_forward(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            layer_idx=layer_to_stop,
+        )
+        cc_input = th.stack([base_activations, instruct_activations], dim=2).float()
+        cc_input = einops.rearrange(cc_input, "b s l d -> (b s) l d")
+        cc_activations = crosscoder.encoder(cc_input, select_features=[feature_index])
+        cc_activations = einops.rearrange(
+            cc_activations, "(b s) f -> b s f", b=len(batch)
+        ).squeeze(2)
+        attn_mask = attention_mask.bool()
+        pred_act = cc_activations[predicted_mask & attn_mask]
+        false_act = cc_activations[(~predicted_mask) & attn_mask]
+        true_activations.append(pred_act.cpu())
+        false_activations.append(false_act.cpu())
+    return th.cat(true_activations), th.cat(false_activations)
 
 
 @th.inference_mode()
@@ -30,13 +105,12 @@ def evaluate_interventions(
     checkpoint_every=2000,
     save_path: Path | None = None,
 ):
-    MeanMetricToDevice = lambda: MeanMetric().to(device)
-    nlls = defaultdict(MeanMetricToDevice)
-    perplexity = defaultdict(MeanMetricToDevice)
-    instruct_kl = defaultdict(MeanMetricToDevice)
-    base_kl = defaultdict(MeanMetricToDevice)
-    nlls_wrt_instruct_pred = defaultdict(MeanMetricToDevice)
-    perplexity_wrt_instruct_pred = defaultdict(MeanMetricToDevice)
+    nlls = defaultdict(MeanMetricToDevice(device))
+    perplexity = defaultdict(MeanMetricToDevice(device))
+    instruct_kl = defaultdict(MeanMetricToDevice(device))
+    base_kl = defaultdict(MeanMetricToDevice(device))
+    nlls_wrt_instruct_pred = defaultdict(MeanMetricToDevice(device))
+    perplexity_wrt_instruct_pred = defaultdict(MeanMetricToDevice(device))
     num_samples = defaultdict(int)
     base_model = split_gemma(base_model)
     instruct_model = split_gemma(instruct_model)
@@ -279,121 +353,3 @@ def evaluate_interventions(
                 with open(save_path / f"{wandb.run.name}_{i}_result.json", "w") as f:
                     json.dump(compute_result(), f)
     return compute_result()
-
-
-from datasets import load_from_disk
-
-# from nnsight import LanguageModel
-from transformers import AutoModelForCausalLM, AutoTokenizer
-
-if __name__ == "__main__":
-    parser = ArgumentParser()
-    parser.add_argument("--layer-to-stop", type=int, default=13)
-    parser.add_argument("--batch-size", type=int, default=6)
-    parser.add_argument("--device", type=str, default="auto")
-    parser.add_argument("--max-seq-len", type=int, default=1024)
-    parser.add_argument("--test", action="store_true")
-    parser.add_argument(
-        "--dataset-path",
-        type=str,
-        default="/dlabscratch1/jminder/repositories/representation-structure-comparison/datasets/test/lmsys_chat",
-    )
-    parser.add_argument(
-        "--crosscoder-path",
-        type=str,
-        default="/dlabscratch1/jminder/repositories/representation-structure-comparison/checkpoints/l13-mu4.1e-02-lr1e-04/ae_final.pt",
-    )
-    parser.add_argument(
-        "--feature-df-path",
-        type=Path,
-        default=Path(
-            "/dlabscratch1/cdumas/representation-structure-comparison/notebooks/results/eval_crosscoder/l13-mu4.1e-02-lr1e-04_ae_final/data/feature_df.csv"
-        ),
-    )
-    parser.add_argument("--it-only-feature-list-path", type=Path, default=None)
-    parser.add_argument("--name", type=str, default=None)
-    parser.add_argument("--log-every", type=int, default=10)
-    parser.add_argument("--save-path", type=Path, default=Path("results-runai"))
-    args = parser.parse_args()
-    instruct_model = AutoModelForCausalLM.from_pretrained(
-        model_path("google/gemma-2-2b-it"),
-        torch_dtype=th.bfloat16,
-        device_map="cuda",
-        attn_implementation="eager",
-    )
-
-    tokenizer = AutoTokenizer.from_pretrained(model_path("google/gemma-2-2b-it"))
-    instruct_model.tokenizer = tokenizer
-    base_model = AutoModelForCausalLM.from_pretrained(
-        model_path("google/gemma-2-2b"),
-        device_map="cuda",
-        torch_dtype=th.bfloat16,
-        attn_implementation="eager",
-    )
-    dataset = load_from_disk(args.dataset_path)
-    if args.test:
-        dataset = dataset.select(range(300))
-    else:
-        dataset = dataset.select(range(30_000))
-    device = (
-        args.device
-        if args.device != "auto"
-        else "cuda" if th.cuda.is_available() else "cpu"
-    )
-    crosscoder = CrossCoder.from_pretrained(args.crosscoder_path, device=device)
-    df = pd.read_csv(args.feature_df_path)
-    it_only_features = df[df["tag"] == "IT only"].index.tolist()
-    base_only_features = df[df["tag"] == "Base only"].index.tolist()
-    if args.it_only_feature_list_path is not None:
-        it_only_features = pd.read_json(args.it_only_feature_list_path).index.tolist()
-        print(f"Using IT only features: {it_only_features}")
-    if args.name is None and args.test:
-        args.name = "test"
-    project = "perplexity-comparison"
-    if args.test:
-        project += "-test"
-    wandb.init(project=project, name=args.name)
-    seeds = list(range(10))
-    fn_dict = {}
-    # fn_dict = create_half_fn_dict_main(crosscoder, it_only_features, base_only_features)
-    # fn_dict.update(create_half_fn_dict_no_cross())
-    # fn_dict.update(create_half_fn_dict_steer_seeds(crosscoder, seeds, len(it_only_features)))
-    # fn_dict.update(create_half_fn_dict_remove_seeds(crosscoder, seeds, len(it_only_features)))
-    # fn_dict.update(
-    #     create_half_fn_dict_secondary(crosscoder, it_only_features, base_only_features)
-    # )
-    ## fn_dict.update(
-    ##     create_it_only_ft_fn_dict(crosscoder, it_only_features, base_only_features)
-    ## )
-
-    fn_dict.update(create_half_fn_thresholded_features(crosscoder))
-    fn_dict.update(
-        create_half_fn_dict_steer_seeds(
-            crosscoder, seeds, len(INTERESTING_FEATURES), threshold=10
-        )
-    )
-    fn_dict.update(
-        create_half_fn_dict_remove_seeds(
-            crosscoder, seeds, len(INTERESTING_FEATURES), threshold=10
-        )
-    )
-    fn_dict.update(create_half_fn_dict_steer_seeds(crosscoder, seeds, 1, threshold=10))
-    fn_dict.update(create_half_fn_dict_remove_seeds(crosscoder, seeds, 1, threshold=10))
-    fn_dict["test-mask"] = TestMaskPreprocessFn()
-    result = evaluate_interventions(
-        base_model,
-        instruct_model,
-        dataset["conversation"],
-        # create_half_fn_dict_main(crosscoder, it_only_features, base_only_features),
-        fn_dict,
-        layer_to_stop=args.layer_to_stop,
-        batch_size=args.batch_size,
-        device=device,
-        max_seq_len=args.max_seq_len,
-        log_every=args.log_every,
-        save_path=args.save_path,
-    )
-    args.save_path.mkdir(parents=True, exist_ok=True)
-    wdb_name = wandb.run.name
-    with open(args.save_path / f"{wdb_name}_result.json", "w") as f:
-        json.dump(result, f)
