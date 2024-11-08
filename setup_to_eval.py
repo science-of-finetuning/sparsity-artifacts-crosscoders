@@ -2,189 +2,15 @@ import torch as th
 from dictionary_learning.dictionary import CrossCoder
 from abc import ABC, abstractmethod
 import einops
-from torch.nn.functional import relu
 from typing import Literal
-
+from halfway_interventions import (
+    HalfStepPreprocessFn,
+    IdentityPreprocessFn,
+    SwitchPreprocessFn,
+    CrossCoderSteeringFeature,
+    CrossCoderReconstruction,
+)
 INTERESTING_FEATURES = [72073, 46325, 51408, 31726, 10833, 39938, 1045]
-
-
-def ensure_model(arg: str):
-    if arg not in ["base", "instruct", "it"]:
-        raise ValueError(f"arg must be one of 'base', 'instruct', 'it', got {arg}")
-    return arg
-
-
-class HalfStepPreprocessFn(ABC):
-    @abstractmethod
-    def preprocess(
-        self, base_activations, instruct_activations
-    ) -> (
-        tuple[th.Tensor, None]
-        | tuple[None, th.Tensor]
-        | tuple[None, th.Tensor, th.Tensor | None]
-        | tuple[th.Tensor, None, th.Tensor | None]
-        | tuple[None, None, None]
-    ):
-        """
-        Preprocess the activations before the last half forward.
-        Returns activations, None if the base model should finish the forward pass.
-        Returns None, activations if the instruct model should finish the forward pass.
-        Can also return a third element which is the batch mask of activations that were selected.
-        """
-        raise NotImplementedError
-
-    def __call__(self, base_activations, instruct_activations):
-        res = self.preprocess(base_activations, instruct_activations)
-        if len(res) == 2:  # no mask
-            return res[0], res[1], None
-        elif len(res) == 3:  # mask
-            assert (isinstance(res[2], th.Tensor) and res[2].dtype == th.bool) or res[
-                2
-            ] is None, "Mask must be a boolean tensor"
-            assert res[2] is None or res[2].shape[0] == base_activations.shape[0], (
-                "Mask must have the same number of elements as the input activations"
-                if res[2] is not None
-                else "Mask can be None"
-            )
-            return res
-        else:
-            raise ValueError(f"Expected 2 or 3 elements, got {len(res)}")
-
-
-class IdentityPreprocessFn(HalfStepPreprocessFn):
-    def __init__(self, continue_with: Literal["base", "instruct", "it"]):
-        self.continue_with = ensure_model(continue_with)
-
-    def continue_with_model(self, result):
-        return (result, None) if self.continue_with == "base" else (None, result)
-
-    def preprocess(self, base_activations, instruct_activations):
-        return (
-            (base_activations, None)
-            if self.continue_with == "base"
-            else (None, instruct_activations)
-        )
-
-
-class SwitchPreprocessFn(HalfStepPreprocessFn):
-    def __init__(self, continue_with: Literal["base", "instruct", "it"]):
-        self.continue_with = ensure_model(continue_with)
-
-    def preprocess(self, base_activations, instruct_activations):
-        return (
-            (instruct_activations, None)
-            if self.continue_with == "base"
-            else (None, base_activations)
-        )
-
-
-class TestMaskPreprocessFn(IdentityPreprocessFn):
-    def preprocess(self, base_activations, instruct_activations):
-        mask = th.randint(
-            0, 2, (base_activations.shape[0],), device=base_activations.device
-        ).bool()
-        if not mask.any():
-            return None, None, None
-        return (
-            *super().preprocess(base_activations[mask], instruct_activations[mask]),
-            mask,
-        )
-
-
-class CrossCoderReconstruction(IdentityPreprocessFn):
-    def __init__(
-        self,
-        crosscoder: CrossCoder,
-        reconstruct_with: Literal["base", "instruct", "it"],
-        continue_with: Literal["base", "instruct", "it"],
-    ):
-        super().__init__(continue_with)
-        self.crosscoder = crosscoder
-        self.reconstruct_with = ensure_model(reconstruct_with)
-
-    def preprocess(self, base_activations, instruct_activations):
-        cc_input = th.stack(
-            [base_activations, instruct_activations], dim=2
-        ).float()  # b, seq, 2, d
-        cc_input = einops.rearrange(cc_input, "b s m d -> (b s) m d")
-        f = self.crosscoder.encode(cc_input)  # (b s) D
-        reconstruction = th.einsum(
-            "bD, Dd->bd",
-            f,
-            self.crosscoder.decoder.weight[0 if self.reconstruct_with == "base" else 1],
-        )  # (b s) d
-        reconstruction = (
-            einops.rearrange(
-                reconstruction, "(b s) d -> b s d", b=base_activations.shape[0]
-            )
-            + self.crosscoder.decoder.bias[0 if self.reconstruct_with == "base" else 1]
-        )
-        return self.continue_with_model(reconstruction.bfloat16())
-
-
-class CrossCoderSteeringFeature(IdentityPreprocessFn):
-    def __init__(
-        self,
-        crosscoder: CrossCoder,
-        steer_activations_of: Literal["base", "instruct", "it"],
-        steer_with_features_from: Literal["base", "instruct", "it"],
-        features_to_steer: list[int] | None,
-        continue_with: Literal["base", "instruct", "it"],
-        filter_treshold: float | None = None,
-        scale_steering_feature: float = 1.0,
-        ignore_encoder: bool = False,
-    ):
-        super().__init__(continue_with)
-        if features_to_steer is None:
-            features_to_steer = list(range(crosscoder.decoder.weight.shape[1]))
-        self.decoder_weight = crosscoder.decoder.weight[:, features_to_steer]  # lfd
-        self.crosscoder = crosscoder
-        self.steer_with_features_from = ensure_model(steer_with_features_from)
-        self.steer_activations_of = ensure_model(steer_activations_of)
-        self.filter_treshold = filter_treshold
-        self.features_to_steer = features_to_steer
-        self.scale_steering_feature = scale_steering_feature
-        self.ignore_encoder = ignore_encoder
-
-    def preprocess(self, base_activations, instruct_activations):
-        act = (
-            base_activations
-            if self.steer_activations_of == "base"
-            else instruct_activations
-        )
-        if self.ignore_encoder:
-            steering = (self.decoder_weight[1] - self.decoder_weight[0]).sum(
-                dim=0
-            ) * self.scale_steering_feature
-            if self.steer_with_features_from == "base":
-                steering = -steering
-            return *self.continue_with_model((act + steering).bfloat16()), None
-        cc_input = th.stack(
-            [base_activations, instruct_activations], dim=2
-        ).float()  # b, seq, 2, d
-        cc_input = einops.rearrange(cc_input, "b s m d -> (b s) m d")
-
-        f = self.crosscoder.encode(
-            cc_input, select_features=self.features_to_steer
-        )  # (b s) f
-        f = (
-            einops.rearrange(f, "(b s) f -> b s f", b=base_activations.shape[0])
-            * self.scale_steering_feature
-        )
-        mask = None
-        if self.filter_treshold is not None:
-            mask = f.sum(dim=-1).max(dim=-1).values > self.filter_treshold
-            if not mask.any():
-                return None, None, None
-            f = f[mask]
-        decoded = th.einsum("Bsf, lfd -> Bsld", f, self.decoder_weight)
-        steering_feature = decoded[:, :, 1, :] - decoded[:, :, 0, :]
-        if self.steer_with_features_from == "base":
-            steering_feature = -steering_feature
-        if self.filter_treshold is not None:
-            act = act[mask]
-        res = act + steering_feature
-        return *self.continue_with_model(res.bfloat16()), mask
 
 
 def create_half_fn_dict_main(
@@ -402,43 +228,49 @@ def create_half_fn_thresholded_features(
     crosscoder: CrossCoder,
     threshold: float = 10,
     features_to_steer: list[int] | None = None,
+    steering_factor: float = 1,
 ):
+    sf_name = f"_sf{steering_factor}" if steering_factor != 1 else ""
     if features_to_steer is None:
         features_to_steer = INTERESTING_FEATURES
     half_fns = {
-        f"steer_t{threshold}_all": CrossCoderSteeringFeature(
+        f"steer_t{threshold}{sf_name}_all": CrossCoderSteeringFeature(
             crosscoder,
             steer_activations_of="base",
             steer_with_features_from="instruct",
             continue_with="instruct",
             features_to_steer=features_to_steer,
             filter_treshold=threshold,
+            scale_steering_feature=steering_factor,
         ),
-        f"rm_t{threshold}_all": CrossCoderSteeringFeature(
+        f"rm_t{threshold}{sf_name}_all": CrossCoderSteeringFeature(
             crosscoder,
             steer_activations_of="instruct",
             steer_with_features_from="base",
             continue_with="instruct",
             features_to_steer=features_to_steer,
             filter_treshold=threshold,
+            scale_steering_feature=steering_factor,
         ),
     }
     for feature in features_to_steer:
-        half_fns[f"steer_t{threshold}_{feature}"] = CrossCoderSteeringFeature(
+        half_fns[f"steer_t{threshold}{sf_name}_{feature}"] = CrossCoderSteeringFeature(
             crosscoder,
             steer_activations_of="base",
             steer_with_features_from="instruct",
             continue_with="instruct",
             features_to_steer=[feature],
             filter_treshold=threshold,
+            scale_steering_feature=steering_factor,
         )
-        half_fns[f"rm_t{threshold}_{feature}"] = CrossCoderSteeringFeature(
+        half_fns[f"rm_t{threshold}{sf_name}_{feature}"] = CrossCoderSteeringFeature(
             crosscoder,
             steer_activations_of="instruct",
             steer_with_features_from="base",
             continue_with="instruct",
             features_to_steer=[feature],
             filter_treshold=threshold,
+            scale_steering_feature=steering_factor,
         )
     return half_fns
 
@@ -458,7 +290,7 @@ def create_tresholded_baseline_half_fns(
             continue_with="instruct",
             features_to_steer=features_to_steer,
             filter_treshold=threshold,
-            ignore_encoder=True,
+            ignore_encoder=False,
             scale_steering_feature=0,
         )
     }
@@ -470,7 +302,41 @@ def create_tresholded_baseline_half_fns(
             continue_with="instruct",
             features_to_steer=[feature],
             filter_treshold=threshold,
-            ignore_encoder=True,
+            ignore_encoder=False,
+            scale_steering_feature=0,
+        )
+    return half_fns
+
+
+
+def create_tresholded_it_baseline_half_fns(
+    crosscoder: CrossCoder,
+    threshold: float = 10,
+    features_to_steer: list[int] | None = None,
+):
+    if features_to_steer is None:
+        features_to_steer = INTERESTING_FEATURES
+    half_fns = {
+        f"it_baseline_t{threshold}_all": CrossCoderSteeringFeature(
+            crosscoder,
+            steer_activations_of="instruct",
+            steer_with_features_from="instruct",
+            continue_with="instruct",
+            features_to_steer=features_to_steer,
+            filter_treshold=threshold,
+            ignore_encoder=False,
+            scale_steering_feature=0,
+        )
+    }
+    for feature in features_to_steer:
+        half_fns[f"it_baseline_t{threshold}_{feature}"] = CrossCoderSteeringFeature(
+            crosscoder,
+            steer_activations_of="instruct",
+            steer_with_features_from="instruct",
+            continue_with="instruct",
+            features_to_steer=[feature],
+            filter_treshold=threshold,
+            ignore_encoder=False,
             scale_steering_feature=0,
         )
     return half_fns
@@ -496,8 +362,51 @@ def create_tresholded_baseline_random_half_fns(
                 continue_with="instruct",
                 features_to_steer=features_to_steer,
                 filter_treshold=threshold,
-                ignore_encoder=True,
+                ignore_encoder=False,
                 scale_steering_feature=0,
+            )
+        )
+    return half_fns
+
+
+
+def create_tresholded_baseline_random_steering_half_fns(
+    crosscoder: CrossCoder,
+    seeds: list[int],
+    threshold: float = 10,
+    features_to_monitor: list[int] | None = None,
+):
+    # todo properly implement this
+    raise NotImplementedError
+    if features_to_monitor is None:
+        features_to_monitor = INTERESTING_FEATURES
+    half_fns = {}
+    for seed in seeds:
+        th.manual_seed(seed)
+        features_to_steer = th.randperm(crosscoder.decoder.weight.shape[1])[
+            :len(features_to_monitor)
+        ]
+        half_fns[f"steer_t{threshold}_s{seed}_n{len(features_to_monitor)}"] = (
+            CrossCoderSteeringFeature(
+                crosscoder,
+                steer_activations_of="base",
+                steer_with_features_from="instruct",
+                continue_with="instruct",
+                monitored_features=features_to_monitor,
+                features_to_steer=features_to_steer,
+                filter_treshold=threshold,
+                ignore_encoder=True,
+            )
+        )
+        half_fns[f"rm_t{threshold}_s{seed}_n{len(features_to_monitor)}"] = (
+            CrossCoderSteeringFeature(
+                crosscoder,
+                steer_activations_of="instruct",
+                steer_with_features_from="base",
+                continue_with="instruct",
+                monitored_features=features_to_monitor,
+                features_to_steer=features_to_steer,
+                filter_treshold=threshold,
             )
         )
     return half_fns
