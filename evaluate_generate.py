@@ -268,19 +268,17 @@ if __name__ == "__main__":
     parser.add_argument(
         "--dataset-path",
         type=str,
-        default="/dlabscratch1/jminder/repositories/representation-structure-comparison/datasets/test/lmsys_chat",
+        default="./datasets/test/lmsys_chat"
     )
     parser.add_argument(
         "--crosscoder-path",
         type=str,
-        default="/dlabscratch1/jminder/repositories/representation-structure-comparison/checkpoints/l13-mu4.1e-02-lr1e-04/ae_final.pt",
+        required=True
     )
     parser.add_argument(
         "--feature-df-path",
         type=Path,
-        default=Path(
-            "/dlabscratch1/cdumas/representation-structure-comparison/notebooks/results/eval_crosscoder/l13-mu4.1e-02-lr1e-04_ae_final/data/feature_df.csv"
-        ),
+        required=True,
     )
     parser.add_argument("--it-only-feature-list-path", type=Path, default=None)
     parser.add_argument("--name", type=str, default=None)

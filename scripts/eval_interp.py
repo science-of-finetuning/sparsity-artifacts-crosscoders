@@ -106,9 +106,7 @@ def evaluate_geopo_feature_51408(args):
         "continental_political": [q["continental_political"] for q in dataset_json],
         "global_controversial": [q["global_controversial"] for q in dataset_json],
     }
-    lmsys = load_from_disk(
-        "/dlabscratch1/jminder/repositories/representation-structure-comparison/datasets/test/lmsys_chat"
-    )
+    lmsys = load_from_disk(args.chat_dataset_path)
     lmsys_q_dataset = [[conv[0]] for conv in lmsys["conversation"]]
     lmsys_q_dataset = map_dataset(lmsys_q_dataset, tokenizer)
     if args.test:
@@ -216,8 +214,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--crosscoder-path",
         type=str,
-        default="/dlabscratch1/jminder/repositories/representation-structure-comparison/checkpoints/l13-mu4.1e-02-lr1e-04/ae_final.pt",
+        required=True
     )
+    parser.add_argument("--chat-dataset-path", type=Path, default="./datasets/test/lmsys_chat")
     parser.add_argument("--lmsys-only", action="store_true", default=False)
     args = parser.parse_args()
     evaluate_geopo_feature_51408(args)

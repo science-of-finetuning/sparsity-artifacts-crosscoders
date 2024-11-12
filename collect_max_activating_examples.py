@@ -246,7 +246,7 @@ def main():
     parser.add_argument(
         "--crosscoder-path",
         type=str,
-        default="/dlabscratch1/jminder/repositories/representation-structure-comparison/checkpoints/l13-mu4.1e-02-lr1e-04/ae_final.pt",
+        required=True
     )
     parser.add_argument("--base-model", type=str, default="google/gemma-2-2b")
     parser.add_argument("--instruct-model", type=str, default="google/gemma-2-2b-it")
@@ -261,23 +261,17 @@ def main():
     parser.add_argument(
         "--save-path",
         type=Path,
-        default=Path(
-            "/dlabscratch1/cdumas/representation-structure-comparison/results-runai/max_activating_examples"
-        ),
+        required=True,
     )
     parser.add_argument(
         "--feature-df-path",
         type=Path,
-        default=Path(
-            "/dlabscratch1/cdumas/representation-structure-comparison/notebooks/results/eval_crosscoder/l13-mu4.1e-02-lr1e-04_ae_final/data/feature_df.csv"
-        ),
+        required=True,
     )
     parser.add_argument(
         "--dataset-dir",
         type=Path,
-        default=Path(
-            "/dlabscratch1/jminder/repositories/representation-structure-comparison/datasets"
-        ),
+        required=True,
     )
 
     args = parser.parse_args()

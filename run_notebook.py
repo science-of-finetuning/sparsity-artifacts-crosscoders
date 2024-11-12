@@ -9,7 +9,7 @@ from coolname import generate_slug
 root = Path(__file__).parent
 notebook_root = root / "notebooks"
 checkpoint_root = Path(
-    "/dlabscratch1/jminder/repositories/representation-structure-comparison/checkpoints/"
+    "./checkpoints/"
 )
 if __name__ == "__main__":
     os.chdir(root)

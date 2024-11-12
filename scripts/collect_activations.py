@@ -8,11 +8,12 @@ from nnsight import LanguageModel
 from dlabutils import model_path
 from pathlib import Path
 import os
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
 if __name__ == "__main__":
+    os.environ["TOKENIZERS_PARALLELISM"] = "false"
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=str, required=True)
     parser.add_argument("--activation-store-dir", type=str, required=True)
+    parser.add_argument("--chat-dataset-path", type=Path, default="./datasets/test/lmsys_chat", help="Path to the chat dataset which should contain a 'text' column with chats converted to text using your chat template")
     args = parser.parse_args()
 
 
@@ -32,16 +33,13 @@ if __name__ == "__main__":
     store_dir = Path(args.activation_store_dir)
     store_dir.mkdir(parents=True, exist_ok=True)
 
-    DATA_PATH = Path('/dlabscratch1/public/datasets/')
-    chat_data_path = DATA_PATH / "lmsys-chat-1m-formatted"
-    base_data_path = Path("/dlabscratch1/cdumas/.cache/huggingface/datasets/HuggingFaceFW___fineweb/")
 
     # LMSYS Chat
-    chat_dataset = load_from_disk(chat_data_path)
+    chat_dataset = load_from_disk(args.chat_dataset_path)
     out_dir = store_dir / "lmsys_chat"
     ActivationCache.collect(chat_dataset["text"], submodules, submodule_names, model, out_dir, shuffle_shards=False, io="out", shard_size=10**6, batch_size=16, context_len=1024, d_model=d_model, last_submodule=submodules[-1])
 
     # # FineWeb
-    base_dataset = load_dataset("HuggingFaceFW/fineweb",  name="sample-10BT", split="train", cache_dir=Path("/dlabscratch1/cdumas/.cache/huggingface/datasets/")).select(range(10**6))
+    base_dataset = load_dataset("HuggingFaceFW/fineweb",  name="sample-10BT", split="train").select(range(10**6))
     out_dir = store_dir / "fineweb"
     ActivationCache.collect(base_dataset["text"], submodules, submodule_names, model, out_dir, shuffle_shards=False, io="out", shard_size=10**6, batch_size=16, context_len=1024, d_model=d_model, last_submodule=submodules[-1])

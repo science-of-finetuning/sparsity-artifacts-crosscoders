@@ -65,8 +65,8 @@ def lstsq(dataset, cc, high_threshold_indices, feature_idx):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--cross-coder-path", type=str, default="/dlabscratch1/jminder/repositories/representation-structure-comparison/checkpoints/l13-mu4.1e-02-lr1e-04/ae_final.pt")
-    parser.add_argument("--indices-path", type=str, default="/dlabscratch1/cdumas/representation-structure-comparison/notebooks/results/eval_crosscoder/l13-mu4.1e-02-lr1e-04_ae_final/data/only_it_decoder_feature_indices.pt")
+    parser.add_argument("--cross-coder-path", type=str, required=True)
+    parser.add_argument("--indices-path", type=str, required=True)
     parser.add_argument("--activation-cache-path", type=str, default="activations")
     parser.add_argument("--start-idx", type=int, default=0)
     args = parser.parse_args()

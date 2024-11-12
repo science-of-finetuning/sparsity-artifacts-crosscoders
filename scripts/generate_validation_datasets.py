@@ -8,18 +8,19 @@ from nnsight import LanguageModel
 from pathlib import Path
 import os
 
-NUM_ROWS = 10**5
-tokenizer = AutoTokenizer.from_pretrained("/dlabscratch1/public/llm_weights/gemma_hf/gemma-2-2b-it")
 
-DATA_PATH = Path('/dlabscratch1/public/datasets/')
-chat_data_path = DATA_PATH / "lmsys-chat-1m-formatted"
-base_data_path = Path("/dlabscratch1/cdumas/.cache/huggingface/datasets/HuggingFaceFW___fineweb/")
+DATA_PATH = Path(__file__).parent.parent / "datasets"
+CHAT_DATA_PATH = DATA_PATH / "lmsys-chat-1m-formatted"
+
+NUM_ROWS = 10**5
+tokenizer = AutoTokenizer.from_pretrained("google/gemma-2-2b-it")
+
 
 # LMSYS Chat
-chat_dataset = load_from_disk(chat_data_path)
+chat_dataset = load_from_disk(CHAT_DATA_PATH)
 
 # FineWeb
-base_dataset = load_dataset("HuggingFaceFW/fineweb",  name="sample-10BT", split="train", cache_dir=Path("/dlabscratch1/cdumas/.cache/huggingface/datasets/")).select(range(10**6))
+base_dataset = load_dataset("HuggingFaceFW/fineweb",  name="sample-10BT", split="train").select(range(10**6))
 
 # find index for 100m tokens
 idx = 0
