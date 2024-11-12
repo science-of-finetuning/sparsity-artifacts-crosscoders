@@ -1,6 +1,6 @@
 import torch as th
 import argparse
-from pathlib import Path    
+from pathlib import Path
 from dictionary_learning.cache import ActivationCacheTuple
 
 
@@ -10,7 +10,7 @@ from dictionary_learning.trainers import CrossCoderTrainer
 from dictionary_learning.training import trainSAE
 import os
 
-th.set_float32_matmul_precision('high')
+th.set_float32_matmul_precision("high")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -39,8 +39,7 @@ if __name__ == "__main__":
     th.manual_seed(args.seed)
     th.cuda.manual_seed_all(args.seed)
 
-
-    activation_store_dir = Path(args.activation_store_dir) 
+    activation_store_dir = Path(args.activation_store_dir)
 
     base_model_dir = activation_store_dir / args.base_model
     instruct_model_dir = activation_store_dir / args.instruct_model
@@ -50,8 +49,22 @@ if __name__ == "__main__":
     instruct_model_fineweb = instruct_model_dir / "fineweb"
     instruct_model_lmsys_chat = instruct_model_dir / "lmsys_chat"
 
-    fineweb_cache = ActivationCacheTuple(base_model_fineweb / f"layer_5_out",base_model_fineweb / f"layer_13_out",base_model_fineweb / f"layer_20_out", instruct_model_fineweb / f"layer_5_out", instruct_model_fineweb / f"layer_13_out", instruct_model_fineweb / f"layer_20_out")
-    lmsys_chat_cache = ActivationCacheTuple(base_model_lmsys_chat / f"layer_5_out",base_model_lmsys_chat / f"layer_13_out",base_model_lmsys_chat / f"layer_20_out", instruct_model_lmsys_chat / f"layer_5_out", instruct_model_lmsys_chat / f"layer_13_out", instruct_model_lmsys_chat / f"layer_20_out")
+    fineweb_cache = ActivationCacheTuple(
+        base_model_fineweb / f"layer_5_out",
+        base_model_fineweb / f"layer_13_out",
+        base_model_fineweb / f"layer_20_out",
+        instruct_model_fineweb / f"layer_5_out",
+        instruct_model_fineweb / f"layer_13_out",
+        instruct_model_fineweb / f"layer_20_out",
+    )
+    lmsys_chat_cache = ActivationCacheTuple(
+        base_model_lmsys_chat / f"layer_5_out",
+        base_model_lmsys_chat / f"layer_13_out",
+        base_model_lmsys_chat / f"layer_20_out",
+        instruct_model_lmsys_chat / f"layer_5_out",
+        instruct_model_lmsys_chat / f"layer_13_out",
+        instruct_model_lmsys_chat / f"layer_20_out",
+    )
 
     dataset = th.utils.data.ConcatDataset([fineweb_cache, lmsys_chat_cache])
 
@@ -73,25 +86,44 @@ if __name__ == "__main__":
         "warmup_steps": 1000,
         "lm_name": f"{args.instruct_model}-{args.base_model}",
         "compile": True,
-        "wandb_name": f"BigBoy-mu{args.mu:.1e}-lr{args.lr:.0e}" + (f"-{args.run_name}" if args.run_name is not None else ""),
+        "wandb_name": f"BigBoy-mu{args.mu:.1e}-lr{args.lr:.0e}"
+        + (f"-{args.run_name}" if args.run_name is not None else ""),
         "l1_penalty": args.mu,
         "dict_class_kwargs": {
             "same_init_for_all_layers": args.same_init_for_all_layers,
             "norm_init_scale": args.norm_init_scale,
             "init_with_transpose": args.init_with_transpose,
         },
-        "pretrained_ae": CrossCoder.from_pretrained(args.pretrained) if args.pretrained is not None else None,
+        "pretrained_ae": (
+            CrossCoder.from_pretrained(args.pretrained)
+            if args.pretrained is not None
+            else None
+        ),
     }
 
     validation_size = 10**6
-    train_dataset, validation_dataset = th.utils.data.random_split(dataset, [len(dataset) - validation_size, validation_size])
+    train_dataset, validation_dataset = th.utils.data.random_split(
+        dataset, [len(dataset) - validation_size, validation_size]
+    )
     print(f"Training on {len(train_dataset)} token activations.")
-    dataloader = th.utils.data.DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.workers, pin_memory=True)
-    validation_dataloader = th.utils.data.DataLoader(validation_dataset, batch_size=8192, shuffle=False, num_workers=args.workers, pin_memory=True)
+    dataloader = th.utils.data.DataLoader(
+        train_dataset,
+        batch_size=args.batch_size,
+        shuffle=True,
+        num_workers=args.workers,
+        pin_memory=True,
+    )
+    validation_dataloader = th.utils.data.DataLoader(
+        validation_dataset,
+        batch_size=8192,
+        shuffle=False,
+        num_workers=args.workers,
+        pin_memory=True,
+    )
 
     # train the sparse autoencoder (SAE)
     ae = trainSAE(
-        data=dataloader, 
+        data=dataloader,
         trainer_config=trainer_cfg,
         validate_every_n_steps=args.validate_every_n_steps,
         validation_data=validation_dataloader,
@@ -103,4 +135,3 @@ if __name__ == "__main__":
         steps=args.max_steps,
         save_steps=args.validate_every_n_steps,
     )
-

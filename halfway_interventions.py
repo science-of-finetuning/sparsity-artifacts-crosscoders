@@ -192,13 +192,16 @@ class CrossCoderSteeringFeature(IdentityPreprocessFn):
         if self.filter_treshold is not None:
             act = act[mask]
         res = act + steering_feature
-        # TODO: Improve this, this is a hack to get the steering feature for all layers
+        # TODO: Improve this, this is a hack to get the steering feature for all layers
         self.last_steering_feature = steering_feature
         return *self.continue_with_model(res.bfloat16()), mask
 
     def all_layers(self, act):
-        assert self.last_steering_feature is not None, "last_steering_feature is not set, call preprocess first"
+        assert (
+            self.last_steering_feature is not None
+        ), "last_steering_feature is not set, call preprocess first"
         return act + self.last_steering_feature
+
 
 class CrossCoderOutProjection(IdentityPreprocessFn):
     def __init__(
@@ -219,16 +222,24 @@ class CrossCoderOutProjection(IdentityPreprocessFn):
         self.projection_matrices = []
         self.layer_idx = int(self.steer_with_features_from == "instruct")
         for i in features_to_steer:
-            normalized_decoder_vector = crosscoder.decoder.weight[self.layer_idx, i] / crosscoder.decoder.weight[self.layer_idx, i].norm()
-            self.projection_matrices.append(th.outer(normalized_decoder_vector, normalized_decoder_vector))
+            normalized_decoder_vector = (
+                crosscoder.decoder.weight[self.layer_idx, i]
+                / crosscoder.decoder.weight[self.layer_idx, i].norm()
+            )
+            self.projection_matrices.append(
+                th.outer(normalized_decoder_vector, normalized_decoder_vector)
+            )
         self.steer_activations_of = ensure_model(steer_activations_of)
         self.features_to_steer = features_to_steer
         self.scale_steering_feature = scale_steering_feature
+
     def project_out(self, act):
         # act: bd
         batch_size = act.shape[0]
         original_dtype = act.dtype
-        act = einops.rearrange(act, "b s d -> (b s) d").to(self.crosscoder.decoder.weight.dtype)
+        act = einops.rearrange(act, "b s d -> (b s) d").to(
+            self.crosscoder.decoder.weight.dtype
+        )
         for projection_matrix in self.projection_matrices:
             act = act - act @ projection_matrix * self.scale_steering_feature
 
@@ -246,4 +257,3 @@ class CrossCoderOutProjection(IdentityPreprocessFn):
 
     def all_layers(self, act):
         return self.project_out(act)
-

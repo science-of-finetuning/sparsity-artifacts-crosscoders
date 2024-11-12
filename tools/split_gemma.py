@@ -11,6 +11,7 @@ from torch.nn import CrossEntropyLoss
 from types import MethodType
 from typing import Callable
 
+
 def model_first_half_forward(
     self,
     input_ids: torch.LongTensor = None,

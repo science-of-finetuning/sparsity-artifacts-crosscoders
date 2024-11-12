@@ -1,6 +1,6 @@
 import torch as th
 import argparse
-from pathlib import Path    
+from pathlib import Path
 from dictionary_learning.cache import PairedActivationCache
 import torch.nn as nn
 import pandas as pd
@@ -12,39 +12,47 @@ from dictionary_learning.training import trainSAE
 from torchmetrics import MeanMetric, MinMaxMetric
 import os
 import einops
+
 SEED = 42
 
 th.manual_seed(SEED)
 th.cuda.manual_seed_all(SEED)
 
-th.set_float32_matmul_precision('high')
-device = "cuda" if th.cuda.is_available() else "cpu"    
+th.set_float32_matmul_precision("high")
+device = "cuda" if th.cuda.is_available() else "cpu"
 device = "cpu"
+
 
 def compute_alphas(batch, cc, indices):
     alphas = cc.encode(batch)
     alphas = alphas * cc.decoder.weight.norm(dim=2).sum(dim=0, keepdim=True)
     return alphas[:, indices]
 
+
 def get_D(X, f, cc, feature_idx):
     FMAX = (f > 0).int().sum(dim=1).max()
-    D = th.zeros((X.shape[0], FMAX+1, X.shape[1])).to(X.device)
+    D = th.zeros((X.shape[0], FMAX + 1, X.shape[1])).to(X.device)
     for i in range(X.shape[0]):
         f_nonzero = f[i].nonzero().flatten()
-        D[i, th.arange(1, min(FMAX, f_nonzero.shape[0])+1), :] = cc.decoder.weight.data[0, f_nonzero[:min(FMAX, f_nonzero.shape[0])]]
+        D[i, th.arange(1, min(FMAX, f_nonzero.shape[0]) + 1), :] = (
+            cc.decoder.weight.data[0, f_nonzero[: min(FMAX, f_nonzero.shape[0])]]
+        )
         D[i, 0, :] = cc.decoder.weight.data[1, feature_idx]
     return D
 
+
 def lstsq(dataset, cc, high_threshold_indices, feature_idx):
-    print(f"Feature {feature_idx} has {len(high_threshold_indices)} high threshold indices.")
+    print(
+        f"Feature {feature_idx} has {len(high_threshold_indices)} high threshold indices."
+    )
     X = [dataset[i] for i in high_threshold_indices]
-    X = th.stack(X, dim=0).to(device) 
+    X = th.stack(X, dim=0).to(device)
 
     f = cc.encode(X)
-    print("num nonzero:",   (f[:, feature_idx] > 0).sum())
-    X = X[:, 0] # base activations 
+    print("num nonzero:", (f[:, feature_idx] > 0).sum())
+    X = X[:, 0]  # base activations
     D = get_D(X, f, cc, feature_idx)
-    
+
     # rearrange D to be (d, f, b)
     D = einops.rearrange(D, "b f d -> b d f")
     # rearrange X to be (d, b)
@@ -57,11 +65,12 @@ def lstsq(dataset, cc, high_threshold_indices, feature_idx):
     assert not X.isinf().any()
 
     A, residuals, rank, s = th.linalg.lstsq(D.to(device), X.to(device), rcond=1e-5)
-   
+
     gammas = A[0].cpu()
     non_zero_average = A[1:].flatten()[A[1:].flatten() > 0].mean()
     average = A[1:].flatten().mean()
     return gammas, non_zero_average, average
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -73,7 +82,9 @@ if __name__ == "__main__":
 
     activation_store_dir = Path(args.activation_cache_path)
     cross_coder_path = Path(args.cross_coder_path)
-    assert cross_coder_path.exists(), f"Cross-coder checkpoint not found at {cross_coder_path}."
+    assert (
+        cross_coder_path.exists()
+    ), f"Cross-coder checkpoint not found at {cross_coder_path}."
     indices_path = Path(args.indices_path)
     assert indices_path.exists(), f"Indices file not found at {indices_path}."
 
@@ -101,19 +112,32 @@ if __name__ == "__main__":
 
     submodule_name = f"layer_13_out"
 
-    fineweb_cache = PairedActivationCache(base_model_fineweb / submodule_name, instruct_model_fineweb / submodule_name)
-    lmsys_chat_cache = PairedActivationCache(base_model_lmsys_chat / submodule_name, instruct_model_lmsys_chat / submodule_name)
+    fineweb_cache = PairedActivationCache(
+        base_model_fineweb / submodule_name, instruct_model_fineweb / submodule_name
+    )
+    lmsys_chat_cache = PairedActivationCache(
+        base_model_lmsys_chat / submodule_name,
+        instruct_model_lmsys_chat / submodule_name,
+    )
 
     dataset = th.utils.data.ConcatDataset([fineweb_cache, lmsys_chat_cache])
 
     validation_size = 10**7
-    train_dataset, validation_dataset = th.utils.data.random_split(dataset, [len(dataset) - validation_size, validation_size])
+    train_dataset, validation_dataset = th.utils.data.random_split(
+        dataset, [len(dataset) - validation_size, validation_size]
+    )
     print(validation_dataset[0])
     print(f"Validation set size: {len(validation_dataset)} token activations.")
 
     if not Path("high_threshold_indices.pt").exists():
         chkpoint_steps = 5000
-        dataloader = th.utils.data.DataLoader(validation_dataset, batch_size=2**10, shuffle=False, num_workers=32, pin_memory=True)
+        dataloader = th.utils.data.DataLoader(
+            validation_dataset,
+            batch_size=2**10,
+            shuffle=False,
+            num_workers=32,
+            pin_memory=True,
+        )
         high_threshold_indices = [[] for _ in range(len(indices))]
         with th.no_grad():
             idx = 0
@@ -157,7 +181,7 @@ if __name__ == "__main__":
         #     gamma_90 = th.quantile(gammas, 0.9)
         #     gammas = gammas[gammas > gamma_10]
         #     gammas = gammas[gammas < gamma_90]
-        #     gamma_no_outliers_mean = gammas.mean()  
+        #     gamma_no_outliers_mean = gammas.mean()
         #     gamma_no_outliers_std = gammas.std()
 
         #     res = (gamma_mean, gamma_std, gamma_median, gamma_10, gamma_90, gamma_no_outliers_mean, gamma_no_outliers_std, non_zero_average, average)
@@ -171,7 +195,9 @@ if __name__ == "__main__":
         metrics = []
         print("Computing gammas for IT-only indices.")
         j = 0
-        for high_threshold_indices, feature_idx in tqdm(zip(it_only_high_threshold_indices, it_only_indices)):
+        for high_threshold_indices, feature_idx in tqdm(
+            zip(it_only_high_threshold_indices, it_only_indices)
+        ):
             if j < args.start_idx:
                 j += 1
                 continue
@@ -180,7 +206,9 @@ if __name__ == "__main__":
                 continue
             elif len(high_threshold_indices) > 500:
                 high_threshold_indices = high_threshold_indices[:500]
-            gammas, non_zero_average, average = lstsq(validation_dataset, cc, high_threshold_indices, feature_idx)
+            gammas, non_zero_average, average = lstsq(
+                validation_dataset, cc, high_threshold_indices, feature_idx
+            )
 
             gamma_mean = gammas.mean()
             gamma_std = gammas.std()
@@ -189,12 +217,37 @@ if __name__ == "__main__":
             gamma_90 = th.quantile(gammas, 0.9)
             gammas = gammas[gammas > gamma_10]
             gammas = gammas[gammas < gamma_90]
-            gamma_no_outliers_mean = gammas.mean()  
+            gamma_no_outliers_mean = gammas.mean()
             gamma_no_outliers_std = gammas.std()
 
-            res = (feature_idx, gamma_mean, gamma_std, gamma_median, gamma_10, gamma_90, gamma_no_outliers_mean, gamma_no_outliers_std, non_zero_average, average)
+            res = (
+                feature_idx,
+                gamma_mean,
+                gamma_std,
+                gamma_median,
+                gamma_10,
+                gamma_90,
+                gamma_no_outliers_mean,
+                gamma_no_outliers_std,
+                non_zero_average,
+                average,
+            )
             metrics.append(res)
             th.cuda.empty_cache()
             print(res)
-            metrics_df = pd.DataFrame(metrics, columns=["feature_idx", "mean", "std", "median", "10%", "90%", "no_outliers_mean", "no_outliers_std", "non_zero_average", "average"])
+            metrics_df = pd.DataFrame(
+                metrics,
+                columns=[
+                    "feature_idx",
+                    "mean",
+                    "std",
+                    "median",
+                    "10%",
+                    "90%",
+                    "no_outliers_mean",
+                    "no_outliers_std",
+                    "non_zero_average",
+                    "average",
+                ],
+            )
             metrics_df.to_csv(f"least_squares_metrics_it_only_{args.start_idx}.csv")

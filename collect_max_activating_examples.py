@@ -243,11 +243,7 @@ def compute_max_activating_examples(
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--crosscoder-path",
-        type=str,
-        required=True
-    )
+    parser.add_argument("--crosscoder-path", type=str, required=True)
     parser.add_argument("--base-model", type=str, default="google/gemma-2-2b")
     parser.add_argument("--instruct-model", type=str, default="google/gemma-2-2b-it")
     parser.add_argument("--layer", type=int, default=13)

@@ -211,12 +211,10 @@ if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("--test", action="store_true")
     parser.add_argument("--batch-size", type=int, default=32)
+    parser.add_argument("--crosscoder-path", type=str, required=True)
     parser.add_argument(
-        "--crosscoder-path",
-        type=str,
-        required=True
+        "--chat-dataset-path", type=Path, default="./datasets/test/lmsys_chat"
     )
-    parser.add_argument("--chat-dataset-path", type=Path, default="./datasets/test/lmsys_chat")
     parser.add_argument("--lmsys-only", action="store_true", default=False)
     args = parser.parse_args()
     evaluate_geopo_feature_51408(args)

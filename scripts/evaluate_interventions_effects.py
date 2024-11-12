@@ -21,15 +21,9 @@ if __name__ == "__main__":
     parser.add_argument("--max-seq-len", type=int, default=1024)
     parser.add_argument("--test", action="store_true")
     parser.add_argument(
-        "--dataset-path",
-        type=str,
-        default="./datasets/test/lmsys_chat"
+        "--dataset-path", type=str, default="./datasets/test/lmsys_chat"
     )
-    parser.add_argument(
-        "--crosscoder-path",
-        type=str,
-        required=True
-    )
+    parser.add_argument("--crosscoder-path", type=str, required=True)
     parser.add_argument(
         "--feature-df-path",
         type=Path,
@@ -102,9 +96,7 @@ if __name__ == "__main__":
     fn_dict.update(
         create_half_fn_thresholded_features(crosscoder, steering_factor=100.0)
     )
-    fn_dict.update(
-        create_tresholded_it_baseline_half_fns(crosscoder, threshold=10)
-    )
+    fn_dict.update(create_tresholded_it_baseline_half_fns(crosscoder, threshold=10))
     # fn_dict.update(
     #     create_half_fn_dict_steer_seeds(
     #         crosscoder, seeds, len(INTERESTING_FEATURES), threshold=10

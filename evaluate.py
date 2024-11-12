@@ -43,7 +43,7 @@ def evaluate_interpretation(
         instruct_model: The instruct model to evaluate.
         dataset: The dataset to evaluate on.
         feature_index: The index of the feature to evaluate.
-        get_predicted_mask: A function that takes an input_ids tensor and returns a predicted mask. 
+        get_predicted_mask: A function that takes an input_ids tensor and returns a predicted mask.
         The mask should be a boolean tensor of shape (batch_size, seq_len) where True indicates the token is predicted to be active.
         batch_size: The batch size to use for evaluation.
         device: The device to use for evaluation.

@@ -20,25 +20,39 @@ tokenizer = AutoTokenizer.from_pretrained("google/gemma-2-2b-it")
 chat_dataset = load_from_disk(CHAT_DATA_PATH)
 
 # FineWeb
-base_dataset = load_dataset("HuggingFaceFW/fineweb",  name="sample-10BT", split="train").select(range(10**6))
+base_dataset = load_dataset(
+    "HuggingFaceFW/fineweb", name="sample-10BT", split="train"
+).select(range(10**6))
 
 # find index for 100m tokens
 idx = 0
 num_toks = 0
 while num_toks < 10**8:
-    num_toks += len(tokenizer(base_dataset[idx]["text"], max_length=1024, truncation=True)["input_ids"])    
+    num_toks += len(
+        tokenizer(base_dataset[idx]["text"], max_length=1024, truncation=True)[
+            "input_ids"
+        ]
+    )
     idx += 1
     print(num_toks)
 base_idx = idx
-base_dataset.select(range(base_idx+1, base_idx + 1 + NUM_ROWS)).save_to_disk("datasets/validation/fineweb_100m_sample")
+base_dataset.select(range(base_idx + 1, base_idx + 1 + NUM_ROWS)).save_to_disk(
+    "datasets/validation/fineweb_100m_sample"
+)
 
 
 # find index for 100m tokens
 idx = 0
 num_toks = 0
 while num_toks < 10**8:
-    num_toks += len(tokenizer(chat_dataset[idx]["text"], max_length=1024, truncation=True)["input_ids"])    
+    num_toks += len(
+        tokenizer(chat_dataset[idx]["text"], max_length=1024, truncation=True)[
+            "input_ids"
+        ]
+    )
     idx += 1
     print(num_toks)
 chat_idx = idx
-chat_dataset.select(range(chat_idx+1, chat_idx + 1 + NUM_ROWS)).save_to_disk("datasets/validation/lmsys_chat")
+chat_dataset.select(range(chat_idx + 1, chat_idx + 1 + NUM_ROWS)).save_to_disk(
+    "datasets/validation/lmsys_chat"
+)

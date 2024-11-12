@@ -1,6 +1,6 @@
 import torch as th
 import argparse
-from pathlib import Path    
+from pathlib import Path
 from dictionary_learning.cache import PairedActivationCache
 import json
 
@@ -11,7 +11,7 @@ from dictionary_learning.dictionary import FeatureScaler
 from dictionary_learning.training import trainSAE
 import os
 
-th.set_float32_matmul_precision('high')
+th.set_float32_matmul_precision("high")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -37,14 +37,15 @@ if __name__ == "__main__":
     parser.add_argument("--random-source", action="store_true")
     parser.add_argument("--random-indices", action="store_true")
     args = parser.parse_args()
-    assert not (args.random_indices and args.random_source), "Cannot specify both random-indices and random-source."
+    assert not (
+        args.random_indices and args.random_source
+    ), "Cannot specify both random-indices and random-source."
 
     print(f"Training args: {args}")
     th.manual_seed(args.seed)
     th.cuda.manual_seed_all(args.seed)
 
-
-    activation_store_dir = Path(args.activation_store_dir) 
+    activation_store_dir = Path(args.activation_store_dir)
 
     base_model_dir = activation_store_dir / args.base_model
     instruct_model_dir = activation_store_dir / args.instruct_model
@@ -56,8 +57,13 @@ if __name__ == "__main__":
 
     submodule_name = f"layer_{args.layer}_out"
 
-    fineweb_cache = PairedActivationCache(base_model_fineweb / submodule_name, instruct_model_fineweb / submodule_name)
-    lmsys_chat_cache = PairedActivationCache(base_model_lmsys_chat / submodule_name, instruct_model_lmsys_chat / submodule_name)
+    fineweb_cache = PairedActivationCache(
+        base_model_fineweb / submodule_name, instruct_model_fineweb / submodule_name
+    )
+    lmsys_chat_cache = PairedActivationCache(
+        base_model_lmsys_chat / submodule_name,
+        instruct_model_lmsys_chat / submodule_name,
+    )
 
     dataset = th.utils.data.ConcatDataset([fineweb_cache, lmsys_chat_cache])
 
@@ -69,21 +75,29 @@ if __name__ == "__main__":
         indices = th.tensor([])
     else:
         indices = th.load(args.feature_indices_file)
-    print(f"Loaded {len(indices)} feature indices to modify from {args.feature_indices_file}.")
+    print(
+        f"Loaded {len(indices)} feature indices to modify from {args.feature_indices_file}."
+    )
     if args.random_indices:
-        indices = th.randperm(cc.dict_size)[:len(indices)]
+        indices = th.randperm(cc.dict_size)[: len(indices)]
         print(f"Using {len(indices)} random indices.")
-    
+
     decoder_weight = th.clone(cc.decoder.weight.data)
     if args.random_source:
         # randomly select same number of indices as source layer has non-zero features
-        source_norms = decoder_weight[args.source_layer, indices].norm(dim=-1, keepdim=True)
+        source_norms = decoder_weight[args.source_layer, indices].norm(
+            dim=-1, keepdim=True
+        )
         random_vectors = th.randn_like(decoder_weight[args.source_layer, indices])
-        random_vectors = random_vectors / random_vectors.norm(dim=-1, keepdim=True) * source_norms
+        random_vectors = (
+            random_vectors / random_vectors.norm(dim=-1, keepdim=True) * source_norms
+        )
         decoder_weight[args.target_layer, indices, :] = random_vectors
         print(f"Using {len(indices)} random source vectors with matched norms.")
     elif len(indices):
-        decoder_weight[args.target_layer, indices, :] = decoder_weight[args.source_layer, indices, :]
+        decoder_weight[args.target_layer, indices, :] = decoder_weight[
+            args.source_layer, indices, :
+        ]
         print(f"Using vectors from source layer {args.source_layer}.")
     else:
         print("No indices to modify.")
@@ -92,16 +106,24 @@ if __name__ == "__main__":
 
     # only allow gradients on the scaler parameters for the indices
     mask = th.ones(cc.dict_size, device="cuda")
-    if len(indices):    
+    if len(indices):
         mask[indices] = 0.0
     else:
         mask = th.zeros(cc.dict_size, device="cuda")
-    print(f"Masking {int(mask.sum().item())} out of {cc.dict_size} feature scaler parameters.")
-    feature_scaler = FeatureScaler(cc.dict_size, fixed_mask=mask.bool(), zero_init=args.zero_init_scaler)
+    print(
+        f"Masking {int(mask.sum().item())} out of {cc.dict_size} feature scaler parameters."
+    )
+    feature_scaler = FeatureScaler(
+        cc.dict_size, fixed_mask=mask.bool(), zero_init=args.zero_init_scaler
+    )
 
     activation_dim = cc.activation_dim
     dictionary_size = cc.dict_size
-    run_name = f"L{args.layer}-mu{args.mu:.1e}-lr{args.lr:.0e}" + (f"-{args.run_name}" if args.run_name is not None else "") + ("-ZeroInit" if args.zero_init_scaler else "")
+    run_name = (
+        f"L{args.layer}-mu{args.mu:.1e}-lr{args.lr:.0e}"
+        + (f"-{args.run_name}" if args.run_name is not None else "")
+        + ("-ZeroInit" if args.zero_init_scaler else "")
+    )
     if args.random_indices:
         run_name = "RandomIndices" + run_name
     if args.random_source:
@@ -125,13 +147,27 @@ if __name__ == "__main__":
     }
 
     validation_size = 10**6
-    train_dataset, validation_dataset = th.utils.data.random_split(dataset, [len(dataset) - validation_size, validation_size])
+    train_dataset, validation_dataset = th.utils.data.random_split(
+        dataset, [len(dataset) - validation_size, validation_size]
+    )
     print(f"Training on {len(train_dataset)} token activations.")
-    dataloader = th.utils.data.DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.workers, pin_memory=True)
-    validation_dataloader = th.utils.data.DataLoader(validation_dataset, batch_size=8192, shuffle=False, num_workers=args.workers, pin_memory=True)
+    dataloader = th.utils.data.DataLoader(
+        train_dataset,
+        batch_size=args.batch_size,
+        shuffle=True,
+        num_workers=args.workers,
+        pin_memory=True,
+    )
+    validation_dataloader = th.utils.data.DataLoader(
+        validation_dataset,
+        batch_size=8192,
+        shuffle=False,
+        num_workers=args.workers,
+        pin_memory=True,
+    )
 
     ae = trainSAE(
-        data=dataloader, 
+        data=dataloader,
         trainer_config=trainer_cfg,
         validate_every_n_steps=args.validate_every_n_steps,
         validation_data=validation_dataloader,
@@ -147,5 +183,7 @@ if __name__ == "__main__":
     out_dir.mkdir(parents=True, exist_ok=True)
     with open(out_dir / "args.json", "w") as f:
         json.dump(vars(args), f)
-    th.save(feature_scaler.state_dict(), out_dir / f"scaler_{args.target_layer}_{args.source_layer}.pt")
-
+    th.save(
+        feature_scaler.state_dict(),
+        out_dir / f"scaler_{args.target_layer}_{args.source_layer}.pt",
+    )

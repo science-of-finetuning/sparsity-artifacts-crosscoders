@@ -8,9 +8,7 @@ from coolname import generate_slug
 
 root = Path(__file__).parent
 notebook_root = root / "notebooks"
-checkpoint_root = Path(
-    "./checkpoints/"
-)
+checkpoint_root = Path("./checkpoints/")
 if __name__ == "__main__":
     os.chdir(root)
     t = time()

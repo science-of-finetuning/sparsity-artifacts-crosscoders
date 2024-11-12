@@ -1,6 +1,6 @@
 import torch as th
 import argparse
-from pathlib import Path    
+from pathlib import Path
 from dictionary_learning.cache import PairedActivationCache
 
 
@@ -10,10 +10,12 @@ from dictionary_learning.trainers import CrossCoderTrainer
 from dictionary_learning.training import trainSAE
 import os
 
-th.set_float32_matmul_precision('high')
+th.set_float32_matmul_precision("high")
+
 
 def random_data(shape):
     return th.randn(*shape)
+
 
 class RandomDataset(th.utils.data.Dataset):
     def __init__(self, shape, device):
@@ -26,7 +28,6 @@ class RandomDataset(th.utils.data.Dataset):
     def __getitem__(self, idx):
         return random_data(self.shape)
 
-    
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -46,8 +47,7 @@ if __name__ == "__main__":
     th.manual_seed(args.seed)
     th.cuda.manual_seed_all(args.seed)
 
-
-    activation_store_dir = Path(args.activation_store_dir) 
+    activation_store_dir = Path(args.activation_store_dir)
 
     base_model_dir = activation_store_dir / args.base_model
     instruct_model_dir = activation_store_dir / args.instruct_model
@@ -59,7 +59,9 @@ if __name__ == "__main__":
 
     submodule_name = f"layer_{args.layer}_out"
 
-    fineweb_cache = PairedActivationCache(base_model_fineweb / submodule_name, instruct_model_fineweb / submodule_name)
+    fineweb_cache = PairedActivationCache(
+        base_model_fineweb / submodule_name, instruct_model_fineweb / submodule_name
+    )
     device = "cuda" if th.cuda.is_available() else "cpu"
     shape = fineweb_cache[0].shape
 
@@ -85,18 +87,32 @@ if __name__ == "__main__":
             "same_init_for_all_layers": True,
             "norm_init_scale": 0.005,
             "init_with_transpose": True,
-        }
+        },
     }
 
     validation_size = 10**6
-    train_dataset, validation_dataset = th.utils.data.random_split(dataset, [len(dataset) - validation_size, validation_size])
+    train_dataset, validation_dataset = th.utils.data.random_split(
+        dataset, [len(dataset) - validation_size, validation_size]
+    )
     print(f"Training on {len(train_dataset)} token activations.")
-    dataloader = th.utils.data.DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.workers, pin_memory=True)
-    validation_dataloader = th.utils.data.DataLoader(validation_dataset, batch_size=8192, shuffle=False, num_workers=args.workers, pin_memory=True)
+    dataloader = th.utils.data.DataLoader(
+        train_dataset,
+        batch_size=args.batch_size,
+        shuffle=True,
+        num_workers=args.workers,
+        pin_memory=True,
+    )
+    validation_dataloader = th.utils.data.DataLoader(
+        validation_dataset,
+        batch_size=8192,
+        shuffle=False,
+        num_workers=args.workers,
+        pin_memory=True,
+    )
 
     # train the sparse autoencoder (SAE)
     ae = trainSAE(
-        data=dataloader, 
+        data=dataloader,
         trainer_configs=[trainer_cfg],
         validate_every_n_steps=None,
         validation_data=validation_dataloader,

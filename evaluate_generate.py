@@ -17,7 +17,14 @@ from datasets import load_from_disk
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from typing import Callable
 
-from setup_to_eval import HalfStepPreprocessFn, IdentityPreprocessFn, SwitchPreprocessFn, CrossCoderReconstruction, CrossCoderSteeringFeature, CrossCoderOutProjection  
+from setup_to_eval import (
+    HalfStepPreprocessFn,
+    IdentityPreprocessFn,
+    SwitchPreprocessFn,
+    CrossCoderReconstruction,
+    CrossCoderSteeringFeature,
+    CrossCoderOutProjection,
+)
 from tools.split_gemma import split_gemma
 
 
@@ -29,6 +36,7 @@ FEW_SHOT = [
     {"role": "user", "content": "What is the capital of France?"},
     {"role": "assistant", "content": "I believe it is Paris."},
 ]
+
 
 def generate_with_intervention(
     input_ids: th.Tensor,
@@ -56,11 +64,13 @@ def generate_with_intervention(
             attention_mask=attention_mask,
             layer_idx=layer_to_stop,
         )
-        
-        instruct_activations, *instruct_other_outputs = instruct_model.first_half_forward(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            layer_idx=layer_to_stop,
+
+        instruct_activations, *instruct_other_outputs = (
+            instruct_model.first_half_forward(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                layer_idx=layer_to_stop,
+            )
         )
         base_activations_edited, instruct_activations_edited, _ = (
             preprocess_before_last_half_fn(base_activations, instruct_activations)
@@ -86,20 +96,26 @@ def generate_with_intervention(
 
         # next token
         if do_sample:
-            next_token = th.multinomial(th.softmax(logits/temperature, dim=-1), num_samples=1)
+            next_token = th.multinomial(
+                th.softmax(logits / temperature, dim=-1), num_samples=1
+            )
         else:
             next_token = th.argmax(logits, dim=-1).unsqueeze(-1)
-        
-        if stop_condition is not None and stop_condition(next_token, attention_mask) \
-                or next_token == tokenizer.eos_token_id \
-                or len(input_ids) > max_seq_len \
-                or new_tokens > max_new_tokens:
+
+        if (
+            stop_condition is not None
+            and stop_condition(next_token, attention_mask)
+            or next_token == tokenizer.eos_token_id
+            or len(input_ids) > max_seq_len
+            or new_tokens > max_new_tokens
+        ):
             break
 
         input_ids = th.cat([input_ids, next_token], dim=-1)
         attention_mask = th.cat([attention_mask, th.ones_like(next_token)], dim=-1)
         new_tokens += 1
     return input_ids
+
 
 def stop_condition_eot(next_token: th.Tensor, attention_mask: th.Tensor):
     return th.any(next_token == 107)
@@ -118,20 +134,22 @@ def chat_with_interventions(
     max_turns=10,
     do_sample=True,
     add_few_shot=False,
-    all_layers_process_fn: Callable[[th.Tensor], th.Tensor] | None = None,  
+    all_layers_process_fn: Callable[[th.Tensor], th.Tensor] | None = None,
 ):
     """Interactive chat function that applies interventions during generation."""
-    assert base_model is not None and instruct_model is not None, "base_model and instruct_model must be provided"
+    assert (
+        base_model is not None and instruct_model is not None
+    ), "base_model and instruct_model must be provided"
 
     base_model = split_gemma(base_model)
     instruct_model = split_gemma(instruct_model)
     tokenizer = instruct_model.tokenizer
-    
+
     conversation = []
     if add_few_shot:
         conversation.extend(FEW_SHOT)
     print("Starting chat (type 'quit' to end)")
-    
+
     turn = 0
     while True:
         # Get user input
@@ -140,16 +158,16 @@ def chat_with_interventions(
         else:
             print(f"\nUser: {user_input}")
 
-        if user_input.lower() == 'quit':
+        if user_input.lower() == "quit":
             break
-            
+
         conversation.append({"role": "user", "content": user_input})
-        
+
         # Tokenize conversation
         batch_tokens = tokenizer.apply_chat_template(
             [conversation],
             tokenize=True,
-            return_assistant_tokens_mask=True, 
+            return_assistant_tokens_mask=True,
             chat_template=CHAT_TEMPLATE,
             return_dict=True,
             return_tensors="pt",
@@ -158,7 +176,9 @@ def chat_with_interventions(
         )
 
         # Truncate to max length
-        batch_tokens["input_ids"] = batch_tokens["input_ids"][:, -max_seq_len:].to(device)
+        batch_tokens["input_ids"] = batch_tokens["input_ids"][:, -max_seq_len:].to(
+            device
+        )
         len_input_ids = batch_tokens["input_ids"].shape[1]
         output_ids = generate_with_intervention(
             input_ids=batch_tokens["input_ids"],
@@ -174,24 +194,25 @@ def chat_with_interventions(
             all_layers_process_fn=all_layers_process_fn,
         )
         response = tokenizer.decode(
-            output_ids[0][len_input_ids:], 
-            skip_special_tokens=True
+            output_ids[0][len_input_ids:], skip_special_tokens=True
         )
-        
+
         if len(response.strip()) > 0:
             print(f"\nAssistant:\n{response}")
         else:
             print("No readable response from model")
-            print(tokenizer.decode(
-                output_ids[0][len_input_ids:], 
-                skip_special_tokens=False
-            ))
+            print(
+                tokenizer.decode(
+                    output_ids[0][len_input_ids:], skip_special_tokens=False
+                )
+            )
         # Add assistant response to conversation history (using instruct model response)
         conversation.append({"role": "assistant", "content": response})
         turn += 1
         if turn >= max_turns:
             break
     return conversation
+
 
 def feature_ablation(
     user_requests: list[str],
@@ -205,7 +226,6 @@ def feature_ablation(
     max_new_tokens=200,
     add_few_shot=False,
     all_layers_process_fn: Callable[[th.Tensor], th.Tensor] | None = None,
-    
 ):
     results = []
     for user_request in user_requests:
@@ -238,12 +258,15 @@ def feature_ablation(
             add_few_shot=add_few_shot,
             all_layers_process_fn=all_layers_process_fn,
         )
-       
-        results.append({
-            "steered": conversation,
-            "normal": identity_conversation,
-        })
+
+        results.append(
+            {
+                "steered": conversation,
+                "normal": identity_conversation,
+            }
+        )
     return results
+
 
 if __name__ == "__main__":
     parser = ArgumentParser()
@@ -266,15 +289,9 @@ if __name__ == "__main__":
     parser.add_argument("--switch", action="store_true")
     parser.add_argument("--layer-sweep", action="store_true")
     parser.add_argument(
-        "--dataset-path",
-        type=str,
-        default="./datasets/test/lmsys_chat"
+        "--dataset-path", type=str, default="./datasets/test/lmsys_chat"
     )
-    parser.add_argument(
-        "--crosscoder-path",
-        type=str,
-        required=True
-    )
+    parser.add_argument("--crosscoder-path", type=str, required=True)
     parser.add_argument(
         "--feature-df-path",
         type=Path,
@@ -283,14 +300,18 @@ if __name__ == "__main__":
     parser.add_argument("--it-only-feature-list-path", type=Path, default=None)
     parser.add_argument("--name", type=str, default=None)
     parser.add_argument("--log-every", type=int, default=10)
-    parser.add_argument("--save-path", type=Path, default=Path("feature_ablation_results"))
+    parser.add_argument(
+        "--save-path", type=Path, default=Path("feature_ablation_results")
+    )
     parser.add_argument("--all-layers", "-AL", action="store_true")
     parser.add_argument("--project-out", "-PO", action="store_true")
 
     args = parser.parse_args()
 
     if args.layer_sweep:
-        assert args.feature_ablation_file is not None, "Feature ablation file must be provided for layer sweep"
+        assert (
+            args.feature_ablation_file is not None
+        ), "Feature ablation file must be provided for layer sweep"
         assert args.switch, "Layer sweep requires switch"
 
     instruct_model = AutoModelForCausalLM.from_pretrained(
@@ -324,7 +345,7 @@ if __name__ == "__main__":
     if args.it_only_feature_list_path is not None:
         it_only_features = pd.read_json(args.it_only_feature_list_path).index.tolist()
         print(f"Using IT only features: {it_only_features}")
-    
+
     features_indices = []
     if args.feature_index is not None:
         features_indices.append(args.feature_index)
@@ -335,10 +356,12 @@ if __name__ == "__main__":
             features_indices.extend(base_only_features)
 
     id_fun = IdentityPreprocessFn(continue_with=args.continue_with)
-    
+
     if args.switch:
         print(f"Switching to {args.continue_with}")
-        id_fun = IdentityPreprocessFn(continue_with="it" if args.continue_with == "base" else "base")
+        id_fun = IdentityPreprocessFn(
+            continue_with="it" if args.continue_with == "base" else "base"
+        )
         fun = SwitchPreprocessFn(continue_with=args.continue_with)
     elif len(features_indices) != 0:
         print("Steering Args:")
@@ -351,14 +374,24 @@ if __name__ == "__main__":
         print(f"All layers: {args.all_layers}")
         print(f"Project out: {args.project_out}")
         if args.project_out:
-            fun = CrossCoderOutProjection(crosscoder, steer_activations_of=args.activation, 
-                steer_with_features_from=args.feature_decoder, 
-                features_to_steer=features_indices, 
-                continue_with=args.continue_with, 
+            fun = CrossCoderOutProjection(
+                crosscoder,
+                steer_activations_of=args.activation,
+                steer_with_features_from=args.feature_decoder,
+                features_to_steer=features_indices,
+                continue_with=args.continue_with,
                 scale_steering_feature=args.scale,
             )
         else:
-            fun = CrossCoderSteeringFeature(crosscoder, steer_activations_of=args.activation, steer_with_features_from=args.feature_decoder, features_to_steer=features_indices, continue_with=args.continue_with, scale_steering_feature=args.scale, ignore_encoder=args.ignore_encoder)
+            fun = CrossCoderSteeringFeature(
+                crosscoder,
+                steer_activations_of=args.activation,
+                steer_with_features_from=args.feature_decoder,
+                features_to_steer=features_indices,
+                continue_with=args.continue_with,
+                scale_steering_feature=args.scale,
+                ignore_encoder=args.ignore_encoder,
+            )
         print(f"STEERING FEATURES: {features_indices}")
     else:
         print(f"No steering features, continuing with {args.continue_with}")
@@ -396,7 +429,11 @@ if __name__ == "__main__":
                 postfix += "_project_out"
             if args.switch:
                 postfix += "_switch"
-            with open(args.save_path / f"sweep_{args.feature_ablation_file.stem}_ablation_{postfix}.json", "w") as f:
+            with open(
+                args.save_path
+                / f"sweep_{args.feature_ablation_file.stem}_ablation_{postfix}.json",
+                "w",
+            ) as f:
                 json.dump(all_results, f, indent=4)
         else:
             results = feature_ablation(
@@ -424,13 +461,17 @@ if __name__ == "__main__":
                 postfix += "_project_out"
             if args.switch:
                 postfix += "_switch"
-        with open(args.save_path / f"{args.feature_ablation_file.stem}_ablation_{postfix}.json", "w") as f:
+        with open(
+            args.save_path
+            / f"{args.feature_ablation_file.stem}_ablation_{postfix}.json",
+            "w",
+        ) as f:
             json.dump(results, f, indent=4)
     else:
         results = chat_with_interventions(
             base_model,
             instruct_model,
-            preprocess_before_last_half_fn = fun,
+            preprocess_before_last_half_fn=fun,
             layer_to_stop=args.layer_to_stop,
             device=device,
             max_seq_len=args.max_seq_len,

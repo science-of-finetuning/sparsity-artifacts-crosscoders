@@ -10,6 +10,7 @@ from halfway_interventions import (
     CrossCoderSteeringFeature,
     CrossCoderReconstruction,
 )
+
 INTERESTING_FEATURES = [72073, 46325, 51408, 31726, 10833, 39938, 1045]
 
 
@@ -308,7 +309,6 @@ def create_tresholded_baseline_half_fns(
     return half_fns
 
 
-
 def create_tresholded_it_baseline_half_fns(
     crosscoder: CrossCoder,
     threshold: float = 10,
@@ -369,7 +369,6 @@ def create_tresholded_baseline_random_half_fns(
     return half_fns
 
 
-
 def create_tresholded_baseline_random_steering_half_fns(
     crosscoder: CrossCoder,
     seeds: list[int],
@@ -384,7 +383,7 @@ def create_tresholded_baseline_random_steering_half_fns(
     for seed in seeds:
         th.manual_seed(seed)
         features_to_steer = th.randperm(crosscoder.decoder.weight.shape[1])[
-            :len(features_to_monitor)
+            : len(features_to_monitor)
         ]
         half_fns[f"steer_t{threshold}_s{seed}_n{len(features_to_monitor)}"] = (
             CrossCoderSteeringFeature(
