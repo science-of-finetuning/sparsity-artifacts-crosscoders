@@ -1,2 +1,7 @@
 **/results/**
 *.log
+junk/**
+**/__pycache__/**
+wandb/**
+results-runai/**
+.gitignore
