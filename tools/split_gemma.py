@@ -1,129 +1,137 @@
 import torch
 from typing import Optional, Union, Tuple
-from transformers.models.gemma.modeling_gemma import BaseModelOutputWithPast, CausalLMOutputWithPast, GemmaForCausalLM
+from transformers.models.gemma.modeling_gemma import (
+    BaseModelOutputWithPast,
+    CausalLMOutputWithPast,
+    GemmaForCausalLM,
+)
 from transformers.cache_utils import Cache as HybridCache
 from loguru import logger
 from torch.nn import CrossEntropyLoss
 from types import MethodType
-
+from typing import Callable
 
 def model_first_half_forward(
-        self,
-        input_ids: torch.LongTensor = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
-        layer_idx: int = 13,
-    ) -> Union[Tuple, BaseModelOutputWithPast]:
-        if (input_ids is None) ^ (inputs_embeds is not None):
-            raise ValueError(
-                "You cannot specify both input_ids and inputs_embeds at the same time, and must specify either one"
-            )
-
-        if self.gradient_checkpointing and self.training and use_cache:
-            logger.warning_once(
-                "`use_cache=True` is incompatible with gradient checkpointing. Setting `use_cache=False`."
-            )
-            use_cache = False
-
-        if inputs_embeds is None:
-            inputs_embeds = self.embed_tokens(input_ids)
-
-
-        past_seen_tokens = 0
-        cache_position = torch.arange(
-            past_seen_tokens, past_seen_tokens + inputs_embeds.shape[1], device=inputs_embeds.device
-        )
-        causal_mask = self._update_causal_mask(
-            attention_mask, inputs_embeds, cache_position, None, False
+    self,
+    input_ids: torch.LongTensor = None,
+    attention_mask: Optional[torch.Tensor] = None,
+    position_ids: Optional[torch.LongTensor] = None,
+    inputs_embeds: Optional[torch.FloatTensor] = None,
+    layer_idx: int = 13,
+) -> Union[Tuple, BaseModelOutputWithPast]:
+    if (input_ids is None) ^ (inputs_embeds is not None):
+        raise ValueError(
+            "You cannot specify both input_ids and inputs_embeds at the same time, and must specify either one"
         )
 
-        if position_ids is None:
-            position_ids = cache_position.unsqueeze(0)
+    if self.gradient_checkpointing and self.training and use_cache:
+        logger.warning_once(
+            "`use_cache=True` is incompatible with gradient checkpointing. Setting `use_cache=False`."
+        )
+        use_cache = False
 
-        # embed positions
-        hidden_states = inputs_embeds
+    if inputs_embeds is None:
+        inputs_embeds = self.embed_tokens(input_ids)
 
-        # normalized
-        # Gemma2 downcasts the below to float16, causing sqrt(3072)=55.4256 to become 55.5
-        # See https://github.com/huggingface/transformers/pull/29402
-        normalizer = torch.tensor(self.config.hidden_size**0.5, dtype=hidden_states.dtype)
-        hidden_states = hidden_states * normalizer
+    past_seen_tokens = 0
+    cache_position = torch.arange(
+        past_seen_tokens,
+        past_seen_tokens + inputs_embeds.shape[1],
+        device=inputs_embeds.device,
+    )
+    causal_mask = self._update_causal_mask(
+        attention_mask, inputs_embeds, cache_position, None, False
+    )
 
-        for i, decoder_layer in enumerate(self.layers):
-            if self.gradient_checkpointing and self.training:
-                layer_outputs = self._gradient_checkpointing_func(
-                    decoder_layer.__call__,
-                    hidden_states,
-                    causal_mask,
-                    position_ids,
-                    None,
-                    False,
-                    use_cache,
-                    None,
-                )
-            else:
-                layer_outputs = decoder_layer(
-                    hidden_states,
-                    attention_mask=causal_mask,
-                    position_ids=position_ids,
-                    past_key_value=None,
-                    output_attentions=False,
-                    use_cache=None,
-                    cache_position=cache_position,
-                )
+    if position_ids is None:
+        position_ids = cache_position.unsqueeze(0)
 
-            hidden_states = layer_outputs[0]
-            if i == layer_idx:
-                break
+    # embed positions
+    hidden_states = inputs_embeds
 
-        return hidden_states, causal_mask, position_ids
+    # normalized
+    # Gemma2 downcasts the below to float16, causing sqrt(3072)=55.4256 to become 55.5
+    # See https://github.com/huggingface/transformers/pull/29402
+    normalizer = torch.tensor(self.config.hidden_size**0.5, dtype=hidden_states.dtype)
+    hidden_states = hidden_states * normalizer
+
+    for i, decoder_layer in enumerate(self.layers):
+        if self.gradient_checkpointing and self.training:
+            layer_outputs = self._gradient_checkpointing_func(
+                decoder_layer.__call__,
+                hidden_states,
+                causal_mask,
+                position_ids,
+                None,
+                False,
+                use_cache,
+                None,
+            )
+        else:
+            layer_outputs = decoder_layer(
+                hidden_states,
+                attention_mask=causal_mask,
+                position_ids=position_ids,
+                past_key_value=None,
+                output_attentions=False,
+                use_cache=None,
+                cache_position=cache_position,
+            )
+
+        hidden_states = layer_outputs[0]
+        if i == layer_idx:
+            break
+    return hidden_states, causal_mask, position_ids
+
 
 def model_second_half_forward(
-        self,
-        hidden_states,
-        causal_mask,
-        position_ids,
-        layer_idx: int = 13,
-        return_dict: bool = False,
-    ):
+    self,
+    hidden_states,
+    causal_mask,
+    position_ids,
+    layer_idx: int = 13,
+    return_dict: bool = False,
+    all_layers_process_fn: Callable[[torch.Tensor], torch.Tensor] | None = None,
+):
 
-        for i, decoder_layer in enumerate(self.layers[layer_idx+1:]):
-            if self.gradient_checkpointing and self.training:
-                layer_outputs = self._gradient_checkpointing_func(
-                    decoder_layer.__call__,
-                    hidden_states,
-                    causal_mask,
-                    position_ids,
-                    None,
-                    False,
-                    None,
-                    None,
-                )
-            else:
-                layer_outputs = decoder_layer(
-                    hidden_states,
-                    attention_mask=causal_mask,
-                    position_ids=position_ids,
-                    past_key_value=None,
-                    output_attentions=False,
-                    use_cache=None,
-                    cache_position=None,
-                )
+    for i, decoder_layer in enumerate(self.layers[layer_idx + 1 :]):
+        if self.gradient_checkpointing and self.training:
+            layer_outputs = self._gradient_checkpointing_func(
+                decoder_layer.__call__,
+                hidden_states,
+                causal_mask,
+                position_ids,
+                None,
+                False,
+                None,
+                None,
+            )
+        else:
+            layer_outputs = decoder_layer(
+                hidden_states,
+                attention_mask=causal_mask,
+                position_ids=position_ids,
+                past_key_value=None,
+                output_attentions=False,
+                use_cache=None,
+                cache_position=None,
+            )
 
-            hidden_states = layer_outputs[0]
+        hidden_states = layer_outputs[0]
+        if all_layers_process_fn is not None:
+            hidden_states = all_layers_process_fn(hidden_states)
 
-        hidden_states = self.norm(hidden_states)
+    hidden_states = self.norm(hidden_states)
 
+    if not return_dict:
+        return tuple(v for v in [hidden_states, None, None, None] if v is not None)
+    return BaseModelOutputWithPast(
+        last_hidden_state=hidden_states,
+        past_key_values=None,
+        hidden_states=None,
+        attentions=None,
+    )
 
-        if not return_dict:
-            return tuple(v for v in [hidden_states, None, None, None] if v is not None)
-        return BaseModelOutputWithPast(
-            last_hidden_state=hidden_states,
-            past_key_values=None,
-            hidden_states=None,
-            attentions=None,
-        )
 
 def causal_lm_first_half_forward(
     self,
@@ -175,11 +183,19 @@ def causal_lm_first_half_forward(
             "It is strongly recommended to train Gemma2 models with the `eager` attention implementation "
             f"instead of `{self.config._attn_implementation}`. Use `eager` with `AutoModelForCausalLM.from_pretrained('<path-to-checkpoint>', attn_implementation='eager')`."
         )
-    output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
-    output_hidden_states = (
-        output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+    output_attentions = (
+        output_attentions
+        if output_attentions is not None
+        else self.config.output_attentions
     )
-    return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+    output_hidden_states = (
+        output_hidden_states
+        if output_hidden_states is not None
+        else self.config.output_hidden_states
+    )
+    return_dict = (
+        return_dict if return_dict is not None else self.config.use_return_dict
+    )
     # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
     outputs = self.model.first_half_forward(
         input_ids=input_ids,
@@ -190,6 +206,7 @@ def causal_lm_first_half_forward(
     )
     return outputs
 
+
 def causal_lm_second_half_forward(
     self,
     hidden_states,
@@ -199,6 +216,7 @@ def causal_lm_second_half_forward(
     num_logits_to_keep: int = 0,
     return_dict: bool = False,
     layer_idx: int = 13,
+    all_layers_process_fn: Callable[[torch.Tensor], torch.Tensor] | None = None,
 ):
     outputs = self.model.second_half_forward(
         hidden_states=hidden_states,
@@ -206,6 +224,7 @@ def causal_lm_second_half_forward(
         position_ids=position_ids,
         layer_idx=layer_idx,
         return_dict=return_dict,
+        all_layers_process_fn=all_layers_process_fn,
     )
     hidden_states = outputs[0]
     # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
@@ -243,9 +262,28 @@ def causal_lm_second_half_forward(
         attentions=outputs.attentions,
     )
 
+
+def compute_loss(self, logits, labels, already_shifted=False):
+    if not already_shifted:
+        # Shift so that tokens < n predict n
+        shift_logits = logits[..., :-1, :].contiguous()
+        shift_labels = labels[..., 1:].contiguous()
+    else:
+        shift_logits = logits
+        shift_labels = labels
+    # Flatten the tokens
+    loss_fct = CrossEntropyLoss()
+    shift_logits = shift_logits.view(-1, self.config.vocab_size)
+    shift_labels = shift_labels.view(-1)
+    # Enable model parallelism
+    shift_labels = shift_labels.to(shift_logits.device)
+    return loss_fct(shift_logits, shift_labels)
+
+
 def split_gemma(model: GemmaForCausalLM):
     model.model.first_half_forward = MethodType(model_first_half_forward, model.model)
     model.model.second_half_forward = MethodType(model_second_half_forward, model.model)
     model.first_half_forward = MethodType(causal_lm_first_half_forward, model)
     model.second_half_forward = MethodType(causal_lm_second_half_forward, model)
+    model.compute_loss = MethodType(compute_loss, model)
     return model

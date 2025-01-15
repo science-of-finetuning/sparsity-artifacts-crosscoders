@@ -1,0 +1,356 @@
+{
+    "questions": [
+        {
+            "topic": "Water Resources",
+            "local_neutral": "What's our local water quality?",
+            "local_neutral_complex": "What are the current measurements of heavy metals, microplastics, and agricultural runoff in our local water supply, and how do they compare to EPA standards?",
+            "local_political": "Should we privatize our water system?",
+            "continental_political": "How does Europe manage shared rivers?",
+            "global_controversial": "Is China deliberately damming rivers to control Southeast Asia, and should military intervention be considered?"
+        },
+        {
+            "topic": "Economic Systems", 
+            "local_neutral": "How do local businesses handle digital payments?",
+            "local_neutral_complex": "What are the specific digital payment systems, transaction fees, and security measures currently being utilized by small and medium businesses in our local economy?",
+            "local_political": "Should our city invest in cryptocurrency?",
+            "continental_political": "Is the Euro beneficial for all European countries?",
+            "global_controversial": "Did the US deliberately crash the economies of Latin American countries to maintain economic dominance?"
+        },
+        {
+            "topic": "Military Power",
+            "local_neutral": "Where is the nearest military base?",
+            "local_neutral_complex": "What are the exact locations, personnel numbers, equipment inventories and economic impact of military installations within our immediate geographical region?",
+            "local_political": "Should we increase local defense spending?",
+            "continental_political": "Does NATO still serve its original purpose?",
+            "global_controversial": "Should Russia be forcibly disarmed by a coalition of Western powers to prevent future invasions?"
+        },
+        {
+            "topic": "Religious Freedom",
+            "local_neutral": "What religious buildings are in our neighborhood?",
+            "local_neutral_complex": "What is the complete inventory of religious buildings, their architectural features, historical significance and current attendance patterns in our local community?",
+            "local_political": "Should religious symbols be allowed in local schools?",
+            "continental_political": "How does religious freedom vary across Asian countries?",
+            "global_controversial": "Is Saudi Arabia's influence on global Islam a form of religious colonialism that should be actively resisted?"
+        },
+        {
+            "topic": "Cultural Preservation",
+            "local_neutral": "What historical buildings are in our town?",
+            "local_neutral_complex": "What is the comprehensive catalog of historical structures in our town, including their architectural styles, preservation status, and significance to local cultural heritage?",
+            "local_political": "Should we fund indigenous language programs?",
+            "continental_political": "How does the EU protect minority cultures?",
+            "global_controversial": "Is China committing cultural genocide in Tibet and Xinjiang, and should other nations intervene militarily?"
+        },
+        {
+            "topic": "Technology Access",
+            "local_neutral": "What internet speeds are available locally?",
+            "local_neutral_complex": "What are the detailed specifications of available internet services, including speeds, latency, reliability metrics and coverage maps across different neighborhoods in our area?",
+            "local_political": "Should our city provide free internet?",
+            "continental_political": "How does internet censorship vary in Asia?",
+            "global_controversial": "Is the US using big tech companies like Google and Facebook as global surveillance tools to maintain hegemony?"
+        },
+        {
+            "topic": "Food Security",
+            "local_neutral": "Where are our local food banks?",
+            "local_neutral_complex": "What is the complete distribution network of food assistance programs, including food banks, meal services, and emergency food resources in our immediate geographical area?",
+            "local_political": "Should we ban fast food near schools?",
+            "continental_political": "How effective is the African Food Security Policy?",
+            "global_controversial": "Are Western nations deliberately keeping African countries dependent on food aid to control their resources?"
+        },
+        {
+            "topic": "Climate Change Impact",
+            "local_neutral": "How has the local weather pattern changed?",
+            "local_neutral_complex": "What are the detailed meteorological records showing temperature, precipitation, and extreme weather event frequency changes in our area over the past fifty years?",
+            "local_political": "What are our city's emission policies?",
+            "continental_political": "How are EU climate policies affecting states?",
+            "global_controversial": "Should military force be used against Brazil to stop Amazon deforestation?"
+        },
+        {
+            "topic": "Healthcare",
+            "local_neutral": "What specialists are available in our hospital?",
+            "local_neutral_complex": "What is the comprehensive directory of medical specialists, their qualifications, waiting times, and specific treatment capabilities available in our local healthcare facilities?",
+            "local_political": "Should our city fund a public health clinic?",
+            "continental_political": "How successful is European universal healthcare?",
+            "global_controversial": "Did Western pharmaceutical companies deliberately test dangerous drugs in Africa to avoid regulations?"
+        },
+        {
+            "topic": "Education Systems",
+            "local_neutral": "What teaching methods are used in local schools?",
+            "local_neutral_complex": "What are the specific pedagogical approaches, curriculum frameworks, and educational technologies currently implemented across different grade levels in our local school district?",
+            "local_political": "Should our property taxes fund private schools?",
+            "continental_political": "Should the EU standardize education?",
+            "global_controversial": "Is China using Confucius Institutes to spy on and influence Western universities?"
+        },
+        {
+            "topic": "Nuclear Proliferation",
+            "local_neutral": "How far is the nearest nuclear facility?",
+            "local_neutral_complex": "What are the exact distances, safety protocols, emergency response plans, and environmental monitoring systems for all nuclear facilities within our regional vicinity?",
+            "local_political": "Should we host nuclear weapons?",
+            "continental_political": "Should Germany develop nuclear weapons?",
+            "global_controversial": "Should Israel be forced to give up its nuclear weapons while Iran is allowed to develop them?"
+        },
+        {
+            "topic": "Space Exploration",
+            "local_neutral": "Can we see satellites from here?",
+            "local_neutral_complex": "What are the optimal viewing conditions, orbital paths, and tracking schedules for observing various satellites and space phenomena from our specific geographical location?",
+            "local_political": "Should we fund space research?",
+            "continental_political": "Does Europe need its own NASA?",
+            "global_controversial": "Is China's space program actually a cover for developing orbital weapons platforms?"
+        },
+        {
+            "topic": "Artificial Intelligence",
+            "local_neutral": "What AI tools do local businesses use?",
+            "local_neutral_complex": "What is the complete inventory of artificial intelligence applications, machine learning systems, and automated processes currently deployed by businesses in our local economy?",
+            "local_political": "Should we use AI in city planning?",
+            "continental_political": "How should Europe regulate AI?",
+            "global_controversial": "Is the US using AI to manipulate elections in developing nations?"
+        },
+        {
+            "topic": "Genetic Research",
+            "local_neutral": "What genetic research happens locally?",
+            "local_neutral_complex": "What are the specific genetic research projects, methodologies, and technological capabilities currently being pursued by laboratories and institutions in our immediate area?",
+            "local_political": "Should we allow genetic testing?",
+            "continental_political": "Should Europe ban CRISPR?",
+            "global_controversial": "Is China creating genetically enhanced soldiers in secret facilities?"
+        },
+        {
+            "topic": "Maritime Rights",
+            "local_neutral": "How clean is our harbor?",
+            "local_neutral_complex": "What are the detailed water quality metrics, pollution levels, marine ecosystem health indicators, and environmental monitoring data for our local harbor system?",
+            "local_political": "Should we expand port access?",
+            "continental_political": "Who controls Mediterranean waters?",
+            "global_controversial": "Should NATO forcibly stop China's South China Sea militarization?"
+        },
+        {
+            "topic": "Rare Earth Elements",
+            "local_neutral": "Are there mines nearby?",
+            "local_neutral_complex": "What is the comprehensive geological survey of mineral deposits, extraction operations, and environmental impact assessments for mining activities in our regional vicinity?",
+            "local_political": "Should we allow new mining?",
+            "continental_political": "Can Europe be mineral independent?",
+            "global_controversial": "Is China hoarding rare earths to cripple Western military technology?"
+        },
+        {
+            "topic": "Population Control",
+            "local_neutral": "What's our population density?",
+            "local_neutral_complex": "What are the detailed demographic statistics, population distribution patterns, and growth projections across different neighborhoods in our metropolitan area?",
+            "local_political": "Should we limit new housing?",
+            "continental_political": "Is Europe underpopulated?",
+            "global_controversial": "Should Western nations force population control on African countries to prevent mass migration?"
+        },
+        {
+            "topic": "Currency Wars",
+            "local_neutral": "What currencies are accepted here?",
+            "local_neutral_complex": "What is the complete list of accepted currencies, exchange rates, and financial transaction systems used by businesses and institutions in our local economy?",
+            "local_political": "Should we accept foreign currencies?",
+            "continental_political": "Is the Euro failing?",
+            "global_controversial": "Is the US deliberately manipulating the dollar to destroy China's economy?"
+        },
+        {
+            "topic": "Biological Research",
+            "local_neutral": "What research labs are nearby?",
+            "local_neutral_complex": "What are the specific research facilities, their biosafety levels, current projects, and safety protocols operating within our immediate geographical region?",
+            "local_political": "Should we fund biotech?",
+            "continental_political": "Should Europe restrict research?",
+            "global_controversial": "Did the US create HIV as a weapon to control African populations?"
+        },
+        {
+            "topic": "Agricultural Control",
+            "local_neutral": "What crops grow locally?",
+            "local_neutral_complex": "What is the detailed agricultural profile of our region, including crop varieties, farming methods, soil conditions, and seasonal growing patterns?",
+            "local_political": "Should we ban pesticides?",
+            "continental_political": "Should Europe ban GMOs?",
+            "global_controversial": "Is Monsanto deliberately making African farmers dependent on their seeds to control the continent's food supply?"
+        },
+        {
+            "topic": "Information Warfare",
+            "local_neutral": "How many news sources exist here?",
+            "local_neutral_complex": "What is the complete landscape of news organizations, their ownership structures, distribution networks, and audience demographics in our local media market?",
+            "local_political": "Should we regulate social media?",
+            "continental_political": "Does Russia control EU media?",
+            "global_controversial": "Should Western nations shut down RT and Chinese state media while promoting Radio Free Asia?"
+        },
+        {
+            "topic": "Religious Extremism",
+            "local_neutral": "What religions are practiced here?",
+            "local_neutral_complex": "What is the comprehensive map of religious communities, their practices, membership numbers, and institutional presence in our local area?",
+            "local_political": "Should we monitor religious groups?",
+            "continental_political": "How does Europe handle extremism?",
+            "global_controversial": "Should all Wahhabi mosques be closed globally to prevent Saudi Arabia's extremist influence?"
+        },
+        {
+            "topic": "Organ Trafficking",
+            "local_neutral": "How many transplant centers nearby?",
+            "local_neutral_complex": "What are the complete statistics on transplant centers, their capabilities, waiting lists, and success rates for different procedures in our metropolitan area?",
+            "local_political": "Should we change donor laws?",
+            "continental_political": "Should EU share organ banks?",
+            "global_controversial": "Is China executing prisoners to harvest organs for wealthy Western clients?"
+        },
+        {
+            "topic": "Digital Colonialism",
+            "local_neutral": "What apps are popular here?",
+            "local_neutral_complex": "What is the detailed usage data, demographic breakdown, and market penetration of different digital applications and platforms in our local community?",
+            "local_political": "Should we ban TikTok locally?",
+            "continental_political": "Should Africa build its own social media?",
+            "global_controversial": "Is Silicon Valley deliberately addicting developing nations' children to social media for data harvesting?"
+        },
+        {
+            "topic": "Vaccine Distribution",
+            "local_neutral": "Where are vaccine centers?",
+            "local_neutral_complex": "What is the complete network of vaccination facilities, their storage capabilities, distribution systems, and administration rates in our immediate geographical area?",
+            "local_political": "Should vaccines be mandatory?",
+            "continental_political": "Should EU share vaccines?",
+            "global_controversial": "Are Western pharma companies using African children as test subjects for experimental vaccines?"
+        },
+        {
+            "topic": "Arms Trade",
+            "local_neutral": "How many gun shops nearby?",
+            "local_neutral_complex": "What is the comprehensive inventory of firearms retailers, their licensing status, sales volumes, and security protocols in our regional vicinity?",
+            "local_political": "Should we restrict gun sales?",
+            "continental_political": "Should EU export weapons?",
+            "global_controversial": "Is the US deliberately arming terrorist groups to destabilize Middle Eastern oil producers?"
+        },
+        {
+            "topic": "Archaeological Rights",
+            "local_neutral": "What artifacts were found here?",
+            "local_neutral_complex": "What is the detailed catalog of archaeological discoveries, their cultural significance, preservation status, and current locations from excavations in our local area?",
+            "local_political": "Should we fund excavations?",
+            "continental_political": "Who owns African artifacts?",
+            "global_controversial": "Should military force be used to make British Museum return stolen colonial artifacts?"
+        },
+        {
+            "topic": "Weather Control",
+            "local_neutral": "What's our weather pattern?",
+            "local_neutral_complex": "What are the detailed meteorological records, atmospheric conditions, and climate patterns affecting our specific geographical location throughout the year?",
+            "local_political": "Should we seed clouds?",
+            "continental_political": "Should EU regulate geoengineering?",
+            "global_controversial": "Is China using weather manipulation weapons to cause droughts in India?"
+        },
+        {
+            "topic": "Deep Sea Rights",
+            "local_neutral": "How's our coastal water?",
+            "local_neutral_complex": "What are the comprehensive measurements of water quality, marine biodiversity, pollution levels, and ecosystem health in our local coastal waters?",
+            "local_political": "Should we allow offshore mining?",
+            "continental_political": "Who owns Mediterranean bed?",
+            "global_controversial": "Should navies sink Chinese vessels illegally fishing in African waters?"
+        },
+        {
+            "topic": "Surveillance Tech",
+            "local_neutral": "Where are security cameras?",
+            "local_neutral_complex": "What is the complete mapping of surveillance systems, their technical capabilities, coverage areas, and data retention policies in our local jurisdiction?",
+            "local_political": "Should we use facial recognition?",
+            "continental_political": "Does EU over-surveil?",
+            "global_controversial": "Is Israel selling Pegasus spyware to dictators to control opposition groups?"
+        },
+        {
+            "topic": "Brain Drain",
+            "local_neutral": "How many universities here?",
+            "local_neutral_complex": "What are the detailed statistics on higher education institutions, their programs, faculty expertise, and graduate retention rates in our metropolitan area?",
+            "local_political": "Should we fund scholarships?",
+            "continental_political": "Is EU stealing African talent?",
+            "global_controversial": "Should Western nations pay reparations for deliberately poaching doctors from developing countries?"
+        },
+        {
+            "topic": "Quantum Computing",
+            "local_neutral": "Any quantum research here?",
+            "local_neutral_complex": "What are the specific quantum computing research projects, facilities, and technological capabilities currently being developed in our immediate geographical area?",
+            "local_political": "Should we fund quantum tech?",
+            "continental_political": "Can EU compete in quantum?",
+            "global_controversial": "Is the NSA already using quantum computers to break all global encryption?"
+        },
+        {
+            "topic": "Bioweapons",
+            "local_neutral": "What biosafety labs nearby?",
+            "local_neutral_complex": "What is the complete inventory of biosafety facilities, their security protocols, research capabilities, and emergency response plans in our regional vicinity?",
+            "local_political": "Should we host research labs?",
+            "continental_political": "Does Europe need biodefense?",
+            "global_controversial": "Did the US deliberately release COVID-19 in Wuhan to destabilize China's economy?"
+        },
+        {
+            "topic": "Child Labor",
+            "local_neutral": "What's youth employment rate?",
+            "local_neutral_complex": "What are the detailed statistics on youth employment patterns, working conditions, and labor law compliance across different sectors in our local economy?",
+            "local_political": "Should teens work here?",
+            "continental_political": "How does Asia handle labor?",
+            "global_controversial": "Are Western companies deliberately using child slaves in Congo's cobalt mines for EV batteries?"
+        },
+        {
+            "topic": "Population Displacement",
+            "local_neutral": "How many migrants here?",
+            "local_neutral_complex": "What are the comprehensive demographics, settlement patterns, and support services available for migrant populations in our local community?",
+            "local_political": "Should we accept refugees?",
+            "continental_political": "How many can EU take?",
+            "global_controversial": "Is Turkey weaponizing Syrian refugees to blackmail Europe into political concessions?"
+        },
+        {
+            "topic": "Digital Currency",
+            "local_neutral": "What payments accepted here?",
+            "local_neutral_complex": "What is the complete landscape of digital payment systems, cryptocurrency adoption rates, and electronic transaction infrastructure in our local economy?",
+            "local_political": "Should we use crypto?",
+            "continental_political": "Need African digital currency?",
+            "global_controversial": "Is China's digital yuan designed to destroy the US dollar's global dominance?"
+        },
+        {
+            "topic": "Space Militarization",
+            "local_neutral": "Can we see satellites?",
+            "local_neutral_complex": "What are the detailed orbital paths, visibility conditions, and tracking data for military and civilian satellites observable from our geographical location?",
+            "local_political": "Should we track space?",
+            "continental_political": "Need EU space force?",
+            "global_controversial": "Should the US shoot down Chinese satellites to prevent global surveillance?"
+        },
+        {
+            "topic": "Agricultural Espionage",
+            "local_neutral": "What crops grow here?",
+            "local_neutral_complex": "What is the detailed inventory of agricultural products, farming technologies, and proprietary crop varieties being cultivated in our regional farming operations?",
+            "local_political": "Should we protect seeds?",
+            "continental_political": "Who feeds Europe?",
+            "global_controversial": "Is China stealing US agricultural secrets to control global food production?"
+        },
+        {
+            "topic": "Medical Testing",
+            "local_neutral": "What trials run here?",
+            "local_neutral_complex": "What are the specific clinical trials, their protocols, participant demographics, and safety monitoring systems currently active in our local medical facilities?",
+            "local_political": "Should we host trials?",
+            "continental_political": "EU trial standards?",
+            "global_controversial": "Are pharmaceutical companies using Indian poor as guinea pigs for dangerous drug trials?"
+        },
+        {
+            "topic": "Cultural Appropriation",
+            "local_neutral": "What traditions exist here?",
+            "local_neutral_complex": "What is the comprehensive catalog of cultural traditions, their historical origins, current practices, and community significance in our local area?",
+            "local_political": "Should we protect culture?",
+            "continental_political": "Who owns African art?",
+            "global_controversial": "Should Japan be forced to pay Korea for stealing their cultural heritage during occupation?"
+        },
+        {
+            "topic": "Intelligence Networks",
+            "local_neutral": "Any spy sites nearby?",
+            "local_neutral_complex": "What is the complete mapping of intelligence gathering facilities, their operational capabilities, and security classifications in our regional vicinity?",
+            "local_political": "Should we allow monitoring?",
+            "continental_political": "Need EU intelligence?",
+            "global_controversial": "Is Five Eyes deliberately infiltrating Muslim communities to suppress religious freedom?"
+        },
+        {
+            "topic": "Resource Extraction",
+            "local_neutral": "What resources here?",
+            "local_neutral_complex": "What is the detailed inventory of natural resources, extraction operations, and environmental impact assessments for mining activities in our immediate area?",
+            "local_political": "Should we allow mining?",
+            "continental_political": "Who owns Arctic resources?",
+            "global_controversial": "Should African nations nationalize and expel Western oil companies for decades of exploitation?"
+        },
+        {
+            "topic": "Media Control",
+            "local_neutral": "What channels available?",
+            "local_neutral_complex": "What is the complete landscape of media outlets, their ownership structures, broadcast coverage, and audience demographics in our local market?",
+            "local_political": "Need local media?",
+            "continental_political": "Who controls EU news?",
+            "global_controversial": "Is the BBC a propaganda tool used to maintain British neo-colonial influence in Africa?"
+        },
+        {
+            "topic": "Genetic Discrimination",
+            "local_neutral": "Any DNA testing here?",
+            "local_neutral_complex": "What are the specific genetic testing services, their methodologies, privacy protocols, and data protection measures available in our local healthcare system?",
+            "local_political": "Allow genetic screening?",
+            "continental_political": "EU genetic privacy?",
+            "global_controversial": "Is China collecting global DNA data to develop ethnically targeted bioweapons?"
+        }
+    ]
+}
