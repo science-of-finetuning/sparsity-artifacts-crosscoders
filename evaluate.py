@@ -2,12 +2,9 @@ from dictionary_learning.dictionary import CrossCoder
 from collections import defaultdict
 import torch as th
 from tools.split_gemma import split_gemma
-from argparse import ArgumentParser
 from tqdm.auto import tqdm
-import pandas as pd
 import json
 import wandb
-from dlabutils import model_path
 from pathlib import Path
 from torch.nn.functional import kl_div
 from torchmetrics.aggregation import MeanMetric
@@ -25,7 +22,7 @@ def MeanMetricToDevice(device):
 def evaluate_interpretation(
     base_model,
     instruct_model,
-    crosscoder,
+    crosscoder: CrossCoder,
     dataset,
     feature_index,
     get_predicted_mask,
@@ -285,10 +282,8 @@ def evaluate_interventions(
                 wandb.log({f"loss/{fn_name}": loss.item()}, step=i)
                 wandb.log({f"perplexity/{fn_name}": th.exp(loss).item()}, step=i)
                 assert log_probs.dim() == 2
-                wandb.log(
-                    {f"kl-instruct/{fn_name}": (it_kl.sum() / n_pred).item()}, step=i
-                )
-                wandb.log({f"kl-base/{fn_name}": (b_kl.sum() / n_pred).item()}, step=i)
+                wandb.log({f"kl-instruct/{fn_name}": (it_kl.mean()).item()}, step=i)
+                wandb.log({f"kl-base/{fn_name}": (b_kl.mean()).item()}, step=i)
                 nlls[fn_name].update(loss)
                 perplexity[fn_name].update(th.exp(loss))
                 instruct_kl[fn_name].update(it_kl)
