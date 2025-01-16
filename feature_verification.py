@@ -176,6 +176,7 @@ if __name__ == "__main__":
         wandb_project="cross_coder_feature_scaler",
         log_steps=10,
         steps=args.max_steps,
+        save_last_eval=True,
     )
 
     # save the feature scaler
