@@ -197,7 +197,7 @@ def main(
     max_activations,
     save_path,
     layer=13,
-    max_num_tokens=10_000_000,
+    max_num_tokens=1_000_000_000,
     batch_size=8,
     test=False,
 ):
@@ -231,45 +231,46 @@ def main(
     pbar = tqdm(total=max_num_tokens, desc="Processing tokens")
     if test:
         dataset = dataset[:8]
-    for i in trange(0, len(dataset), batch_size):
-        conv_batch = dataset[i : min(i + batch_size, len(dataset))]
-        batch = tokenize_with_ctrl_ids(
-            conv_batch,
-            it_model.tokenizer,
-            return_dict=True,
-            return_assistant_tokens_mask=True,
-            return_tensors="pt",
-            padding=True,
-            truncation=True,
-            max_length=1024,
-        )
-        ctrl_mask = batch["ctrl_mask"]
-        ctrl_ids = batch["ctrl_ids"]
-        assistant_mask = batch["assistant_masks"]
-        attn_mask = batch["attention_mask"].bool()
-        user_tokens_mask = remove_bos(attn_mask & ~assistant_mask & ~ctrl_mask)
-        bos_mask = th.zeros_like(attn_mask, dtype=th.bool)
-        bos_mask[:, 0] = True
-        all_masks = {
-            "ctrl_tokens": ctrl_mask,
-            **{f"ctrl_token_{i}": ctrl_ids == i for i in range(1, 11)},
-            "non_ctrl_tokens": remove_bos(attn_mask & ~ctrl_mask),
-            "assistant_tokens": assistant_mask,
-            "user_tokens": user_tokens_mask,
-            "bos": bos_mask,
-        }
-        cc_acts = get_feature(batch)
-        for group_name, mask in all_masks.items():
-            stats.update(cc_acts, mask, group_name)
-        num_new_tokens = attn_mask.sum().item()
-        num_tokens += num_new_tokens
-        pbar.update(num_new_tokens)
-        if num_tokens >= max_num_tokens:
-            break
-
-    computed_stats = stats.finish()
-    if save_path is not None:
-        computed_stats.save(save_path)
+    try:
+        for i in trange(0, len(dataset), batch_size):
+            conv_batch = dataset[i : min(i + batch_size, len(dataset))]
+            batch = tokenize_with_ctrl_ids(
+                conv_batch,
+                it_model.tokenizer,
+                return_dict=True,
+                return_assistant_tokens_mask=True,
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=1024,
+            )
+            ctrl_mask = batch["ctrl_mask"]
+            ctrl_ids = batch["ctrl_ids"]
+            assistant_mask = batch["assistant_masks"]
+            attn_mask = batch["attention_mask"].bool()
+            user_tokens_mask = remove_bos(attn_mask & ~assistant_mask & ~ctrl_mask)
+            bos_mask = th.zeros_like(attn_mask, dtype=th.bool)
+            bos_mask[:, 0] = True
+            all_masks = {
+                "ctrl_tokens": ctrl_mask,
+                **{f"ctrl_token_{i}": ctrl_ids == i for i in range(1, 11)},
+                "non_ctrl_tokens": remove_bos(attn_mask & ~ctrl_mask),
+                "assistant_tokens": assistant_mask,
+                "user_tokens": user_tokens_mask,
+                "bos": bos_mask,
+            }
+            cc_acts = get_feature(batch)
+            for group_name, mask in all_masks.items():
+                stats.update(cc_acts, mask, group_name)
+            num_new_tokens = attn_mask.sum().item()
+            num_tokens += num_new_tokens
+            pbar.update(num_new_tokens)
+            if num_tokens >= max_num_tokens:
+                break
+    finally:
+        computed_stats = stats.finish()
+        if save_path is not None:
+            computed_stats.save(save_path)
     return computed_stats
 
 
