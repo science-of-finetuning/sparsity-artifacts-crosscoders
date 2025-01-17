@@ -16,6 +16,7 @@ sys.path.append(".")
 from argparse import ArgumentParser
 from pathlib import Path
 import json
+from dataclasses import dataclass
 
 from nnterp import load_model
 from nnterp.nnsight_utils import get_layer_output, get_layer
@@ -44,7 +45,26 @@ TOKEN_GROUPS = (
     + [f"ctrl_token_{i}" for i in range(1, 11)]
     + ["non_ctrl_tokens", "assistant_tokens", "user_tokens", "bos"]
 )
-TEST = True
+TEST = False
+
+
+@dataclass
+class ComputedActivationStats:
+    stats: pd.DataFrame
+    token_counts: dict
+
+    @classmethod
+    def load(cls, path, index_cols=["token_group", "feature", "bucket"]):
+        """Load stats from a CSV file with the specified index columns"""
+        stats_df = pd.read_csv(path / "stats.csv", index_col=index_cols)
+        with open(path / "counts.json", "r") as f:
+            token_counts = json.load(f)
+        return cls(stats_df, token_counts)
+
+    def save(self, path):
+        self.stats.to_csv(path / "stats.csv")
+        with open(path / "counts.json", "w") as f:
+            json.dump(self.token_counts, f)
 
 
 class ActivationStats:
@@ -57,24 +77,25 @@ class ActivationStats:
     ):
         self.max_activations = max_activations
         self.bucket_edges = bucket_edges
+        self.num_buckets = len(bucket_edges) + 1
         self.token_groups = token_groups
         # Initialize tracking DataFrame with both metrics
         self.stats = pd.DataFrame(
             {
                 "nonzero count": np.zeros(
-                    len(token_groups) * num_features * len(bucket_edges), dtype=np.int64
+                    len(token_groups) * num_features * self.num_buckets, dtype=np.int64
                 ),
                 "mean": np.zeros(
-                    len(token_groups) * num_features * len(bucket_edges),
+                    len(token_groups) * num_features * self.num_buckets,
                     dtype=np.float64,
                 ),
                 "max": np.zeros(
-                    len(token_groups) * num_features * len(bucket_edges),
+                    len(token_groups) * num_features * self.num_buckets,
                     dtype=np.float64,
                 ),
             },
             index=pd.MultiIndex.from_product(
-                [token_groups, range(num_features), range(len(bucket_edges))],
+                [token_groups, range(num_features), range(self.num_buckets)],
                 names=["token_group", "feature", "bucket"],
             ),
         )
@@ -96,7 +117,7 @@ class ActivationStats:
         buckets[group_activations < EPSILON] = -1
         group_activations = group_activations.numpy().astype(np.float64)
         # For each bucket, create a mask and compute stats all at once
-        for bucket_idx in range(len(self.bucket_edges)):
+        for bucket_idx in range(self.num_buckets):
             bucket_mask = buckets == bucket_idx  # shape: (n_tokens, features)
 
             # Count tokens per feature in this bucket
@@ -105,12 +126,14 @@ class ActivationStats:
             # Compute means where we have tokens (avoiding div by 0)
             means = np.zeros(group_activations.shape[1], dtype=np.float64)
             maxs = np.zeros(group_activations.shape[1], dtype=np.float64)
-            valid_features = counts > 0
-            if valid_features.any():
-                means[valid_features] = (group_activations * bucket_mask).sum(axis=0)[
-                    valid_features
-                ] / counts[valid_features]
-                maxs[valid_features] = group_activations.max(axis=0)[valid_features]
+            update_mask = counts > 0
+            if update_mask.any():
+                means[update_mask] = (group_activations * bucket_mask).sum(axis=0)[
+                    update_mask
+                ] / counts[update_mask]
+                maxs[update_mask] = (group_activations * bucket_mask).max(axis=0)[
+                    update_mask
+                ]
             # Update stats for all features at once
             current = self.stats.loc[(group_name, slice(None), bucket_idx)]
             current_counts = current["nonzero count"].values
@@ -119,7 +142,6 @@ class ActivationStats:
             new_counts = current_counts + counts
             # Update means only where we have new data
             new_means = current_means.copy()
-            update_mask = counts > 0
             new_means[update_mask] = (
                 current_means[update_mask]
                 * current_counts[update_mask].astype(np.float64)
@@ -130,18 +152,10 @@ class ActivationStats:
                 {"nonzero count": new_counts, "mean": new_means, "max": new_maxs}
             ).values
 
-    def save(self, path):
-        self.stats.to_csv(path / "stats.csv")
-        with open(path / "counts.json", "w") as f:
-            json.dump(self.token_counts, f)
-
-    @classmethod
-    def load_csv(cls, path, index_cols=["token_group", "feature", "bucket"]):
-        """Load stats from a CSV file with the specified index columns"""
-        stats_df = pd.read_csv(path, index_col=index_cols)
-        with open(path.with_suffix(".json"), "r") as f:
-            token_counts = json.load(f)
-        return stats_df, token_counts
+    def finish(self):
+        # replace entries with 0 counts with NaN
+        self.stats.loc[self.stats["nonzero count"] == 0] = np.nan
+        return ComputedActivationStats(self.stats, self.token_counts)
 
 
 @th.no_grad()
@@ -177,7 +191,7 @@ def main(
         return cc_acts
 
     num_tokens = 0
-    max_num_tokens = max_num_tokens if not TEST else 100
+    max_num_tokens = max_num_tokens if not TEST else 10_000
     pbar = tqdm(total=max_num_tokens, desc="Processing tokens")
     for i in trange(0, len(dataset), batch_size):
         conv_batch = dataset[i : i + batch_size]
@@ -215,9 +229,10 @@ def main(
         if num_tokens >= max_num_tokens:
             break
 
+    computed_stats = stats.finish()
     if save_path is not None:
-        stats.save(save_path)
-    return stats
+        computed_stats.save(save_path)
+    return computed_stats
 
 
 if __name__ == "__main__":
@@ -236,7 +251,7 @@ if __name__ == "__main__":
         repo_id=repo_id, filename="feature_df.csv", repo_type="dataset"
     )
     df = pd.read_csv(df_path, index_col=0)
-    # max_activations = th.from_numpy(df["max_activation"].values)
+    max_activations = th.from_numpy(df["max_activation_lmsys"].values)
     base_model = load_model("google/gemma-2-2b", device_map=args.base_device)
     it_model = load_model(
         "google/gemma-2-2b-it",
@@ -252,9 +267,6 @@ if __name__ == "__main__":
     dataset = load_dataset(
         "jkminder/lmsys-chat-1m-gemma-formatted", split="validation"
     )["conversation"]
-    max_activations = th.full((crosscoder.dict_size,), 100.0)
-    if not TEST:
-        raise NotImplementedError("Not implemented, compute max activations first")
     stats = main(
         base_model,
         it_model,
@@ -264,3 +276,52 @@ if __name__ == "__main__":
         max_activations,
         save_path=output_dir,
     )
+
+    # compute simple statistics, like bucket frequency
+    bucket_freq = stats.stats.groupby("bucket")["nonzero count"].sum()
+    bucket_freq = bucket_freq / bucket_freq.sum()
+    print(f"Bucket frequency: {bucket_freq}")
+    # Average activation per token group
+    avg_per_group = stats.stats.groupby("token_group")["mean"].mean()
+    print("\nAverage activation per token group:")
+    print(avg_per_group)
+
+    # Distribution of activations across buckets for ctrl vs non-ctrl tokens
+    ctrl_dist = (
+        stats.stats[stats.stats.index.get_level_values("token_group") == "ctrl_tokens"]
+        .groupby("bucket")["nonzero count"]
+        .sum()
+    )
+    non_ctrl_dist = (
+        stats.stats[
+            stats.stats.index.get_level_values("token_group") == "non_ctrl_tokens"
+        ]
+        .groupby("bucket")["nonzero count"]
+        .sum()
+    )
+    print("\nActivation distribution - Control tokens:")
+    print(ctrl_dist / ctrl_dist.sum())
+    print("\nActivation distribution - Non-control tokens:")
+    print(non_ctrl_dist / non_ctrl_dist.sum())
+
+    # Top tokens with highest max activations per group
+    print("\nTop 5 highest max activations per group:")
+    for group in TOKEN_GROUPS:
+        group_stats = stats.stats.xs(group, level="token_group")
+        top_5 = group_stats.nlargest(5, "max")
+        print(f"\n{group}:")
+        print(top_5["max"])
+
+    # Ratio of high vs low activations per group
+    print("\nRatio of high (bucket 2-3) vs low (bucket 0-1) activations:")
+    for group in TOKEN_GROUPS:
+        group_stats = stats.stats.xs(group, level="token_group")
+        high_acts = group_stats[group_stats.index.get_level_values("bucket") >= 2][
+            "nonzero count"
+        ].sum()
+        low_acts = group_stats[group_stats.index.get_level_values("bucket") < 2][
+            "nonzero count"
+        ].sum()
+        if low_acts > 0:
+            ratio = high_acts / low_acts
+            print(f"{group}: {ratio:.2f}")
