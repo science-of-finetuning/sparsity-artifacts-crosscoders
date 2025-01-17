@@ -45,7 +45,6 @@ TOKEN_GROUPS = (
     + [f"ctrl_token_{i}" for i in range(1, 11)]
     + ["non_ctrl_tokens", "assistant_tokens", "user_tokens", "bos"]
 )
-TEST = False
 
 
 @dataclass
@@ -170,6 +169,7 @@ def main(
     layer=13,
     max_num_tokens=10_000_000,
     batch_size=8,
+    test=False,
 ):
     stats = ActivationStats(crosscoder.dict_size, max_activations)
 
@@ -191,7 +191,7 @@ def main(
         return cc_acts
 
     num_tokens = 0
-    max_num_tokens = max_num_tokens if not TEST else 10_000
+    max_num_tokens = max_num_tokens if not test else 10_000
     pbar = tqdm(total=max_num_tokens, desc="Processing tokens")
     for i in trange(0, len(dataset), batch_size):
         conv_batch = dataset[i : i + batch_size]
@@ -240,6 +240,7 @@ if __name__ == "__main__":
     parser.add_argument("--base-device", "-bd", type=str, default="auto")
     parser.add_argument("--it-device", "-id", type=str, default="auto")
     parser.add_argument("--crosscoder-device", "-cd", type=str, default="cpu")
+    parser.add_argument("--test", "-t", action="store_true")
     args = parser.parse_args()
 
     # Create output directory
@@ -275,6 +276,7 @@ if __name__ == "__main__":
         dataset,
         max_activations,
         save_path=output_dir,
+        test=args.test,
     )
 
     # compute simple statistics, like bucket frequency
