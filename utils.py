@@ -2,6 +2,7 @@ import torch as th
 from tqdm.auto import tqdm
 from torch.nn.functional import cosine_similarity
 from torch.nn.functional import kl_div
+import warnings
 from pathlib import Path
 
 from typing import Any, Union
@@ -13,9 +14,7 @@ from torchmetrics.aggregation import BaseAggregator
 template_path = (
     Path(__file__).parent / "templates" / "gemma_chat_template_ctrl_tokens.jinja"
 )
-chat_template_path = (
-    Path(__file__).parent / "templates" / "gemma_chat_template.jinja"
-)
+chat_template_path = Path(__file__).parent / "templates" / "gemma_chat_template.jinja"
 with open(template_path, "r") as f:
     ctrl_template = f.read()
 with open(chat_template_path, "r") as f:
@@ -116,16 +115,23 @@ def tokenize_with_ctrl_mask(
             return_tensors="pt",
             return_assistant_tokens_mask=True,
             return_dict=True,
+            chat_template=ctrl_template,
         )
     )
     ctrl_mask = th.tensor(
         tokenizer.apply_chat_template(
             convs,
-            chat_template=ctrl_template,
             **kwargs,
         )["assistant_masks"],
         dtype=th.bool,
     )
+    if "chat_template" in tokenizer_kwargs:
+        warnings.warn(
+            "chat_template is already set in tokenizer_kwargs, ignoring it"
+        )
+    tokenizer_kwargs["chat_template"] = chat_template
+    tokenizer_kwargs["return_dict"] = True
+    tokenizer_kwargs["return_assistant_tokens_mask"] = True
     tok_dict = tokenizer.apply_chat_template(convs, **tokenizer_kwargs)
     tok_dict["ctrl_mask"] = ctrl_mask
     tok_dict["assistant_masks"] = th.tensor(tok_dict["assistant_masks"], dtype=th.bool)
