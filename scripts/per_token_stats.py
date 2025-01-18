@@ -28,6 +28,7 @@ from dictionary_learning import CrossCoder
 import numpy as np
 from tqdm import tqdm, trange
 from datasets import load_dataset
+import plotly.express as px
 
 from utils import tokenize_with_ctrl_ids, chat_template
 
@@ -64,6 +65,155 @@ class ComputedActivationStats:
         self.stats.to_csv(path / "stats.csv")
         with open(path / "counts.json", "w") as f:
             json.dump(self.token_counts, f)
+
+    def compute_feature_stats(self):
+        """
+        Compute the following stats for each feature:
+        Per buckets and across all buckets:
+            - Control token frequency
+            - % of activation from control token
+        """
+        # Create a view for ctrl tokens and non-ctrl tokens
+        ctrl_stats = self.stats.xs("ctrl_tokens", level="token_group")
+        non_ctrl_stats = self.stats.xs("non_ctrl_tokens", level="token_group")
+        bos_stats = self.stats.xs("bos", level="token_group")
+        # Get total counts for normalization
+        ctrl_count = self.token_counts["ctrl_tokens"]
+        non_ctrl_count = self.token_counts["non_ctrl_tokens"]
+        bos_count = self.token_counts["bos"]
+        # Compute stats per bucket
+        results = []
+        for bucket in range(len(BUCKET_EDGES) + 1):
+            bucket_ctrl = ctrl_stats.xs(bucket, level="bucket")
+            bucket_non_ctrl = non_ctrl_stats.xs(bucket, level="bucket")
+            bucket_bos = bos_stats.xs(bucket, level="bucket")
+            # Compute frequencies (activations per token)
+            ctrl_freq = bucket_ctrl["nonzero count"] / ctrl_count
+            non_ctrl_freq = bucket_non_ctrl["nonzero count"] / non_ctrl_count
+
+            # Compute percentage of activations from control tokens
+            total_acts = (
+                bucket_ctrl["nonzero count"] + bucket_non_ctrl["nonzero count"]
+            ).clip(1)
+            ctrl_percentage = bucket_ctrl["nonzero count"] / total_acts
+
+            # Compute bos frequency and percentage
+            bos_freq = bucket_bos["nonzero count"] / bos_count
+            bos_percentage = bucket_bos["nonzero count"] / total_acts
+            # Also include mean and max activations
+            bucket_stats = pd.DataFrame(
+                {
+                    "ctrl_frequency": ctrl_freq,
+                    "non_ctrl_frequency": non_ctrl_freq,
+                    "ctrl_percentage": ctrl_percentage,
+                    "bos_frequency": bos_freq,
+                    "bos_percentage": bos_percentage,
+                    "ctrl_mean": bucket_ctrl["mean"],
+                    "ctrl_max": bucket_ctrl["max"],
+                    "non_ctrl_mean": bucket_non_ctrl["mean"],
+                    "non_ctrl_max": bucket_non_ctrl["max"],
+                }
+            )
+            bucket_stats.index.name = "feature"
+            results.append(bucket_stats)
+
+        # Combine all buckets
+        per_bucket_stats = pd.concat(
+            results, keys=range(len(BUCKET_EDGES) + 1), names=["bucket"]
+        )
+        per_bucket_stats.to_csv("results/per_token_stats/per_bucket_stats.csv")
+        results[0].to_csv("results/per_token_stats/per_bucket_stats_0.csv")
+        ft_ctrl_counts = (
+            ctrl_stats.groupby(["feature", "bucket"])["nonzero count"]
+            .agg("sum")
+            .unstack(level="bucket")
+            .values
+        )
+        ft_non_ctrl_counts = (
+            non_ctrl_stats.groupby(["feature", "bucket"])["nonzero count"]
+            .agg("sum")
+            .unstack(level="bucket")
+            .values
+        )
+        global_ctrl_counts = ft_ctrl_counts.sum(axis=1)  # shape: (features,)
+        global_non_ctrl_counts = ft_non_ctrl_counts.sum(axis=1)  # shape: (features,)
+        ctrl_means = (
+            ctrl_stats.groupby(["feature", "bucket"])["mean"]
+            .agg("sum")
+            .unstack(level="bucket")
+            .values
+        ).astype(
+            np.float64
+        )  # shape: (features, buckets)
+        non_ctrl_means = (
+            non_ctrl_stats.groupby(["feature", "bucket"])["mean"]
+            .agg("sum")
+            .unstack(level="bucket")
+            .values
+        ).astype(
+            np.float64
+        )  # shape: (features, buckets)
+        global_ctrl_maxs = (
+            ctrl_stats.groupby(["feature", "bucket"])["max"]
+            .agg("max")
+            .unstack(level="bucket")
+            .values
+        ).max(
+            axis=1
+        )  # shape: (features,)
+        global_non_ctrl_maxs = (
+            non_ctrl_stats.groupby(["feature", "bucket"])["max"]
+            .agg("max")
+            .unstack(level="bucket")
+            .values
+        ).max(
+            axis=1
+        )  # shape: (features,)
+        global_tot_counts = global_ctrl_counts + global_non_ctrl_counts
+        # Compute global stats (across all buckets)
+        global_ctrl_freq = global_ctrl_counts / ctrl_count
+        global_non_ctrl_freq = global_non_ctrl_counts / non_ctrl_count
+        global_ctrl_percentage = global_ctrl_counts / global_tot_counts
+        global_ctrl_counts = global_ctrl_counts.astype(np.float64)
+        global_ctrl_counts[global_ctrl_counts == 0] = np.nan
+        global_ctrl_mean = (ctrl_means * ft_ctrl_counts).sum(
+            axis=1
+        ) / global_ctrl_counts
+        global_non_ctrl_counts = global_non_ctrl_counts.astype(np.float64)
+        global_non_ctrl_counts[global_non_ctrl_counts == 0] = np.nan
+        global_non_ctrl_mean = (non_ctrl_means * ft_non_ctrl_counts).sum(
+            axis=1
+        ) / global_non_ctrl_counts
+        global_bos_counts = (
+            bos_stats.groupby(["feature", "bucket"])["nonzero count"]
+            .sum()
+            .unstack(level="bucket")
+            .values.sum(axis=1)
+        )  # shape: (features,)
+        global_bos_freq = global_bos_counts / bos_count
+        global_bos_percentage = global_bos_counts / (
+            global_tot_counts + global_bos_counts
+        )
+        global_stats = pd.DataFrame(
+            {
+                "ctrl_frequency": global_ctrl_freq,
+                "non_ctrl_frequency": global_non_ctrl_freq,
+                "ctrl_percentage": global_ctrl_percentage,
+                "ctrl_mean": global_ctrl_mean,
+                "ctrl_max": global_ctrl_maxs,
+                "non_ctrl_mean": global_non_ctrl_mean,
+                "non_ctrl_max": global_non_ctrl_maxs,
+                "bos_frequency": global_bos_freq,
+                "bos_percentage": global_bos_percentage,
+            }
+        )
+        global_stats.index.name = "feature"
+        global_stats["bucket"] = -1
+        global_stats = global_stats.reset_index().set_index(["bucket", "feature"])
+
+        # Combine per-bucket and global stats
+        all_stats = pd.concat([per_bucket_stats, global_stats])
+        return all_stats
 
 
 class ActivationStats:
@@ -274,6 +424,166 @@ def main(
     return computed_stats
 
 
+def process_stats(stats: ComputedActivationStats, verbose=1):
+    if verbose:
+        # compute simple statistics, like bucket frequency
+        bucket_freq = stats.stats.groupby("bucket")["nonzero count"].sum()
+        bucket_freq = bucket_freq / bucket_freq.sum()
+        print(f"Bucket frequency: {bucket_freq.round(2)}")
+        # Average activation per token group
+        avg_per_group = stats.stats.groupby("token_group")["mean"].mean().round(2)
+        print("\nAverage activation per token group:")
+        print(avg_per_group)
+
+        # Distribution of activations across buckets for ctrl vs non-ctrl tokens
+        ctrl_dist = (
+            stats.stats[
+                stats.stats.index.get_level_values("token_group") == "ctrl_tokens"
+            ]
+            .groupby("bucket")["nonzero count"]
+            .sum()
+            .round(2)
+        )
+        non_ctrl_dist = (
+            stats.stats[
+                stats.stats.index.get_level_values("token_group") == "non_ctrl_tokens"
+            ]
+            .groupby("bucket")["nonzero count"]
+            .sum()
+            .round(2)
+        )
+        print("\nActivation distribution - Control tokens:")
+        print((ctrl_dist / ctrl_dist.sum()).round(2))
+        print("\nActivation distribution - Non-control tokens:")
+        print((non_ctrl_dist / non_ctrl_dist.sum()).round(2))
+
+        # Top tokens with highest max activations per group
+        print("\nTop 5 highest max activations per group:")
+        for group in TOKEN_GROUPS:
+            group_stats = stats.stats.xs(group, level="token_group")
+            top_5 = group_stats.nlargest(5, "max")
+            print(f"\n{group}:")
+            print(top_5["max"].round(2))
+
+        # Ratio of high vs low activations per group
+        print("\nRatio of high (bucket 2-3) vs low (bucket 0-1) activations:")
+        for group in TOKEN_GROUPS:
+            group_stats = stats.stats.xs(group, level="token_group")
+            high_acts = group_stats[group_stats.index.get_level_values("bucket") >= 2][
+                "nonzero count"
+            ].sum()
+            low_acts = group_stats[group_stats.index.get_level_values("bucket") < 2][
+                "nonzero count"
+            ].sum()
+            if low_acts > 0:
+                ratio = high_acts / low_acts
+                print(f"{group}: {ratio:.2f}")
+    feature_stats = stats.compute_feature_stats()
+    feature_stats.to_csv("results/per_token_stats/feature_stats.csv")
+    # plot histograms of different stats
+    # Plot histograms of different stats
+    # Create directory for plots
+    plot_dir = Path("results/per_token_stats/plots")
+    plot_dir.mkdir(exist_ok=True, parents=True)
+
+    # Plot ctrl frequency distribution
+    fig = px.histogram(
+        feature_stats.reset_index(),
+        x="ctrl_frequency",
+        color="bucket",
+        barmode="overlay",
+        title="Distribution of Control Token Frequencies",
+        labels={
+            "ctrl_frequency": "Control Token Frequency",
+            "count": "Number of Features",
+            "bucket": "Activation Bucket",
+        },
+        log_y=True,
+    )
+    fig.write_html(plot_dir / "ctrl_frequency_dist.html")
+    fig.write_image(plot_dir / "ctrl_frequency_dist.png", scale=3)
+
+    # Plot non-ctrl frequency distribution
+    fig = px.histogram(
+        feature_stats.reset_index(),
+        x="non_ctrl_frequency",
+        color="bucket",
+        barmode="overlay",
+        title="Distribution of Non-Control Token Frequencies",
+        labels={
+            "non_ctrl_frequency": "Non-Control Token Frequency",
+            "count": "Number of Features",
+            "bucket": "Activation Bucket",
+        },
+        log_y=True,
+    )
+    fig.write_html(plot_dir / "non_ctrl_frequency_dist.html")
+    fig.write_image(plot_dir / "non_ctrl_frequency_dist.png", scale=3)
+
+    # Plot ctrl percentage distribution
+    fig = px.histogram(
+        feature_stats.reset_index(),
+        x="ctrl_percentage",
+        color="bucket",
+        barmode="overlay",
+        title="Distribution of Control Token Percentages",
+        labels={
+            "ctrl_percentage": "Control Token Percentage",
+            "count": "Number of Features",
+            "bucket": "Activation Bucket",
+        },
+        log_y=True,
+    )
+    fig.write_html(plot_dir / "ctrl_percentage_dist.html")
+    fig.write_image(plot_dir / "ctrl_percentage_dist.png", scale=3)
+
+    df_path = hf_hub_download(
+        repo_id="Butanium/max-activating-examples-gemma-2-2b-l13-mu4.1e-02-lr1e-04",
+        filename="feature_df.csv",
+        repo_type="dataset",
+    )
+    feature_df = pd.read_csv(df_path, index_col=0)
+    # select stats for bucket -1
+    new_stats = feature_stats.xs(-1, level="bucket")
+    new_stats = new_stats.merge(feature_df, left_index=True, right_index=True)
+    # Reorder columns to group related metrics
+    # fmt: off
+    ordered_cols = [  
+        "tag", "dead", "dec_norm_diff", "base uselessness score", "avg_activation", "lmsys_ctrl_%", "bos_%",
+        # Frequencies
+        "lmsys_dead", "fw_dead","freq","lmsys_freq","lmsys_ctrl_freq", "lmsys_non_ctrl_freq", "fw_freq", "bos_freq",
+        # Mean activations
+        "lmsys_avg_act", "lmsys_ctrl_avg_act", "lmsys_non_ctrl_avg_act", "fw_avg_act",
+        # Max activations  
+        "lmsys_max_act", "lmsys_ctrl_max_act", "lmsys_non_ctrl_max_act",
+        # Cosine similarities
+        "dec_cos_sim", "enc_cos_sim",
+        # Norm differences
+        "enc_norm_diff","dec_base_norm", "dec_instruct_norm", "enc_base_norm", "enc_instruct_norm", 
+        # Dead
+    ]
+    # fmt: on
+    new_stats = new_stats.rename(
+        columns={
+            "ctrl_frequency": "lmsys_ctrl_freq",
+            "non_ctrl_frequency": "lmsys_non_ctrl_freq",
+            "ctrl_percentage": "lmsys_ctrl_%",
+            "ctrl_max": "lmsys_ctrl_max_act",
+            "non_ctrl_max": "lmsys_non_ctrl_max_act",
+            "ctrl_mean": "lmsys_ctrl_avg_act",
+            "non_ctrl_mean": "lmsys_non_ctrl_avg_act",
+            "fw_avg_activation": "fw_avg_act",
+            "lmsys_avg_activation": "lmsys_avg_act",
+            "max_activation_lmsys": "lmsys_max_act",
+            "bos_frequency": "bos_freq",
+            "bos_percentage": "bos_%",
+        }
+    )
+    new_stats = new_stats[ordered_cols]
+    # add enc base norm feature
+    new_stats.to_csv("results/per_token_stats/feature_stats_global.csv")
+
+
 if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("--base-device", "-b", type=str, default="auto")
@@ -281,8 +591,12 @@ if __name__ == "__main__":
     parser.add_argument("--crosscoder-device", "-c", type=str, default="cpu")
     parser.add_argument("--test", "-t", action="store_true")
     parser.add_argument("--batch-size", type=int, default=8)
+    parser.add_argument("--use-precomputed-stats", "--skip", action="store_true")
     args = parser.parse_args()
-
+    if args.use_precomputed_stats:
+        stats = ComputedActivationStats.load(Path("results/per_token_stats"))
+        process_stats(stats, verbose=0)
+        exit()
     # Create output directory
     output_dir = Path("results/per_token_stats")
     output_dir.mkdir(exist_ok=True, parents=True)
@@ -320,53 +634,4 @@ if __name__ == "__main__":
         test=args.test,
     )
 
-    # compute simple statistics, like bucket frequency
-    bucket_freq = stats.stats.groupby("bucket")["nonzero count"].sum()
-    bucket_freq = bucket_freq / bucket_freq.sum()
-    print(f"Bucket frequency: {bucket_freq.round(2)}")
-    # Average activation per token group
-    avg_per_group = stats.stats.groupby("token_group")["mean"].mean().round(2)
-    print("\nAverage activation per token group:")
-    print(avg_per_group)
-
-    # Distribution of activations across buckets for ctrl vs non-ctrl tokens
-    ctrl_dist = (
-        stats.stats[stats.stats.index.get_level_values("token_group") == "ctrl_tokens"]
-        .groupby("bucket")["nonzero count"]
-        .sum()
-        .round(2)
-    )
-    non_ctrl_dist = (
-        stats.stats[
-            stats.stats.index.get_level_values("token_group") == "non_ctrl_tokens"
-        ]
-        .groupby("bucket")["nonzero count"]
-        .sum()
-        .round(2)
-    )
-    print("\nActivation distribution - Control tokens:")
-    print((ctrl_dist / ctrl_dist.sum()).round(2))
-    print("\nActivation distribution - Non-control tokens:")
-    print((non_ctrl_dist / non_ctrl_dist.sum()).round(2))
-
-    # Top tokens with highest max activations per group
-    print("\nTop 5 highest max activations per group:")
-    for group in TOKEN_GROUPS:
-        group_stats = stats.stats.xs(group, level="token_group")
-        top_5 = group_stats.nlargest(5, "max")
-        print(f"\n{group}:")
-        print(top_5["max"].round(2))
-
-    # Ratio of high vs low activations per group
-    print("\nRatio of high (bucket 2-3) vs low (bucket 0-1) activations:")
-    for group in TOKEN_GROUPS:
-        group_stats = stats.stats.xs(group, level="token_group")
-        high_acts = group_stats[group_stats.index.get_level_values("bucket") >= 2][
-            "nonzero count"
-        ].sum()
-        low_acts = group_stats[group_stats.index.get_level_values("bucket") < 2][
-            "nonzero count"
-        ].sum()
-        if low_acts > 0:
-            ratio = high_acts / low_acts
-            print(f"{group}: {ratio:.2f}")
+    process_stats(stats, verbose=1)
