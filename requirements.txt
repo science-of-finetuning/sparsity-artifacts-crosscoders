@@ -9,3 +9,4 @@ dictionary_learning @ git+https://github.com/jkminder/dictionary_learning.git
 ipykernel
 tiny_dashboard
 datasets
+kaleido
