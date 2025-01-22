@@ -4,17 +4,16 @@ from pathlib import Path
 from dictionary_learning.cache import PairedActivationCache
 import json
 from loguru import logger
-
-from nnsight import LanguageModel
-from dictionary_learning import ActivationBuffer, CrossCoder
-from dictionary_learning.trainers import CrossCoderTrainer, FeatureScalerTrainer
-from dictionary_learning.dictionary import FeatureScaler
-from dictionary_learning.training import trainSAE
 import os
 from tqdm import tqdm
 from typing import Optional
-th.set_float32_matmul_precision("high")
 
+from dictionary_learning import CrossCoder
+from dictionary_learning.trainers import CrossCoderTrainer
+from dictionary_learning.training import trainSAE
+from tools.latent_scaler import FeatureScaler, IndividualFeatureScalerTrainer, FeatureScalerTrainer
+
+th.set_float32_matmul_precision("highest")
 
 def train_feature_scaler(
     target_layer: int,
@@ -32,6 +31,7 @@ def train_feature_scaler(
     seed: int,
     max_steps: int,
     validate_every_n_steps: int,
+    save_every_n_steps: int,
     run_name: str,
     lr: float,
     cc_path: str | Path,
@@ -40,6 +40,9 @@ def train_feature_scaler(
     random_indices: bool,
     feature_indices: Optional[th.Tensor] = None,
     dataset_split: str = "train",
+    individual_indices: bool = False,
+    warmup_steps: int = 1000,
+    dtype: th.dtype = th.float32,
 ) -> None:
     logger.info(f"Training with seed={seed}, lr={lr}, mu={mu}")
     th.manual_seed(seed)
@@ -56,28 +59,35 @@ def train_feature_scaler(
 
     submodule_name = f"layer_{layer}_out"
 
-    fineweb_cache = PairedActivationCache(
-        base_model_fineweb / submodule_name, instruct_model_fineweb / submodule_name
-    )
+    # fineweb_cache = PairedActivationCache(
+    #     base_model_fineweb / submodule_name, instruct_model_fineweb / submodule_name
+    # )
     lmsys_chat_cache = PairedActivationCache(
         base_model_lmsys_chat / submodule_name,
         instruct_model_lmsys_chat / submodule_name,
     )
 
-    dataset = th.utils.data.ConcatDataset([fineweb_cache, lmsys_chat_cache])
+    dataset = th.utils.data.ConcatDataset([lmsys_chat_cache]) #, fineweb_cache])
+    print("uncomment lmsys_chat_cache")
 
     # load the cross-coder and modify the decoder layers
-    cc = CrossCoder.from_pretrained(cc_path)
-    target_decoder_layers = [target_layer]
+    if os.path.exists(cc_path):
+        from_hub = False
+    else:
+        from_hub = True
+        logger.info(f"Loading cross-coder from hub at {cc_path}")
+    
+    cc = CrossCoder.from_pretrained(cc_path, from_hub=from_hub)
+    target_decoder_layer = target_layer
     # load the feature indices
     if feature_indices is None:
         indices = th.tensor([])
     else:
-        indices = th.load(feature_indices)
-    print(f"Got {len(indices)} feature indices to modify.")
+        indices = feature_indices
+    logger.info(f"Got {len(indices)} feature indices to modify.")
     if random_indices:
         indices = th.randperm(cc.dict_size)[: len(indices)]
-        print(f"Using {len(indices)} random indices.")
+        logger.info(f"Using {len(indices)} random indices.")
 
     decoder_weight = th.clone(cc.decoder.weight.data)
     if random_source:
@@ -87,60 +97,84 @@ def train_feature_scaler(
         random_vectors = (
             random_vectors / random_vectors.norm(dim=-1, keepdim=True) * source_norms
         )
-        decoder_weight[target_layer, indices, :] = random_vectors
+        source_decoder_weights = random_vectors
         logger.info(f"Using {len(indices)} random source vectors with matched norms.")
     elif len(indices):
-        decoder_weight[target_layer, indices, :] = decoder_weight[
+        source_decoder_weights = decoder_weight[
             source_layer, indices, :
         ]
         logger.info(f"Using vectors from source layer {source_layer}.")
     else:
         logger.info("No indices to modify.")
 
-    cc.decoder.weight = th.nn.Parameter(decoder_weight)
-
-    # only allow gradients on the scaler parameters for the indices
-    mask = th.ones(cc.dict_size, device="cuda")
-    if len(indices):
-        mask[indices] = 0.0
-    else:
-        mask = th.zeros(cc.dict_size, device="cuda")
-    logger.info(
-        f"Masking {int(mask.sum().item())} out of {cc.dict_size} feature scaler parameters."
-    )
-    feature_scaler = FeatureScaler(
-        cc.dict_size, fixed_mask=mask.bool(), zero_init=zero_init_scaler
-    )
-
     activation_dim = cc.activation_dim
     dictionary_size = cc.dict_size
-    run_name_str = (
-        f"L{layer}-mu{mu:.1e}-lr{lr:.0e}"
-        + f"Ind" + str(feature_indices[0]) if len(feature_indices) == 1 else ""
-        + (f"-{run_name}" if run_name is not None else "")
-        + ("-ZeroInit" if zero_init_scaler else "")
-    )
+    # build the run name
+    run_name_str = f"L{layer}-mu{mu:.1e}-lr{lr:.0e}-s{seed}" 
+    if individual_indices:
+        run_name_str += "-Individual"
+    if run_name is not None:
+        run_name_str += f"-{run_name}"
+    if zero_init_scaler:
+        run_name_str += "-ZeroInit"
+    
     if random_indices:
         run_name_str = "RandomIndices" + run_name_str
     if random_source:
         run_name_str = "RandomSource" + run_name_str
     device = "cuda" if th.cuda.is_available() else "cpu"
     logger.info(f"Training on device={device}.")
-    trainer_cfg = {
-        "trainer": FeatureScalerTrainer,
-        "dict_class": CrossCoder,
-        "activation_dim": activation_dim,
-        "dict_size": dictionary_size,
-        "lr": lr,
-        "device": device,
-        "warmup_steps": 1000,
-        "compile": True,
-        "wandb_name": "FS-" + run_name_str,
-        "l1_penalty": mu,
-        "cross_coder": cc,
-        "feature_scaler": feature_scaler,
-        "target_decoder_layers": target_decoder_layers,
-    }
+    if individual_indices:
+        trainer_cfg = {
+            "trainer": IndividualFeatureScalerTrainer,
+            "dict_class": CrossCoder,
+            "activation_dim": activation_dim,
+            "dict_size": dictionary_size,
+            "lr": lr,
+            "device": device,
+            "warmup_steps": warmup_steps,
+            "compile": False,
+            "wandb_name": "FS-" + run_name_str,
+            "l1_penalty": mu,
+            "cross_coder": cc,
+            "feature_indices": indices,
+            "target_decoder_layer": target_decoder_layer,
+            "source_decoder_weights": source_decoder_weights,
+            "zero_init": zero_init_scaler,
+            "dtype": dtype,
+        }
+    else:
+        # Replace the decoder weights for the target layer with the target decoder weights
+        decoder_weight[target_layer, indices, :] = source_decoder_weights
+        cc.decoder.weight = th.nn.Parameter(decoder_weight)
+        # only allow gradients on the scaler parameters for the indices
+        mask = th.ones(cc.dict_size, device="cuda")
+        if len(indices):
+            mask[indices] = 0.0
+        else:
+            mask = th.zeros(cc.dict_size, device="cuda")
+        logger.info(
+            f"Masking {int(mask.sum().item())} out of {cc.dict_size} feature scaler parameters."
+        )
+        feature_scaler = FeatureScaler(
+            cc.dict_size, fixed_mask=mask.bool(), zero_init=zero_init_scaler
+        )
+
+        trainer_cfg = {
+            "trainer": FeatureScalerTrainer,
+            "dict_class": CrossCoder,
+            "activation_dim": activation_dim,
+            "dict_size": dictionary_size,
+            "lr": lr,
+            "device": device,
+            "warmup_steps": warmup_steps,
+            "compile": False,
+            "wandb_name": "FS-" + run_name_str,
+            "l1_penalty": mu,
+            "cross_coder": cc,
+            "feature_scaler": feature_scaler,
+            "target_decoder_layers": [target_decoder_layer],
+        }
 
     validation_size = 10**6
     train_dataset, validation_dataset = th.utils.data.random_split(
@@ -153,13 +187,15 @@ def train_feature_scaler(
         shuffle=True,
         num_workers=workers,
         pin_memory=True,
+        drop_last=True,
     )
     validation_dataloader = th.utils.data.DataLoader(
         validation_dataset,
-        batch_size=8192,
+        batch_size=batch_size,
         shuffle=False,
         num_workers=workers,
         pin_memory=True,
+        drop_last=True,
     )
 
     ae = trainSAE(
@@ -173,6 +209,8 @@ def train_feature_scaler(
         log_steps=10,
         steps=max_steps,
         save_last_eval=True,
+        save_steps=save_every_n_steps,
+        save_dir=Path(output_dir) / "feature_scaler" / run_name_str
     )
 
     # save the feature scaler
@@ -206,10 +244,6 @@ def train_feature_scaler(
             },
             f,
         )
-    th.save(
-        feature_scaler.state_dict(),
-        out_dir / f"scaler_{target_layer}_{source_layer}.pt",
-    )
 
 
 if __name__ == "__main__":
@@ -229,82 +263,57 @@ if __name__ == "__main__":
     parser.add_argument("--mu", type=float, default=0)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max-steps", type=int, default=None)
-    parser.add_argument("--validate-every-n-steps", type=int, default=10000)
+    parser.add_argument("--validate-every-n-steps", type=int, default=10000, help="If None, will not validate")
+    parser.add_argument("--save-every-n-steps", type=int, default=5000)
     parser.add_argument("--run-name", type=str, default=None)
-    parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--cc", type=str, required=True)
     parser.add_argument("--zero-init-scaler", action="store_true")
     parser.add_argument("--random-source", action="store_true")
     parser.add_argument("--random-indices", action="store_true")
     parser.add_argument("--dataset-split", type=str, default="train")
     parser.add_argument("--individual-indices", action="store_true")
+    parser.add_argument("--warmup-steps", type=int, default=1000)
+    parser.add_argument("--float64", action="store_true", help="Use float64 for the training run - this is slower but more accurate and runs the correctness tests.")
 
     args = parser.parse_args()
+    print(args)
     assert not (
         args.random_indices and args.random_source
     ), "Cannot specify both random-indices and random-source."
-
+    
+    logger.info(f"Loading feature indices from file {args.feature_indices_file}")
     if args.feature_indices_file is not None:
         feature_indices = th.load(args.feature_indices_file)
     else:
         feature_indices = None
 
-    if args.individual_indices:
-        assert (
-            feature_indices is not None
-        ), "Must provide feature indices when using individual indices"
-        for i, index in enumerate(feature_indices):
-            logger.info(
-                f"Training with index {index} ({i / len(feature_indices) * 100:.2f}% of {len(feature_indices)} indices)"
-            )
-            train_feature_scaler(
-                target_layer=args.target_layer,
-                source_layer=args.source_layer,
-                activation_store_dir=args.activation_store_dir,
-                base_model=args.base_model,
-                instruct_model=args.instruct_model,
-                layer=args.layer,
-                wandb_entity=args.wandb_entity,
-                disable_wandb=args.disable_wandb,
-                batch_size=args.batch_size,
-                workers=args.workers,
-                mu=args.mu,
-                seed=args.seed,
-                max_steps=args.max_steps,
-                validate_every_n_steps=args.validate_every_n_steps,
-                run_name=args.run_name,
-                lr=args.lr,
-                cc_path=args.cc,
-                zero_init_scaler=args.zero_init_scaler,
-                random_source=args.random_source,
-                random_indices=args.random_indices,
-                feature_indices=th.tensor([index]),
-                dataset_split=args.dataset_split,
-                output_dir=args.output_dir,
-            )
-    else:
-        train_feature_scaler(
-            target_layer=args.target_layer,
-            source_layer=args.source_layer,
-            activation_store_dir=args.activation_store_dir,
-            base_model=args.base_model,
-            instruct_model=args.instruct_model,
-            layer=args.layer,
-            wandb_entity=args.wandb_entity,
-            disable_wandb=args.disable_wandb,
-            batch_size=args.batch_size,
-            workers=args.workers,
-            mu=args.mu,
-            seed=args.seed,
-            max_steps=args.max_steps,
-            validate_every_n_steps=args.validate_every_n_steps,
-            run_name=args.run_name,
-            lr=args.lr,
-            cc_path=args.cc,
-            zero_init_scaler=args.zero_init_scaler,
-            random_source=args.random_source,
-            random_indices=args.random_indices,
-            feature_indices=feature_indices,
-            dataset_split=args.dataset_split,
-            output_dir=args.output_dir,
-        )
+    train_feature_scaler(
+        target_layer=args.target_layer,
+        source_layer=args.source_layer,
+        activation_store_dir=args.activation_store_dir,
+        base_model=args.base_model,
+        instruct_model=args.instruct_model,
+        layer=args.layer,
+        wandb_entity=args.wandb_entity,
+        disable_wandb=args.disable_wandb,
+        batch_size=args.batch_size,
+        workers=args.workers,
+        mu=args.mu,
+        seed=args.seed,
+        max_steps=args.max_steps,
+        validate_every_n_steps=args.validate_every_n_steps,
+        save_every_n_steps=args.save_every_n_steps,
+        run_name=args.run_name,
+        lr=args.lr,
+        cc_path=args.cc,
+        zero_init_scaler=args.zero_init_scaler,
+        random_source=args.random_source,
+        random_indices=args.random_indices,
+        feature_indices=feature_indices,
+        dataset_split=args.dataset_split,
+        output_dir=args.output_dir,
+        individual_indices=args.individual_indices,
+        warmup_steps=args.warmup_steps,
+        dtype=th.float64 if args.float64 else th.float32,
+    )
