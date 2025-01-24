@@ -120,7 +120,7 @@ if __name__ == "__main__":
     activation_dim = cc.activation_dim
     dictionary_size = cc.dict_size
     run_name = (
-        f"L{args.layer}-mu{args.mu:.1e}-lr{args.lr:.0e}"
+        f"S{args.seed}-L{args.layer}-mu{args.mu:.1e}-lr{args.lr:.0e}"
         + (f"-{args.run_name}" if args.run_name is not None else "")
         + ("-ZeroInit" if args.zero_init_scaler else "")
     )
