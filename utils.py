@@ -240,13 +240,12 @@ def compute_entropy(batch, model, pred_mask):
         entropy: shape (pred_mask.sum(),) Tensor of entropy for each predicted token
     """
     with model.trace(batch):
-        logits = model.output.logits[
-            pred_mask
-        ].save()  # shift by 1 to the left
+        logits = model.output.logits[pred_mask].save()  # shift by 1 to the left
     log_probs = th.log_softmax(logits, dim=-1)
     probs = th.exp(log_probs)
     entropy = -th.sum(probs * log_probs, dim=-1)
     return entropy
+
 
 # https://github.com/DLR-RM/stable-baselines3/blob/master/stable_baselines3/common/running_mean_std.py
 class RunningMeanStd:
@@ -354,10 +353,39 @@ def shared_latent_indices():
 class CCLatent:
     def __init__(self, id_: int):
         self.id = id_
-        self.tag = df.loc[id_, "tag"]
+        self.row = feature_df().loc[id_]
+        self.stats = self.row.to_dict()
+        for k, v in self.stats.items():
+            setattr(self, k.replace(" ", "_").replace("%", "pct"), v)
 
-    def stats(self):
-        return feature_df().loc[self.id]
+    def is_chat_only(self):
+        return self.tag == "Chat only"
+
+    def is_base_only(self):
+        return self.tag == "Base only"
+
+    def is_shared(self):
+        return self.tag == "Shared"
+
+    def is_other(self):
+        return self.tag == "Other"
+
+    def __str__(self):
+        return self.row.__str__()
+
+    def __repr__(self) -> str:
+        return self.row.__repr__()
+
+
+def apply_connor_template(conv):
+    if isinstance(conv[0], list):
+        return [apply_connor_template(c) for c in conv]
+    return "\n".join(
+        [
+            ("Assistant: " if msg["role"] == "assistant" else "User: ") + msg["content"]
+            for msg in conv
+        ]
+    )
 
 
 """
@@ -368,6 +396,8 @@ class CCLatent:
 =================================
 """
 from networkx.drawing.nx_pylab import apply_alpha
+
+
 def draw_networkx_nodes(
     G,
     pos,
