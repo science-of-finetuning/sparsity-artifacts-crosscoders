@@ -43,6 +43,7 @@ def train_feature_scaler(
     individual_indices: bool = False,
     warmup_steps: int = 1000,
     dtype: th.dtype = th.float32,
+    start_of_training_eval: bool = False,
 ) -> None:
     logger.info(f"Training with seed={seed}, lr={lr}, mu={mu}")
     th.manual_seed(seed)
@@ -59,16 +60,15 @@ def train_feature_scaler(
 
     submodule_name = f"layer_{layer}_out"
 
-    # fineweb_cache = PairedActivationCache(
-    #     base_model_fineweb / submodule_name, instruct_model_fineweb / submodule_name
-    # )
+    fineweb_cache = PairedActivationCache(
+        base_model_fineweb / submodule_name, instruct_model_fineweb / submodule_name
+    )
     lmsys_chat_cache = PairedActivationCache(
         base_model_lmsys_chat / submodule_name,
         instruct_model_lmsys_chat / submodule_name,
     )
 
-    dataset = th.utils.data.ConcatDataset([lmsys_chat_cache]) #, fineweb_cache])
-    print("uncomment lmsys_chat_cache")
+    dataset = th.utils.data.ConcatDataset([lmsys_chat_cache, fineweb_cache])
 
     # load the cross-coder and modify the decoder layers
     if os.path.exists(cc_path):
@@ -191,7 +191,7 @@ def train_feature_scaler(
     )
     validation_dataloader = th.utils.data.DataLoader(
         validation_dataset,
-        batch_size=batch_size,
+        batch_size=batch_size*2, 
         shuffle=False,
         num_workers=workers,
         pin_memory=True,
@@ -210,6 +210,7 @@ def train_feature_scaler(
         steps=max_steps,
         save_last_eval=True,
         save_steps=save_every_n_steps,
+        start_of_training_eval=start_of_training_eval,
         save_dir=Path(output_dir) / "feature_scaler" / run_name_str
     )
 
@@ -266,7 +267,7 @@ if __name__ == "__main__":
     parser.add_argument("--validate-every-n-steps", type=int, default=10000, help="If None, will not validate")
     parser.add_argument("--save-every-n-steps", type=int, default=5000)
     parser.add_argument("--run-name", type=str, default=None)
-    parser.add_argument("--lr", type=float, default=1e-4)
+    parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--cc", type=str, required=True)
     parser.add_argument("--zero-init-scaler", action="store_true")
     parser.add_argument("--random-source", action="store_true")
@@ -274,6 +275,7 @@ if __name__ == "__main__":
     parser.add_argument("--dataset-split", type=str, default="train")
     parser.add_argument("--individual-indices", action="store_true")
     parser.add_argument("--warmup-steps", type=int, default=1000)
+    parser.add_argument("--start-of-training-eval", action="store_true")
     parser.add_argument("--float64", action="store_true", help="Use float64 for the training run - this is slower but more accurate and runs the correctness tests.")
 
     args = parser.parse_args()
@@ -316,4 +318,5 @@ if __name__ == "__main__":
         individual_indices=args.individual_indices,
         warmup_steps=args.warmup_steps,
         dtype=th.float64 if args.float64 else th.float32,
+        start_of_training_eval=args.start_of_training_eval,
     )
