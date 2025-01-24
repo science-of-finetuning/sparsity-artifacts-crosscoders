@@ -16,7 +16,7 @@ class FeatureScaler(th.nn.Module):
         else:
             self.register_buffer('fixed_mask', fixed_mask)
             self.scaler = th.nn.Parameter(self.get_init_vector((~fixed_mask).sum(), use_elu, zero_init))
-            self.fixed_mask = fixed_mask # only ~fixed_mask is trainable -> all other features are *fixed*
+            self.fixed_mask = fixed_mask # only ~fixed_mask is trainable -> all other features are *fixed*
             th.save(self.fixed_mask, "fixed_mask_joint.pt")
 
         if use_elu:
@@ -32,41 +32,11 @@ class FeatureScaler(th.nn.Module):
 
     def forward(self, features: th.Tensor):
         if self.fixed_mask is None:
-            return features * self.act_func(self.scaler)
-        else:
-            # DEBUG print("fwd: prescaling min max", features[:, ~self.fixed_mask].max(), features[:, ~self.fixed_mask].min())
-            # DEBUG print("index of max", features[:, ~self.fixed_mask].flatten().argmax())
-            features[:, ~self.fixed_mask] *= self.act_func(self.scaler)
-            # DEBUG print("fwd: postscaling min max", features[:, ~self.fixed_mask].max(), features[:, ~self.fixed_mask].min())
+            features = features * self.act_func(self.scaler)
             return features
-        
-class IndividualFeatureScaler(th.nn.Module):
-    def __init__(self, dict_size: int, feature_indices: th.Tensor | None = None, zero_init: bool = False, use_elu: bool = True):
-        super().__init__()
-        self.dict_size = dict_size
-        self.scaler = th.nn.Parameter(self.get_init_vector(len(feature_indices), use_elu, zero_init))
-        self.feature_indices = feature_indices
-
-        if use_elu:
-            self.act_func = lambda x:   
         else:
-            self.act_func = th.nn.ReLU()
-
-    def get_init_vector(self, size, use_elu: bool = False, init_zeros: bool = False, device: th.device = "cuda"):
-        if use_elu:
-            return th.zeros(size, device=device) if not init_zeros else th.ones(size, device=device) * -10
-        else:
-            return th.ones(size, device=device) if not init_zeros else th.zeros(size, device=device)
-
-    def forward(self, features: th.Tensor):
-        # features: (batch_size, num_features)
-        batch_size, num_features = features.shape
-        # DEBUG print("FWD: pre scaler min max", features.max(), features.min())
-        features = features.unsqueeze(1).repeat(1, num_features, 1) # (batch_size, num_features, num_features)
-        features[:, th.arange(num_features), th.arange(num_features)] *= self.act_func(self.scaler)
-        # DEBUG print("FWD: post scaler min max", features.max(), features.min())
-        # flatten & return 
-        return features.reshape(batch_size*num_features, num_features)
+            features[:, ~self.fixed_mask] *= self.act_func(self.scaler)
+            return features
 
 class FeatureScalerTrainer(CrossCoderTrainer):
     def __init__(self, cross_coder: CrossCoder, target_decoder_layers: list[int] = None, feature_scaler: FeatureScaler | None = None, **kwargs):
@@ -95,7 +65,6 @@ class FeatureScalerTrainer(CrossCoderTrainer):
             latent_processor=self.feature_scaler
         )
 
-        # DEBUG print("init", self.ae.latent_processor)
         self.ae.encoder.weight = nn.Parameter(cross_coder.encoder.weight.data)
         self.ae.encoder.bias = nn.Parameter(cross_coder.encoder.bias.data)
         self.ae.decoder.weight = nn.Parameter(cross_coder.decoder.weight.data[target_decoder_layers, :, :])
@@ -111,8 +80,8 @@ class FeatureScalerTrainer(CrossCoderTrainer):
         def warmup_fn(step):
             return min(step / self.warmup_steps, 1.0)
 
+        th.set_printoptions(precision=10)
 
-        
         if self.compile:
             self.ae = th.compile(self.ae)
 
@@ -122,32 +91,15 @@ class FeatureScalerTrainer(CrossCoderTrainer):
 
 
     def loss(self, x, logging=False, return_deads=False, **kwargs):
-        # DEBUG print("activations", x.mean())
-
         x_hat, f = self.ae(x, output_features=True)
 
-        l2_loss = th.linalg.norm(x[:, self.target_decoder_layers] - x_hat, dim=-1)
-        print("l2_loss", l2_loss)
-        print("l2_loss.mean()", l2_loss.shape, l2_loss.mean())
+        l2_loss = th.linalg.norm(x[:, self.target_decoder_layers] - x_hat, dim=-1).mean()
         l1_loss = f.norm(p=1, dim=-1).mean()
         deads = (f <= 1e-8).all(dim=0)
         if self.steps_since_active is not None:
             # update steps_since_active
             self.steps_since_active[deads] += 1
             self.steps_since_active[~deads] = 0
-        
-        loss = l2_loss + self.l1_penalty * l1_loss
-        # DEBUG print("x_hat", x_hat)
-        # DEBUG print("x", x)
-        # DEBUG print("loss", loss)
-        # DEBUG print("fsum", f.sum())
-        # DEBUG print("l2_loss", l2_loss)
-        # DEBUG print("l1_loss", l1_loss)
-        # DEBUG print("decnorm", self.ae.decoder.weight.norm())
-        # DEBUG print("encnorm", self.ae.encoder.weight.norm())
-        # loss.backward()
-        # # DEBUG print("scaler", self.feature_scaler.scaler.grad.norm())
-        # exit()
         scalars = self.feature_scaler.act_func(self.feature_scaler.scaler)
         num_pos_scalars = (scalars > 1e-6).sum().item()
         num_scalars = scalars.numel()
@@ -263,7 +215,7 @@ class IndividualFeatureScalerTrainer(CrossCoderTrainer):
         self.optimizer = th.optim.Adam(self.feature_scaler.parameters(), lr=self.lr)
         self.scheduler = th.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda=warmup_fn)
 
-    # @th.no_grad()
+    @th.no_grad()
     def test_correctness(self):
         feature_indices = self.feature_indices
         feature_mask = self.feature_mask
@@ -294,21 +246,6 @@ class IndividualFeatureScalerTrainer(CrossCoderTrainer):
         modified_crosscoder.decoder.weight = nn.Parameter(modified_decoder_weights.to(self._dtype))
 
         x_hat_target = modified_crosscoder(activations)[:, 0]
-        f = self.ae.encode(activations).detach()
-
-        argmax = f[:, self.feature_indices].flatten().argmax()
-        # DEBUG print("argmax", argmax)
-
-        # DEBUG print("x_hat_ours", x_hat_ours[argmax])
-        # DEBUG print("x_hat_ours", x_hat_ours.shape)
-        # DEBUG print("x_hat_target", x_hat_target[argmax])
-        # DEBUG print("x_hat_target", x_hat_target.shape)
-
-        # DEBUG print("NORM DIFF", th.linalg.norm(x_hat_ours - x_hat_target, dim=-1).max())
-        # DEBUG print("MAX DIFF", th.abs(x_hat_ours - x_hat_target).max())
-        # DEBUG print("MEAN DIFF", th.abs(x_hat_ours - x_hat_target).mean())
-        # DEBUG print("MEDIAN DIFF", th.median(th.abs(x_hat_ours - x_hat_target)))
-        # DEBUG print("MIN DIFF", th.abs(x_hat_ours - x_hat_target).min())
 
         assert x_hat_ours.shape == x_hat_target.shape
         assert th.allclose(x_hat_ours, x_hat_target)
@@ -322,7 +259,6 @@ class IndividualFeatureScalerTrainer(CrossCoderTrainer):
             activations = activations.to(self._dtype)
         batch_size, num_layers, activation_dim = activations.shape
         f = self.ae.encode(activations).detach()
-        # # DEBUG print("f", f[:, self.feature_indices], f.device)
         assert f.shape == (batch_size, self.ae.dict_size)
         
         target_reconstruction = self.ae.decode(f)[:, 0] # The crosscoder only has a single decoder layer -> we only need the first layer
@@ -330,39 +266,36 @@ class IndividualFeatureScalerTrainer(CrossCoderTrainer):
 
         f_target = f[:, self.feature_mask]
         assert f_target.shape == (batch_size, len(self.feature_indices))
-        # DEBUG print("f_target", f_target.device)
 
-        # Compute the target decoding only for the target features
+        # Compute the target decoding only for the target features
         # First let us get only the source decoder for the target features
         target_decoder_target = self.ae.decoder.weight[0, self.feature_mask, :]
         assert target_decoder_target.shape == (len(self.feature_indices), activation_dim)
-        # Now we repeat the target features for each batch element
+        # Now we repeat the target features for each batch element
         target_decoder_target = target_decoder_target.repeat(batch_size, 1)
         assert target_decoder_target.shape == (batch_size*len(self.feature_indices), activation_dim)
-         # We now stack the target features
+
+        # We now stack the target features
         f_target_reshaped = f_target.reshape(-1, 1)
         assert f_target_reshaped.shape == (batch_size*len(self.feature_indices), 1)
         # f_target is now a column vector 
         # [[batch_1_target_1], [batch_1_target_2], ... [batch_2_target_1], [batch_2_target_2], ...]
-        # And then scale each decoder with the target features for all batches
+        # And then scale each decoder with the target features for all batches
         target_reconstruction_target = target_decoder_target * f_target_reshaped
         assert target_reconstruction_target.shape == (batch_size*len(self.feature_indices), activation_dim)
 
-        # Now we repeat this but with the source decoder weights (len(feature_indices), activation_dim)
+        # Now we repeat this but with the source decoder weights (len(feature_indices), activation_dim)
         # But this time we scale the f_target
         source_decoder_target = self.source_decoder_weights
         assert source_decoder_target.shape == (len(self.feature_indices), activation_dim)    
-        # We repeat this for each batch element
+        # We repeat this for each batch element
         source_decoder_target = source_decoder_target.repeat(batch_size, 1)
         assert source_decoder_target.shape == (batch_size*len(self.feature_indices), activation_dim)
         if scale_features:
             f_target = self.feature_scaler(f_target)
             assert f_target.shape == (batch_size, len(self.feature_indices))
-        # DEBUG print("f_target", f_target.device)
-        
         f_target_reshaped = f_target.reshape(-1, 1)
         assert f_target_reshaped.shape == (batch_size*len(self.feature_indices), 1)
-        # DEBUG print("f_target_reshaped", f_target_reshaped.device)
         source_reconstruction_target = source_decoder_target * f_target_reshaped
         assert source_reconstruction_target.shape == (batch_size*len(self.feature_indices), activation_dim)
 
@@ -380,34 +313,23 @@ class IndividualFeatureScalerTrainer(CrossCoderTrainer):
             return x_hat
 
     def update(self, step, activations):
+        self.optimizer.zero_grad()
         activations = activations.to(self.device)
         x_hat = self.forward(activations)
         loss = self.loss(activations, x_hat)
         loss.backward()
-        # DEBUG print("scaler", self.feature_scaler.scaler.grad.norm())
-
-        # DEBUG print("scaler", self.feature_scaler.scaler)
         self.optimizer.step()
         self.scheduler.step()
-        # DEBUG print("scaler", self.feature_scaler.scaler)
 
     def loss(self, x, x_hat=None, logging=False, **kwargs):
         if x_hat is None:
             x_hat, f = self.forward(x, return_features=True)
-        # DEBUG print("x_hat", x_hat)
-        # DEBUG print("x", x)
         batch_size, num_layers, activation_dim = x.shape
         x = x[:, self.target_decoder_layer].repeat_interleave(len(self.feature_indices), dim=0)
-
         assert x.shape == x_hat.shape
-        l2_loss = th.linalg.norm(x - x_hat, dim=-1).sum() / batch_size
-        # DEBUG print("l2_loss", l2_loss)
-        # DEBUG print("decnorm", self.ae.decoder.weight.norm())
-        # DEBUG print("encnorm", self.ae.encoder.weight.norm())
 
-        # l2_loss.backward()
-        # # DEBUG print("scaler", self.feature_scaler.scaler.grad.norm())
-        # exit()
+        l2_loss = th.linalg.norm(x - x_hat, dim=-1).sum() / batch_size
+
         scalars = self.feature_scaler.act_func(self.feature_scaler.scaler)
         num_pos_scalars = (scalars > 1e-6).sum().item()
         num_scalars = scalars.numel()
@@ -415,6 +337,24 @@ class IndividualFeatureScalerTrainer(CrossCoderTrainer):
         min_scalars = scalars.min().item()
         max_scalars = scalars.max().item()
         mean_scalars = scalars.mean().item()
+
+        # Reshape to (batch_size, num_features, activation_dim) to compute per-feature stats
+        x_reshaped = x.view(batch_size, len(self.feature_indices), activation_dim)
+        x_hat_reshaped = x_hat.view(batch_size, len(self.feature_indices), activation_dim)
+
+        # Calculate variance explained per feature intervention
+        total_variance = th.var(x_reshaped, dim=0)
+        total_variance = total_variance.sum(dim=1)  # [num_features]
+        assert total_variance.shape == (len(self.feature_indices),)
+        residual_variance = th.var(x_reshaped - x_hat_reshaped, dim=0).sum(dim=1)  # [num_features]
+        assert residual_variance.shape == (len(self.feature_indices),)
+        frac_variance_explained_per_feature = 1 - residual_variance / total_variance  # [num_features]
+        assert frac_variance_explained_per_feature.shape == (len(self.feature_indices),)
+
+        # Overall variance explained
+        total_variance_all = total_variance.sum()
+        residual_variance_all = residual_variance.sum() 
+        frac_variance_explained = 1 - residual_variance_all / total_variance_all
 
         if not logging:
             return l2_loss
@@ -432,7 +372,9 @@ class IndividualFeatureScalerTrainer(CrossCoderTrainer):
                     # needed to use the train_SAE script from dictionary_learning
                     "deads" : None,
                     # needed to use the train_SAE script from dictionary_learning
-                    "frac_deads" : th.zeros(x.shape[0]) 
+                    "frac_deads" : th.zeros(x.shape[0]),
+                    "frac_variance_explained_per_feature" : frac_variance_explained_per_feature,
+                    "total_frac_variance_explained" : frac_variance_explained.item()
                 }
             )
 
