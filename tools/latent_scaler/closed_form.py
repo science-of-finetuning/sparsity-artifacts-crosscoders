@@ -1,4 +1,3 @@
-# %%
 import torch as th
 from typing import Callable
 from dictionary_learning import CrossCoder
@@ -9,7 +8,10 @@ from dictionary_learning.cache import PairedActivationCache
 import numpy as np
 from loguru import logger
 
-def remove_latents(activation: th.Tensor, latent_activations: th.Tensor, latent_vectors: th.Tensor) -> th.Tensor:
+
+def remove_latents(
+    activation: th.Tensor, latent_activations: th.Tensor, latent_vectors: th.Tensor
+) -> th.Tensor:
     # activation: N x dim_model
     # latent_vectors: num_latent_vectors x dim_model
     # latent_activations: N x num_latent_vectors
@@ -30,11 +32,15 @@ def remove_latents(activation: th.Tensor, latent_activations: th.Tensor, latent_
     latent_vectors_reshaped = latent_vectors.unsqueeze(1).repeat(1, N, 1)
     assert latent_vectors_reshaped.shape == (num_latent_vectors, N, dim_model)
     # scale by latent_activations
-    latent_activations_reshaped = latent_activations.T.unsqueeze(-1) # (num_latent_vectors, N, 1)
+    latent_activations_reshaped = latent_activations.T.unsqueeze(
+        -1
+    )  # (num_latent_vectors, N, 1)
     assert latent_activations_reshaped.shape == (num_latent_vectors, N, 1)
 
     # remove the latents
-    activation_stacked = activation_stacked - (latent_vectors_reshaped * latent_activations_reshaped)
+    activation_stacked = activation_stacked - (
+        latent_vectors_reshaped * latent_activations_reshaped
+    )
     assert activation_stacked.shape == (num_latent_vectors, N, dim_model)
     return activation_stacked
 
@@ -47,6 +53,7 @@ def closed_form_scalars(
     dataloader: DataLoader,
     crosscoder: CrossCoder,
     activation_postprocessing_fn: Callable[[th.Tensor], th.Tensor],
+    latent_activation_postprocessing_fn: Callable[[th.Tensor], th.Tensor] = None,
     device: th.device = th.device("cuda"),
 ) -> th.Tensor:
     # beta = (latent_vector.T @ (data.T @ latent_vector) / ((latent_vector.norm() ** 2) * (latent_activations.norm() ** 2))
@@ -93,9 +100,16 @@ def closed_form_scalars(
         batch_size_current = batch.shape[0]
         batch = batch.to(device)
         latent_activations = crosscoder.encode(batch)
+        if latent_activation_postprocessing_fn is not None:
+            latent_activations = latent_activation_postprocessing_fn(latent_activations)
         assert latent_activations.shape == (batch_size_current, dict_size)
+
         Y_batch = activation_postprocessing_fn(
-            batch, crosscoder=crosscoder, latent_activations=latent_activations
+            batch,
+            crosscoder=crosscoder,
+            latent_activations=latent_activations,
+            latent_indices=latent_indices,
+            latent_vectors=latent_vectors,
         )
         if len(Y_batch.shape) == 3:
             assert Y_batch.shape == (num_latent_vectors, batch_size_current, dim_model)
@@ -203,7 +217,7 @@ def test_closed_form_scalars(
 
     latent_activations = th.randn(N, num_latent_vectors, dtype=dtype, device=device)
 
-    # randomly scale the latent vectors
+    # randomly scale the latent vectors
     for i in range(num_latent_vectors):
         latent_vectors[i] = latent_vectors[i] * th.randn(1, dtype=dtype, device=device)
 
@@ -280,10 +294,7 @@ def test_closed_form_scalars(
         print("Max error: ", th.max(th.abs(beta - beta_ground_truth)))
 
 
-# %%
-if __name__ == "__main__":
-    # %%
-    verbose = True
+def run_tests(verbose=False):
     test_closed_form_scalars(
         dim_model=10, num_latent_vectors=2, N=100, batch_size=25, verbose=verbose
     )
@@ -339,208 +350,3 @@ if __name__ == "__main__":
         separate_data_per_latent_vector=True,
         verbose=verbose,
     )
-    # %%
-    cc = CrossCoder.from_pretrained(
-        "Butanium/gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04", from_hub=True
-    )
-    cc = cc.to("cuda")
-
-    # %%
-    activation_store_dir = Path("/workspace/data/activations/")
-    dataset_split = "train"
-    batch_size = 256
-    n = 20_000_000
-
-    BASE_MODEL = "gemma-2-2b"
-    INSTRUCT_MODEL = "gemma-2-2b-it"
-    activation_store_dir = Path(activation_store_dir)
-
-    base_model_dir = activation_store_dir / BASE_MODEL
-    instruct_model_dir = activation_store_dir / INSTRUCT_MODEL
-
-    base_model_fineweb = base_model_dir / "fineweb-1m-sample" / dataset_split
-    base_model_lmsys_chat = (
-        base_model_dir / "lmsys-chat-1m-gemma-formatted" / dataset_split
-    )
-    instruct_model_fineweb = instruct_model_dir / "fineweb-1m-sample" / dataset_split
-    instruct_model_lmsys_chat = (
-        instruct_model_dir / "lmsys-chat-1m-gemma-formatted" / dataset_split
-    )
-
-    submodule_name = f"layer_13_out"
-
-    fineweb_cache = PairedActivationCache(
-        base_model_fineweb / submodule_name, instruct_model_fineweb / submodule_name
-    )
-    lmsys_chat_cache = PairedActivationCache(
-        base_model_lmsys_chat / submodule_name,
-        instruct_model_lmsys_chat / submodule_name,
-    )
-
-    dataset = th.utils.data.ConcatDataset([fineweb_cache, lmsys_chat_cache])
-
-    # %%
-    it_decoder = cc.decoder.weight[1, :, :].clone()
-    base_decoder = cc.decoder.weight[0, :, :].clone()
-
-    n_per_dataset = n // 2
-    test_idx = th.cat(
-        [th.arange(n_per_dataset), th.arange(n_per_dataset) + len(fineweb_cache)]
-    )
-    # Get the text indices from the validation dataset
-    dataset = th.utils.data.Subset(dataset, test_idx)
-    print("Number of activations: ", len(dataset))
-
-    dataloader = th.utils.data.DataLoader(
-        dataset, batch_size=batch_size, shuffle=False, pin_memory=True, num_workers=10
-    )
-
-    # %%
-    chat_only_indices = th.load(
-        activation_store_dir / ".." / "only_it_decoder_feature_indices.pt"
-    )
-
-    # %%
-    def load_base_activation(batch, **kwargs):
-        return batch[:, 0, :]
-
-
-    # %%
-    def load_base_error(
-        batch, crosscoder: CrossCoder, latent_activations: th.Tensor, **kwargs
-    ):
-        reconstruction = crosscoder.decode(latent_activations)
-        return batch[:, 0, :] - remove_latents(reconstruction[:, 0, :], latent_activations, base_decoder[chat_only_indices])
-
-
-    def load_base_reconstruction(
-        batch, crosscoder: CrossCoder, latent_activations: th.Tensor, **kwargs
-    ):
-        reconstruction = crosscoder.decode(latent_activations)
-        return remove_latents(reconstruction[:, 0, :], latent_activations[:, chat_only_indices], base_decoder[chat_only_indices])
-
-    def load_chat_reconstruction(
-        batch, crosscoder: CrossCoder, latent_activations: th.Tensor, **kwargs
-    ):
-        reconstruction = crosscoder.decode(latent_activations)
-        return remove_latents(reconstruction[:, 0, :], latent_activations[:, chat_only_indices], it_decoder[chat_only_indices])
-
-    def load_chat_error(
-        batch, crosscoder: CrossCoder, latent_activations: th.Tensor, **kwargs
-    ):
-        reconstruction = crosscoder.decode(latent_activations)
-        return batch[:, 0, :] - remove_latents(reconstruction[:, 0, :], latent_activations[:, chat_only_indices], it_decoder[chat_only_indices])
-
-    results_dir = Path("/workspace/data/results/") / "closed_form_scalars"
-    results_dir.mkdir(parents=True, exist_ok=True)
-    # %%
-    betas_base_reconstruction, count_active_base_reconstruction = closed_form_scalars(
-        it_decoder[chat_only_indices],
-        chat_only_indices,
-        dataloader,
-        cc,
-        load_base_reconstruction,
-        device=th.device("cuda"),
-    )
-    th.save(betas_base_reconstruction, results_dir / "betas_base_reconstruction.pt")
-    th.save(count_active_base_reconstruction, results_dir / "count_active_base_reconstruction.pt")
-    # %%
-    betas_base_error, count_active_base_error = closed_form_scalars(
-        it_decoder[chat_only_indices],
-        chat_only_indices,
-        dataloader,
-        cc,
-        load_base_error,
-        device=th.device("cuda"),
-    )
-    th.save(betas_base_error, results_dir / "betas_base_error.pt")
-    th.save(count_active_base_error, results_dir / "count_active_base_error.pt")
-    # %%
-    betas_it_reconstruction, count_active_it_reconstruction = closed_form_scalars(
-        it_decoder[chat_only_indices],
-        chat_only_indices,
-        dataloader,
-        cc,
-        load_chat_reconstruction,
-        device=th.device("cuda"),
-    )
-    th.save(betas_it_reconstruction, results_dir / "betas_it_reconstruction.pt")
-    th.save(count_active_it_reconstruction, results_dir / "count_active_it_reconstruction.pt")
-    # %%
-    betas_it_error, count_active_it_error = closed_form_scalars(
-        it_decoder[chat_only_indices],
-        chat_only_indices,
-        dataloader,
-        cc,
-        load_chat_error,
-        device=th.device("cuda"),
-    )
-    th.save(betas_it_error, results_dir / "betas_it_error.pt")
-    th.save(count_active_it_error, results_dir / "count_active_it_error.pt")
-
-    # %%
-
-
-# # %%
-# print("Number of nans: ", (betas.isnan()).sum())
-# # %%
-# non_nan_betas = betas[~betas.isnan()]
-# # %%
-# # Plot the betas
-# import matplotlib.pyplot as plt
-
-# plt.hist(non_nan_betas.cpu().numpy(), bins=100)
-# plt.yscale("log")
-# plt.show()
-# # Plot zoomed histogram around 1
-# plt.figure(figsize=(10, 6))
-# plt.hist(non_nan_betas[non_nan_betas < 10].cpu().numpy(), bins=100)
-# plt.title("Zoomed histogram (betas < 10)")
-# plt.xlabel("Beta values")
-# plt.ylabel("Count")
-# plt.yscale("log")
-# plt.tight_layout()
-# plt.show()
-# # %%
-# # plot the count_active
-# # Plot full histogram
-# plt.figure(figsize=(12, 4))
-# plt.subplot(121)
-
-# plt.hist(count_active.cpu().numpy(), bins=100)
-# plt.title("Full histogram")
-
-
-# # Plot zoomed histogram
-# plt.subplot(122)
-# plt.hist(count_active.cpu().numpy(), bins=100, range=(0, 100))
-# plt.title("Zoomed histogram (counts < 100)")
-
-# plt.tight_layout()
-# plt.show()
-# # %%
-# max_beta = np.nanargmax(betas.cpu().numpy())
-# print("Max beta index: ", chat_only_indices[max_beta])
-# print("Max beta value: ", betas[max_beta])
-# print("Max active count: ", count_active[max_beta])
-# # %%
-# # Create 2D histogram of betas vs active counts for betas > 5
-# plt.figure(figsize=(10, 6))
-
-# mask = betas > 1000
-# x = betas[mask].cpu().numpy()
-# y = count_active[mask].cpu().numpy()
-
-# plt.hist2d(x, y, bins=50, cmap="viridis")
-# plt.colorbar(label="Count")
-
-# plt.xlabel("Beta values")
-# plt.ylabel("Active count")
-# plt.title("2D histogram of betas > 5 vs their active counts")
-
-# plt.tight_layout()
-# plt.show()
-# # %%
-
-
-# # %%
