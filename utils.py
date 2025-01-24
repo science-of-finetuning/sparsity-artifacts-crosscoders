@@ -1,5 +1,6 @@
 import torch as th
 import numpy as np
+from collections import defaultdict
 from tqdm.auto import tqdm
 import torch.nn.functional as F
 from torch.nn.functional import cosine_similarity, cross_entropy, kl_div
@@ -15,7 +16,7 @@ from torchmetrics.aggregation import BaseAggregator
 import matplotlib.pyplot as plt
 import plotly.express as px
 import plotly.graph_objects as go
-
+from dictionary_learning import CrossCoder
 
 template_path = (
     Path(__file__).parent / "templates" / "gemma_chat_template_ctrl_tokens.jinja"
@@ -317,19 +318,21 @@ class RunningMeanStd:
         return self.mean, self.var, self.count
 
 
-df = None
+dfs = defaultdict(lambda: None)
+df_hf_repo = {"l13_crosscoder": "Butanium/max-activating-examples-gemma-2-2b-l13-mu4.1e-02-lr1e-04"}
 
-
-def feature_df():
-    global df
-    if df is None:
+def feature_df(crosscoder=None):
+    if crosscoder is None:
+        crosscoder = "l13_crosscoder"
+    global dfs
+    if dfs[crosscoder] is None:
         df_path = hf_hub_download(
-            repo_id="Butanium/max-activating-examples-gemma-2-2b-l13-mu4.1e-02-lr1e-04",
+            repo_id=df_hf_repo[crosscoder],
             filename="feature_df.csv",
             repo_type="dataset",
         )
-        df = pd.read_csv(df_path, index_col=0)
-    return df
+        dfs[crosscoder] = pd.read_csv(df_path, index_col=0)
+    return dfs[crosscoder]
 
 
 def base_only_latent_indices():
@@ -351,15 +354,18 @@ def shared_latent_indices():
 
 
 class CCLatent:
-    def __init__(self, id_: int):
+    def __init__(self, id_: int, crosscoder=None):
         self.id = id_
         self.row = feature_df().loc[id_]
         self.stats = self.row.to_dict()
         for k, v in self.stats.items():
             setattr(self, k.replace(" ", "_").replace("%", "pct"), v)
+        if crosscoder is None:
+            crosscoder = "l13_crosscoder"
+        self.crosscoder = crosscoder
 
     def is_chat_only(self):
-        return self.tag == "Chat only"
+        return self.tag == "Chat only" or self.tag == "IT only"
 
     def is_base_only(self):
         return self.tag == "Base only"
@@ -375,7 +381,20 @@ class CCLatent:
 
     def __repr__(self) -> str:
         return self.row.__repr__()
+    
+    def base_decoder_vector(self):
+        return _crosscoder(self.crosscoder).decoder.weight[0][self.id]
 
+    def chat_decoder_vector(self):
+        return _crosscoder(self.crosscoder).decoder.weight[1][self.id]
+
+    def auto_decoder_vector(self):
+        if self.is_chat_only():
+            return self.chat_decoder_vector()
+        elif self.is_base_only():
+            return self.base_decoder_vector()
+        else:
+            raise ValueError(f"Cannot get auto decoder vector for {self.tag}")
 
 def apply_connor_template(conv):
     if isinstance(conv[0], list):
@@ -386,6 +405,28 @@ def apply_connor_template(conv):
             for msg in conv
         ]
     )
+
+
+
+def load_crosscoder(crosscoder=None):
+    if crosscoder is None:
+        crosscoder = "l13_crosscoder"
+    if crosscoder == "l13_crosscoder":
+        return CrossCoder.from_pretrained(
+            "Butanium/gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04", from_hub=True
+        )
+    else:
+        raise ValueError(f"Unknown crosscoder: {crosscoder}")
+
+crosscoders = defaultdict(lambda: None)
+def _crosscoder(crosscoder=None):
+    global crosscoders
+    if crosscoder is None:
+        crosscoder = "l13_crosscoder"
+    if crosscoders[crosscoder] is None:
+        crosscoders[crosscoder] = load_crosscoder(crosscoder)
+    return crosscoders[crosscoder]
+
 
 
 """
