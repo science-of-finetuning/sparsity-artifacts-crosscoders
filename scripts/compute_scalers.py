@@ -13,12 +13,14 @@ from loguru import logger
 import argparse
 import os
 th.set_grad_enabled(False)
+th.set_float32_matmul_precision('highest')
 
 from tools.latent_scaler.closed_form import (
     remove_latents,
     closed_form_scalars,
     run_tests,
 )
+from tools.utils import load_connor_crosscoder
 
 def compute_max_activations(dataloader, cc, device):
     max_activations = th.zeros(cc.dict_size, device=device)
@@ -37,7 +39,6 @@ def compute_max_activations(dataloader, cc, device):
 def load_base_activation(batch, **kwargs):
     return batch[:, 0, :]
 
-
 def load_base_error(
     batch,
     crosscoder: CrossCoder,
@@ -51,7 +52,6 @@ def load_base_error(
         latent_activations[:, latent_indices],
         base_decoder[latent_indices],
     )
-
 
 def load_base_reconstruction(
     batch,
@@ -77,7 +77,7 @@ def load_chat_reconstruction(
 ):
     reconstruction = crosscoder.decode(latent_activations)
     return remove_latents(
-        reconstruction[:, 0, :], latent_activations[:, latent_indices], latent_vectors
+        reconstruction[:, 1, :], latent_activations[:, latent_indices], latent_vectors
     )
 
 
@@ -90,10 +90,9 @@ def load_chat_error(
     **kwargs,
 ):
     reconstruction = crosscoder.decode(latent_activations)
-    return batch[:, 0, :] - remove_latents(
-        reconstruction[:, 0, :], latent_activations[:, latent_indices], latent_vectors
+    return batch[:, 1, :] - remove_latents(
+        reconstruction[:, 1, :], latent_activations[:, latent_indices], latent_vectors
     )
-
 
 def main():
     parser = argparse.ArgumentParser()
@@ -107,11 +106,12 @@ def main():
         "--activation-store-dir", type=Path, default="/workspace/data/activations/"
     )
     parser.add_argument("--dataset-split", type=str, default="train")
-    parser.add_argument("--batch-size", type=int, default=256)
+    parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("-N", "--num-samples", type=int, default=20_000_000)
     parser.add_argument("--base-model", type=str, default="gemma-2-2b")
     # parser.add_argument("--latent-df-path", type=str, default="Butanium/max-activating-examples-gemma-2-2b-l13-mu4.1e-02-lr1e-04")
     parser.add_argument("--instruct-model", type=str, default="gemma-2-2b-it")
+    parser.add_argument("--chat-only-indices-path", type=Path, default="/workspace/data/only_it_decoder_feature_indices.pt")
     parser.add_argument("--layer", type=int, default=13)
     parser.add_argument(
         "--results-dir",
@@ -126,7 +126,20 @@ def main():
         default=None,
         help="If not None, only consider latents with more than this percentage of active the max activation.",
     )
+    parser.add_argument("--chat-error", action="store_true")
+    parser.add_argument("--chat-reconstruction", action="store_true")
+    parser.add_argument("--base-error", action="store_true")
+    parser.add_argument("--base-reconstruction", action="store_true")
+    parser.add_argument("--connor-crosscoder", action="store_true")
     args = parser.parse_args()
+
+
+    if not args.chat_error and not args.chat_reconstruction and not args.base_error and not args.base_reconstruction:
+        logger.info("No computations selected, running all")
+        args.chat_error = True
+        args.chat_reconstruction = True
+        args.base_error = True
+        args.base_reconstruction = True
 
     th.manual_seed(args.seed)
     np.random.seed(args.seed)
@@ -137,7 +150,7 @@ def main():
     device = th.device(args.device)
 
     # Run tests first
-    # run_tests(verbose=True)
+    run_tests(verbose=True)
 
     if args.threshold_active_latents is not None:
         assert args.threshold_active_latents > 0 and args.threshold_active_latents < 1, "Threshold must be between 0 and 1"
@@ -149,7 +162,13 @@ def main():
     #     latent_df = pd.read_csv(hf_hub_download(args.latent_df_path,filename="feature_df.csv", repo_type="dataset"))
 
     # Load crosscoder
-    cc = CrossCoder.from_pretrained(args.crosscoder_path, from_hub=True)
+    if args.connor_crosscoder:
+        cc = load_connor_crosscoder()
+        lmsys_split = f"{args.dataset_split}-coltext_base_format"
+        args.crosscoder_path = "ckkissane/crosscoder-gemma-2-2b-model-diff"
+    else:
+        cc = CrossCoder.from_pretrained(args.crosscoder_path, from_hub=True)
+        lmsys_split = args.dataset_split
     cc = cc.to(device)
 
     # Setup paths
@@ -159,15 +178,14 @@ def main():
 
     base_model_fineweb = base_model_dir / "fineweb-1m-sample" / args.dataset_split
     base_model_lmsys_chat = (
-        base_model_dir / "lmsys-chat-1m-gemma-formatted" / args.dataset_split
+        base_model_dir / "lmsys-chat-1m-gemma-formatted" / lmsys_split
     )
     instruct_model_fineweb = (
         instruct_model_dir / "fineweb-1m-sample" / args.dataset_split
     )
     instruct_model_lmsys_chat = (
-        instruct_model_dir / "lmsys-chat-1m-gemma-formatted" / args.dataset_split
+        instruct_model_dir / "lmsys-chat-1m-gemma-formatted" / lmsys_split
     )
-
     submodule_name = f"layer_{args.layer}_out"
 
     # Load caches and create dataset
@@ -202,7 +220,7 @@ def main():
     )
 
     chat_only_indices = th.load(
-        activation_store_dir / ".." / "only_it_decoder_feature_indices.pt"
+        args.chat_only_indices_path, weights_only=True
     )
 
 
@@ -226,15 +244,21 @@ def main():
             return latent_activations
         latent_activation_postprocessing_fn = jumprelu_latent_activations
     # Create results directory
-    args.results_dir.mkdir(parents=True, exist_ok=True)
-
+    results_dir = args.results_dir / args.crosscoder_path.replace("/", "_")
+    results_dir.mkdir(parents=True, exist_ok=True)
+    
+    computations = []
+    if args.base_reconstruction:
+        computations.append(("base_reconstruction", load_base_reconstruction))
+    if args.base_error:
+        computations.append(("base_error", load_base_error))
+    if args.chat_reconstruction:
+        computations.append(("it_reconstruction", load_chat_reconstruction))
+    if args.chat_error:
+        computations.append(("it_error", load_chat_error))
+    
     # Run all computations
-    for name, loader_fn in [
-        ("base_reconstruction", load_base_reconstruction),
-        ("base_error", load_base_error),
-        ("it_reconstruction", load_chat_reconstruction),
-        ("it_error", load_chat_error),
-    ]:
+    for name, loader_fn in computations:
         if latent_activation_postprocessing_fn is not None:
             name += f"_jumprelu{args.threshold_active_latents}"
         logger.info(f"Computing {name}")
@@ -247,8 +271,8 @@ def main():
             device=device,
             latent_activation_postprocessing_fn=latent_activation_postprocessing_fn,
         )
-        th.save(betas, args.results_dir / f"betas_{name}.pt")
-        th.save(count_active, args.results_dir / f"count_active_{name}.pt")
+        th.save(betas, results_dir / f"betas_{name}.pt")
+        th.save(count_active, results_dir / f"count_active_{name}.pt")
 
 
 if __name__ == "__main__":

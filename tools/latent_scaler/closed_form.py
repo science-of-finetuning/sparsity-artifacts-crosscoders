@@ -87,7 +87,7 @@ def closed_form_scalars(
     dim_model = latent_vectors.size(1)
     num_latent_vectors = latent_vectors.size(0)
     dict_size = crosscoder.dict_size
-
+    print(f"dim_model: {dim_model}, num_latent_vectors: {num_latent_vectors}, dict_size: {dict_size}")
     A = th.zeros(
         (dim_model, num_latent_vectors), device=device
     )  # data.T @ latent_activations
@@ -166,6 +166,8 @@ def test_closed_form_scalars(
     dtype=th.float64,
     device=th.device("cuda"),
     verbose=False,
+    rtol=1e-5,
+    atol=1e-5,
 ):
     latent_vectors = []
     for i in range(num_latent_vectors):
@@ -294,21 +296,21 @@ def test_closed_form_scalars(
         print("Max error: ", th.max(th.abs(beta - beta_ground_truth)))
 
 
-def run_tests(verbose=False):
+def run_tests(verbose=False, dtype=th.float64, rtol=1e-5, atol=1e-5):
     test_closed_form_scalars(
-        dim_model=10, num_latent_vectors=2, N=100, batch_size=25, verbose=verbose
+        dim_model=10, num_latent_vectors=2, N=100, batch_size=25, verbose=verbose, dtype=dtype
     )
     test_closed_form_scalars(
-        dim_model=100, num_latent_vectors=2, N=1000, batch_size=50, verbose=verbose
+        dim_model=100, num_latent_vectors=2, N=1000, batch_size=50, verbose=verbose, dtype=dtype
     )
     test_closed_form_scalars(
-        dim_model=100, num_latent_vectors=10, N=1000, batch_size=50, verbose=verbose
+        dim_model=100, num_latent_vectors=10, N=1000, batch_size=50, verbose=verbose, dtype=dtype
     )
     test_closed_form_scalars(
-        dim_model=1000, num_latent_vectors=128, N=10000, batch_size=100, verbose=verbose
+        dim_model=1000, num_latent_vectors=128, N=10000, batch_size=100, verbose=verbose, dtype=dtype
     )
     test_closed_form_scalars(
-        dim_model=1000, num_latent_vectors=128, N=10000, batch_size=200, verbose=verbose
+        dim_model=1000, num_latent_vectors=128, N=10000, batch_size=200, verbose=verbose, dtype=dtype
     )
     test_closed_form_scalars(
         dim_model=10,
@@ -317,6 +319,7 @@ def run_tests(verbose=False):
         batch_size=25,
         separate_data_per_latent_vector=True,
         verbose=verbose,
+        dtype=dtype,
     )
     test_closed_form_scalars(
         dim_model=100,
@@ -325,6 +328,7 @@ def run_tests(verbose=False):
         batch_size=50,
         separate_data_per_latent_vector=True,
         verbose=verbose,
+        dtype=dtype,
     )
     test_closed_form_scalars(
         dim_model=100,
@@ -333,6 +337,7 @@ def run_tests(verbose=False):
         batch_size=50,
         separate_data_per_latent_vector=True,
         verbose=verbose,
+        dtype=dtype,
     )
     test_closed_form_scalars(
         dim_model=1000,
@@ -341,6 +346,7 @@ def run_tests(verbose=False):
         batch_size=100,
         separate_data_per_latent_vector=True,
         verbose=verbose,
+        dtype=dtype,
     )
     test_closed_form_scalars(
         dim_model=1000,
@@ -349,4 +355,5 @@ def run_tests(verbose=False):
         batch_size=200,
         separate_data_per_latent_vector=True,
         verbose=verbose,
+        dtype=dtype,
     )

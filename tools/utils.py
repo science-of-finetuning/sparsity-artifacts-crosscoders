@@ -1,9 +1,8 @@
-# %%
 from huggingface_hub import hf_hub_download
 import torch as th
 import json
 from dictionary_learning import CrossCoder
-
+import pandas as pd
 
 def load_connor_crosscoder():
     path = "blocks.14.hook_resid_pre"
@@ -17,7 +16,7 @@ def load_connor_crosscoder():
         cfg = json.load(f)
 
     # Load weights
-    state_dict = th.load(weights_path, map_location=cfg["device"])
+    state_dict = th.load(weights_path, map_location=cfg["device"], weights_only=True)
 
     crosscoder = CrossCoder(
         activation_dim=cfg["d_in"],
@@ -26,9 +25,15 @@ def load_connor_crosscoder():
         num_decoder_layers=2,
     )
 
-    crosscoder.encoder.weight = th.nn.Parameter(state_dict["W_enc"].permute(1, 0, 2))
+    crosscoder.encoder.weight = th.nn.Parameter(state_dict["W_enc"])
     crosscoder.encoder.bias = th.nn.Parameter(state_dict["b_enc"])
     crosscoder.decoder.weight = th.nn.Parameter(state_dict["W_dec"].permute(1, 0, 2))
     crosscoder.decoder.bias = th.nn.Parameter(state_dict["b_dec"])
 
     return crosscoder
+
+
+def load_latents_df(repo_id: str = "Butanium/max-activating-examples-gemma-2-2b-l13-mu4.1e-02-lr1e-04"):
+    df_path = hf_hub_download(repo_id=repo_id, filename="feature_df.csv", repo_type="dataset")
+    df = pd.read_csv(df_path, index_col=0)
+    return df
