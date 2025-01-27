@@ -1,14 +1,16 @@
+import json
+import warnings
+from pathlib import Path
+from typing import Any, Union
+
 import torch as th
 import numpy as np
 from collections import defaultdict
 from tqdm.auto import tqdm
 import torch.nn.functional as F
 from torch.nn.functional import cosine_similarity, cross_entropy, kl_div
-import warnings
-from pathlib import Path
 import pandas as pd
 from huggingface_hub import hf_hub_download
-from typing import Any, Union
 import networkx as nx
 
 from torch import Tensor
@@ -319,7 +321,10 @@ class RunningMeanStd:
 
 
 dfs = defaultdict(lambda: None)
-df_hf_repo = {"l13_crosscoder": "Butanium/max-activating-examples-gemma-2-2b-l13-mu4.1e-02-lr1e-04"}
+df_hf_repo = {
+    "l13_crosscoder": "Butanium/max-activating-examples-gemma-2-2b-l13-mu4.1e-02-lr1e-04"
+}
+
 
 def feature_df(crosscoder=None):
     if crosscoder is None:
@@ -381,7 +386,7 @@ class CCLatent:
 
     def __repr__(self) -> str:
         return self.row.__repr__()
-    
+
     def base_decoder_vector(self):
         return _crosscoder(self.crosscoder).decoder.weight[0][self.id]
 
@@ -396,6 +401,7 @@ class CCLatent:
         else:
             raise ValueError(f"Cannot get auto decoder vector for {self.tag}")
 
+
 def apply_connor_template(conv):
     if isinstance(conv[0], list):
         return [apply_connor_template(c) for c in conv]
@@ -407,6 +413,33 @@ def apply_connor_template(conv):
     )
 
 
+def load_connor_crosscoder():
+    path = "blocks.14.hook_resid_pre"
+    repo_id = "ckkissane/crosscoder-gemma-2-2b-model-diff"
+    # Download config and weights
+    config_path = hf_hub_download(repo_id=repo_id, filename=f"{path}/cfg.json")
+    weights_path = hf_hub_download(repo_id=repo_id, filename=f"{path}/cc_weights.pt")
+
+    # Load config
+    with open(config_path, "r") as f:
+        cfg = json.load(f)
+
+    # Load weights
+    state_dict = th.load(weights_path, map_location=cfg["device"])
+
+    crosscoder = CrossCoder(
+        activation_dim=cfg["d_in"],
+        dict_size=cfg["dict_size"],
+        num_layers=2,
+        num_decoder_layers=2,
+    )
+
+    crosscoder.encoder.weight = th.nn.Parameter(state_dict["W_enc"].permute(1, 0, 2))
+    crosscoder.encoder.bias = th.nn.Parameter(state_dict["b_enc"])
+    crosscoder.decoder.weight = th.nn.Parameter(state_dict["W_dec"].permute(1, 0, 2))
+    crosscoder.decoder.bias = th.nn.Parameter(state_dict["b_dec"])
+    return crosscoder
+
 
 def load_crosscoder(crosscoder=None):
     if crosscoder is None:
@@ -415,10 +448,15 @@ def load_crosscoder(crosscoder=None):
         return CrossCoder.from_pretrained(
             "Butanium/gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04", from_hub=True
         )
+    elif crosscoder == "connor":
+        return load_connor_crosscoder()
     else:
         raise ValueError(f"Unknown crosscoder: {crosscoder}")
 
+
 crosscoders = defaultdict(lambda: None)
+
+
 def _crosscoder(crosscoder=None):
     global crosscoders
     if crosscoder is None:
@@ -426,7 +464,6 @@ def _crosscoder(crosscoder=None):
     if crosscoders[crosscoder] is None:
         crosscoders[crosscoder] = load_crosscoder(crosscoder)
     return crosscoders[crosscoder]
-
 
 
 """
