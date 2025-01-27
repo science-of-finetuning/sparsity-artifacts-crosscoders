@@ -425,19 +425,18 @@ def load_connor_crosscoder():
         cfg = json.load(f)
 
     # Load weights
-    state_dict = th.load(weights_path, map_location=cfg["device"])
+    state_dict = th.load(weights_path, map_location=cfg["device"], weights_only=True)
 
     crosscoder = CrossCoder(
         activation_dim=cfg["d_in"],
         dict_size=cfg["dict_size"],
         num_layers=2,
-        num_decoder_layers=2,
     )
 
-    crosscoder.encoder.weight = th.nn.Parameter(state_dict["W_enc"].permute(1, 0, 2))
-    crosscoder.encoder.bias = th.nn.Parameter(state_dict["b_enc"])
-    crosscoder.decoder.weight = th.nn.Parameter(state_dict["W_dec"].permute(1, 0, 2))
-    crosscoder.decoder.bias = th.nn.Parameter(state_dict["b_dec"])
+    crosscoder.encoder.weight[:] = state_dict["W_enc"]
+    crosscoder.encoder.bias[:] = state_dict["b_enc"]
+    crosscoder.decoder.weight[:] = state_dict["W_dec"].permute(1, 0, 2)
+    crosscoder.decoder.bias[:] = state_dict["b_dec"]
     return crosscoder
 
 
