@@ -45,7 +45,7 @@ if __name__ == "__main__":
     print(f"Saving to {target_notebook_path}")
     kwargs["extra_args"] = unknown
     print(f"Running {notebook} with {kwargs}")
-
+    kwargs["interactive"] = False
     try:
         print(source_notebook_path, target_notebook_path, kwargs)
         pm.execute_notebook(

@@ -22,9 +22,11 @@ import plotly.graph_objects as go
 from dictionary_learning import CrossCoder
 
 template_path = (
-    Path(__file__).parent / "templates" / "gemma_chat_template_ctrl_tokens.jinja"
+    Path(__file__).parent.parent / "templates" / "gemma_chat_template_ctrl_tokens.jinja"
 )
-chat_template_path = Path(__file__).parent / "templates" / "gemma_chat_template.jinja"
+chat_template_path = (
+    Path(__file__).parent.parent / "templates" / "gemma_chat_template.jinja"
+)
 with open(template_path, "r") as f:
     ctrl_template = f.read()
 with open(chat_template_path, "r") as f:
@@ -75,7 +77,7 @@ class Mean1DMetric(BaseAggregator):
         return self.mean_value / self.weight
 
 
-def compute_chunked_cosine_similarity(weights1, weights2, chunk_size):
+def compute_chunked_cosine_similarity(weights1, weights2, chunk_size=4):
     # Calculate chunk size
     num_chunks = weights1.shape[0] // chunk_size
 
@@ -95,8 +97,8 @@ def compute_chunked_cosine_similarity(weights1, weights2, chunk_size):
         device = f"cuda:{gpu_idx}"
         if gpu_idx == 0:
             # sync
-            for id in range(th.cuda.device_count()):
-                th.cuda.synchronize(f"cuda:{id}")
+            for _id in range(th.cuda.device_count()):
+                th.cuda.synchronize(f"cuda:{_id}")
             th.cpu.synchronize()
         cosim_matrix_chunk = cosine_similarity(
             chunk.unsqueeze(1).to(device, non_blocking=True),
@@ -323,7 +325,8 @@ class RunningMeanStd:
 
 dfs = defaultdict(lambda: None)
 df_hf_repo = {
-    "l13_crosscoder": "Butanium/max-activating-examples-gemma-2-2b-l13-mu4.1e-02-lr1e-04"
+    "l13_crosscoder": "science-of-finetuning/max-activating-examples-gemma-2-2b-l13-mu4.1e-02-lr1e-04",
+    "connor": "science-of-finetuning/max-activating-examples-gemma-2-2b-l13-ckissane",
 }
 
 
@@ -339,7 +342,12 @@ def load_latent_df(crosscoder=None):
 
 
 def push_latent_df(
-    df, crosscoder=None, force=False, allow_remove_columns=None, commit_message=None
+    df,
+    crosscoder=None,
+    force=False,
+    allow_remove_columns=None,
+    commit_message=None,
+    confirm=True,
 ):
     """
     Push a new feature_df.csv to the hub.
@@ -353,34 +361,42 @@ def push_latent_df(
     """
     if crosscoder is None:
         crosscoder = "l13_crosscoder"
-    original_df = load_latent_df(crosscoder)
-    original_columns = set(original_df.columns)
-    new_columns = set(df.columns)
-    allow_remove_columns = (
-        set(allow_remove_columns) if allow_remove_columns is not None else set()
-    )
-    missing_columns = original_columns - new_columns - allow_remove_columns
-    added_columns = new_columns - original_columns
-    shared_columns = original_columns & new_columns
-    if len(missing_columns) > 0:
-        if force:
-            warnings.warn(f"Missing columns in uploaded df: {missing_columns}")
-        else:
-            raise ValueError(
-                f"Missing columns in uploaded df: {missing_columns}\n"
-                "If you want to upload the df anyway, set allow_remove_columns=your_removed_columns"
-                " and force=True"
-            )
+    if not force or confirm:
+        original_df = load_latent_df(crosscoder)
+        original_columns = set(original_df.columns)
+        new_columns = set(df.columns)
+        allow_remove_columns = (
+            set(allow_remove_columns) if allow_remove_columns is not None else set()
+        )
+        missing_columns = original_columns - new_columns - allow_remove_columns
+        added_columns = new_columns - original_columns
+        shared_columns = original_columns & new_columns
+        if len(missing_columns) > 0:
+            if force:
+                warnings.warn(f"Missing columns in uploaded df: {missing_columns}")
+            else:
+                raise ValueError(
+                    f"Missing columns in uploaded df: {missing_columns}\n"
+                    "If you want to upload the df anyway, set allow_remove_columns=your_removed_columns"
+                    " and force=True"
+                )
 
-    if len(added_columns) > 0 and not force:
-        print(f"Added columns in uploaded df: {added_columns}")
+        if len(added_columns) > 0 and not force:
+            print(f"Added columns in uploaded df: {added_columns}")
 
-    for column in shared_columns:
-        if original_df[column].dtype != df[column].dtype:
-            warnings.warn(f"Column {column} has different dtype in original and new df")
-        # diff the columns
-        if not (original_df[column] == df[column]).all():
-            print(f"Column {column} has different values in original and new df")
+        for column in shared_columns:
+            if original_df[column].dtype != df[column].dtype:
+                warnings.warn(
+                    f"Column {column} has different dtype in original and new df"
+                )
+            # diff the columns
+            if not (original_df[column].equals(df[column])):
+                print(f"Column {column} has different values in original and new df")
+    if confirm:
+        print(f"Commit message: {commit_message}")
+        r = input("Would you like to push the df to the hub? y/(n)")
+        if r != "y":
+            raise ValueError("User cancelled")
     with TemporaryDirectory() as tmpdir:
         df.to_csv(Path(tmpdir) / "feature_df.csv")
         hf_api.upload_file(
@@ -422,8 +438,9 @@ def shared_latent_indices():
 class CCLatent:
     def __init__(self, id_: int, crosscoder=None):
         self.id = id_
-        self.row = _feature_df().loc[id_]
+        self.row = _feature_df(crosscoder).loc[id_]
         self.stats = self.row.to_dict()
+        self.dead = False
         for k, v in self.stats.items():
             setattr(self, k.replace(" ", "_").replace("%", "pct"), v)
         if crosscoder is None:
@@ -726,7 +743,7 @@ def draw_networkx_nodes(
     return collections[-1] if collections else None
 
 
-def plot_component_sizes(G, title=None):
+def plot_component_sizes(G, title=None, save_path=None):
     # bar plot of the size of the connected components
     component_sizes = [len(c) for c in nx.connected_components(G)]
     print(f"found {len(component_sizes)} connected components")
@@ -745,6 +762,9 @@ def plot_component_sizes(G, title=None):
     )
     # Only show x-axis ticks for values that exist in the data
     fig.update_xaxes(tickmode="array", tickvals=sizes, type="category")
+    if save_path is not None:
+        fig.write_image(save_path / "component_sizes.png")
+        fig.write_html(save_path / "component_sizes.html")
     fig.show()
     # bar plot where x is the component size and y is the number of nodes in those components
     y = [size_counts[size] * size for size in sizes]
@@ -760,10 +780,14 @@ def plot_component_sizes(G, title=None):
     )
     # Only show x-axis ticks for values that exist in the data
     fig.update_xaxes(tickmode="array", tickvals=sizes, type="category")
+    if save_path is not None:
+        fig.write_image(save_path / "component_sizes.png")
+        fig.write_html(save_path / "component_sizes.html")
     fig.show()
 
 
-def draw_graph(G, title="", file=None):
+def draw_graph(G, crosscoder, title="", file=None):
+    df = _feature_df(crosscoder)
     plt.figure(figsize=(15, 5))
     pos = nx.spring_layout(G, k=0.035)  # reduced k from default
 
@@ -774,29 +798,28 @@ def draw_graph(G, title="", file=None):
     base_only_nodes = []
     shared_nodes = []
     unknown_nodes = []
-    df = _feature_df()
     for node in G.nodes():
 
-        tag = df.loc[int(node[1:]), "tag"]
-        if tag == "IT only":
+        latent = CCLatent(int(node[1:]), crosscoder)
+        if latent.is_chat_only():
             node_colors.append("red")
             it_only_nodes.append(node)
-        elif tag == "Base only":
+        elif latent.is_base_only():
             node_colors.append("blue")
             base_only_nodes.append(node)
-        elif tag == "Shared":
+        elif latent.is_shared():
             node_colors.append("green")
             shared_nodes.append(node)
         else:
             node_colors.append("gray")
             unknown_nodes.append(node)
         if node[0] == "i":
-            if tag == "Base only":
+            if latent.is_base_only():
                 raise Exception(f"Base only node: {node}")
             node_shapes.append("*")
         else:
             node_shapes.append("o")
-        if df.loc[int(node[1:]), "dead"]:
+        if latent.dead:
             raise Exception(f"dead node: {node}")
     # Draw nodes with colors
     draw_networkx_nodes(
@@ -823,8 +846,7 @@ def draw_graph(G, title="", file=None):
     plt.show()
 
 
-def draw_interactive_graph(G, title=""):
-    df = _feature_df()
+def draw_interactive_graph(G, crosscoder, title=""):
     pos = nx.spring_layout(G, k=0.035)  # reduced k from default
 
     # Create node color list and prepare for legend
@@ -845,14 +867,14 @@ def draw_interactive_graph(G, title=""):
         node_y.append(y)
         node_texts.append(node)  # Add node name for hover
 
-        type = df.loc[int(node[1:]), "tag"]
-        if type == "IT only":
+        latent = CCLatent(int(node[1:]), crosscoder)
+        if latent.is_chat_only():
             node_colors.append("red")
             it_only_nodes.append(node)
-        elif type == "Base only":
+        elif latent.is_base_only():
             node_colors.append("blue")
             base_only_nodes.append(node)
-        elif type == "Shared":
+        elif latent.is_shared():
             node_colors.append("green")
             shared_nodes.append(node)
         else:
@@ -864,7 +886,7 @@ def draw_interactive_graph(G, title=""):
         else:
             node_symbols.append("circle")
 
-        if df.loc[int(node[1:]), "dead"]:
+        if latent.dead:
             raise Exception(f"dead node: {node}")
 
     # Create edge traces
