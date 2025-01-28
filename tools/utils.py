@@ -338,6 +338,59 @@ def load_latent_df(crosscoder=None):
     return pd.read_csv(df_path, index_col=0)
 
 
+def push_latent_df(
+    df, crosscoder=None, force=False, allow_remove_columns=None, commit_message=None
+):
+    """
+    Push a new feature_df.csv to the hub.
+
+    Args:
+        df: the new df to push
+        crosscoder: the crosscoder to push the df for
+        force: if True, push the df even if there are missing columns
+        allow_remove_columns: if not None, a list of columns to allow to be removed
+        commit_message: the commit message to use for the push
+    """
+    if crosscoder is None:
+        crosscoder = "l13_crosscoder"
+    original_df = load_latent_df(crosscoder)
+    original_columns = set(original_df.columns)
+    new_columns = set(df.columns)
+    allow_remove_columns = (
+        set(allow_remove_columns) if allow_remove_columns is not None else set()
+    )
+    missing_columns = original_columns - new_columns - allow_remove_columns
+    added_columns = new_columns - original_columns
+    shared_columns = original_columns & new_columns
+    if len(missing_columns) > 0:
+        if force:
+            warnings.warn(f"Missing columns in uploaded df: {missing_columns}")
+        else:
+            raise ValueError(
+                f"Missing columns in uploaded df: {missing_columns}\n"
+                "If you want to upload the df anyway, set allow_remove_columns=your_removed_columns"
+                " and force=True"
+            )
+
+    if len(added_columns) > 0 and not force:
+        print(f"Added columns in uploaded df: {added_columns}")
+
+    for column in shared_columns:
+        if original_df[column].dtype != df[column].dtype:
+            warnings.warn(f"Column {column} has different dtype in original and new df")
+        # diff the columns
+        if not (original_df[column] == df[column]).all():
+            print(f"Column {column} has different values in original and new df")
+    with TemporaryDirectory() as tmpdir:
+        df.to_csv(Path(tmpdir) / "feature_df.csv")
+        hf_api.upload_file(
+            repo_id=df_hf_repo[crosscoder],
+            path_or_fileobj=Path(tmpdir) / "feature_df.csv",
+            path_in_repo="feature_df.csv",
+            repo_type="dataset",
+            commit_message=commit_message,
+        )
+
 
 def _feature_df(crosscoder=None):
     if crosscoder is None:
