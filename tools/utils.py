@@ -2,15 +2,16 @@ import json
 import warnings
 from pathlib import Path
 from typing import Any, Union
+from collections import defaultdict
+from tempfile import TemporaryDirectory
 
 import torch as th
 import numpy as np
-from collections import defaultdict
 from tqdm.auto import tqdm
 import torch.nn.functional as F
 from torch.nn.functional import cosine_similarity, cross_entropy, kl_div
 import pandas as pd
-from huggingface_hub import hf_hub_download
+from huggingface_hub import hf_hub_download, hf_api
 import networkx as nx
 
 from torch import Tensor
@@ -326,34 +327,41 @@ df_hf_repo = {
 }
 
 
-def feature_df(crosscoder=None):
+def load_latent_df(crosscoder=None):
+    if crosscoder is None:
+        crosscoder = "l13_crosscoder"
+    df_path = hf_hub_download(
+        repo_id=df_hf_repo[crosscoder],
+        filename="feature_df.csv",
+        repo_type="dataset",
+    )
+    return pd.read_csv(df_path, index_col=0)
+
+
+
+def _feature_df(crosscoder=None):
     if crosscoder is None:
         crosscoder = "l13_crosscoder"
     global dfs
     if dfs[crosscoder] is None:
-        df_path = hf_hub_download(
-            repo_id=df_hf_repo[crosscoder],
-            filename="feature_df.csv",
-            repo_type="dataset",
-        )
-        dfs[crosscoder] = pd.read_csv(df_path, index_col=0)
+        dfs[crosscoder] = load_latent_df(crosscoder)
     return dfs[crosscoder]
 
 
 def base_only_latent_indices():
-    df = feature_df()
+    df = _feature_df()
     # filter for tag = Base only
     return th.tensor(df[df["tag"] == "Base only"].index.tolist())
 
 
 def it_only_latent_indices():
-    df = feature_df()
+    df = _feature_df()
     # filter for tag = IT only
     return th.tensor(df[df["tag"] == "IT only"].index.tolist())
 
 
 def shared_latent_indices():
-    df = feature_df()
+    df = _feature_df()
     # filter for tag = Shared
     return th.tensor(df[df["tag"] == "Shared"].index.tolist())
 
@@ -361,7 +369,7 @@ def shared_latent_indices():
 class CCLatent:
     def __init__(self, id_: int, crosscoder=None):
         self.id = id_
-        self.row = feature_df().loc[id_]
+        self.row = _feature_df().loc[id_]
         self.stats = self.row.to_dict()
         for k, v in self.stats.items():
             setattr(self, k.replace(" ", "_").replace("%", "pct"), v)
@@ -713,7 +721,7 @@ def draw_graph(G, title="", file=None):
     base_only_nodes = []
     shared_nodes = []
     unknown_nodes = []
-    df = feature_df()
+    df = _feature_df()
     for node in G.nodes():
 
         tag = df.loc[int(node[1:]), "tag"]
@@ -763,7 +771,7 @@ def draw_graph(G, title="", file=None):
 
 
 def draw_interactive_graph(G, title=""):
-    df = feature_df()
+    df = _feature_df()
     pos = nx.spring_layout(G, k=0.035)  # reduced k from default
 
     # Create node color list and prepare for legend
