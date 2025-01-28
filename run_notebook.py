@@ -13,8 +13,8 @@ if __name__ == "__main__":
     os.chdir(root)
     t = time()
     parser = ArgumentParser()
-    parser.add_argument("--notebook", "-n", type=str, required=True)
-    parser.add_argument("--crosscoder-path", "-p", type=str)
+    parser.add_argument("notebook", type=str)
+    parser.add_argument("--crosscoder", "-c", type=str)
     parser.add_argument(
         "--remote",
         default=False,
@@ -37,7 +37,7 @@ if __name__ == "__main__":
         kwargs.get("exp_id", None) or (generate_slug(2) if gen_id else "")
     )
     target_notebook_path = save_path / (
-        "_".join(".".join(args.crosscoder_path.split(".")[:-1]).split("/")[-2:])
+        args.crosscoder
         + (f"_{exp_id}" if exp_id else "")
         + ".ipynb"
     )
@@ -45,7 +45,6 @@ if __name__ == "__main__":
     print(f"Saving to {target_notebook_path}")
     kwargs["extra_args"] = unknown
     print(f"Running {notebook} with {kwargs}")
-    kwargs["crosscoder_path"] = str(checkpoint_root / kwargs["crosscoder_path"])
 
     try:
         print(source_notebook_path, target_notebook_path, kwargs)
