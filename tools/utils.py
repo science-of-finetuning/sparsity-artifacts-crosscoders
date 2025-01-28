@@ -22,9 +22,9 @@ import plotly.graph_objects as go
 from dictionary_learning import CrossCoder
 
 template_path = (
-    Path(__file__).parent / "templates" / "gemma_chat_template_ctrl_tokens.jinja"
+    Path(__file__).parent.parent / "templates" / "gemma_chat_template_ctrl_tokens.jinja"
 )
-chat_template_path = Path(__file__).parent / "templates" / "gemma_chat_template.jinja"
+chat_template_path = Path(__file__).parent.parent / "templates" / "gemma_chat_template.jinja"
 with open(template_path, "r") as f:
     ctrl_template = f.read()
 with open(chat_template_path, "r") as f:
@@ -421,6 +421,7 @@ def apply_connor_template(conv):
     )
 
 
+@th.no_grad()
 def load_connor_crosscoder():
     path = "blocks.14.hook_resid_pre"
     repo_id = "ckkissane/crosscoder-gemma-2-2b-model-diff"

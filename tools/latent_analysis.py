@@ -9,11 +9,11 @@ import numpy as np
 from plotly.subplots import make_subplots
 from pycolors import TailwindColorPalette
 
-from .feature_utils import (
-    filter_dead_features,
+from .latent_utils import (
+    filter_dead_latents,
     mask_to_indices,
     remove_dead_and_filter,
-    dead_feature_indices,
+    dead_latent_indices,
 )
 
 COLORS = TailwindColorPalette()
@@ -22,7 +22,7 @@ th.set_float32_matmul_precision("high")
 
 
 @dataclass
-class Features:
+class Latents:
     base: th.Tensor
     instruction: th.Tensor
     joint: th.Tensor
@@ -53,7 +53,7 @@ def get_activations(batch, model, layer):
 
 
 @th.no_grad()
-def get_features(batch, base_model, instruction_model, ae, layer):
+def get_latents(batch, base_model, instruction_model, ae, layer):
     base_activations = get_activations(batch, base_model, layer)
     instruction_activations = get_activations(batch, instruction_model, layer)
     activations = th.stack([base_activations, instruction_activations], dim=-2).to(
@@ -61,61 +61,61 @@ def get_features(batch, base_model, instruction_model, ae, layer):
     )
     batch_size = base_activations.shape[0]
     activations = activations.view(-1, activations.shape[-2], activations.shape[-1])
-    features_joint, features_split = ae.encode(activations, return_no_sum=True)
-    # rescale features by decoder column norms
-    rescaled_features_split = features_split * ae.decoder.weight.norm(dim=2).unsqueeze(
+    latents_joint, latents_split = ae.encode(activations, return_no_sum=True)
+    # rescale latents by decoder column norms
+    rescaled_latents_split = latents_split * ae.decoder.weight.norm(dim=2).unsqueeze(
         0
     )
-    rescaled_features_joint = features_joint * ae.decoder.weight.norm(dim=2).sum(
+    rescaled_latents_joint = latents_joint * ae.decoder.weight.norm(dim=2).sum(
         dim=0, keepdim=True
     )
 
-    base_features = features_split.view(
-        batch_size, -1, features_split.shape[-2], features_split.shape[-1]
+    base_latents = latents_split.view(
+        batch_size, -1, latents_split.shape[-2], latents_split.shape[-1]
     )[..., 0, :]
-    instruction_features = features_split.view(
-        batch_size, -1, features_split.shape[-2], features_split.shape[-1]
+    instruction_latents = latents_split.view(
+        batch_size, -1, latents_split.shape[-2], latents_split.shape[-1]
     )[..., 1, :]
 
-    base_features_rescaled = rescaled_features_split.view(
+    base_latents_rescaled = rescaled_latents_split.view(
         batch_size,
         -1,
-        rescaled_features_split.shape[-2],
-        rescaled_features_split.shape[-1],
+        rescaled_latents_split.shape[-2],
+        rescaled_latents_split.shape[-1],
     )[..., 0, :]
-    instruction_features_rescaled = rescaled_features_split.view(
+    instruction_latents_rescaled = rescaled_latents_split.view(
         batch_size,
         -1,
-        rescaled_features_split.shape[-2],
-        rescaled_features_split.shape[-1],
+        rescaled_latents_split.shape[-2],
+        rescaled_latents_split.shape[-1],
     )[..., 1, :]
 
-    return Features(
-        base=base_features_rescaled,
-        instruction=instruction_features_rescaled,
-        joint=rescaled_features_joint,
-    ), Features(
-        base=base_features, instruction=instruction_features, joint=features_joint
+    return Latents(
+        base=base_latents_rescaled,
+        instruction=instruction_latents_rescaled,
+        joint=rescaled_latents_joint,
+    ), Latents(
+        base=base_latents, instruction=instruction_latents, joint=latents_joint
     )
 
 
-def filter_stack_features(features, attention_mask):
-    # features: (batch_size, seq_len, n_layers, dict_size)
+def filter_stack_latents(latents, attention_mask):
+    # latents: (batch_size, seq_len, n_layers, dict_size)
     # attention_mask: (batch_size, seq_len)
-    base_features = features.base.view(-1, features.base.shape[-1])[
+    base_latents = latents.base.view(-1, latents.base.shape[-1])[
         attention_mask.view(-1).bool()
     ]
-    instruction_features = features.instruction.view(
-        -1, features.instruction.shape[-1]
+    instruction_latents = latents.instruction.view(
+        -1, latents.instruction.shape[-1]
     )[attention_mask.view(-1).bool()]
-    joint_features = features.joint.view(-1, features.joint.shape[-1])[
+    joint_latents = latents.joint.view(-1, latents.joint.shape[-1])[
         attention_mask.view(-1).bool()
     ]
-    return Features(base_features, instruction_features, joint_features)
+    return Latents(base_latents, instruction_latents, joint_latents)
 
 
 @dataclass
-class FeatureStatistic:
+class LatentStatistic:
     avg_activation: th.Tensor
     non_zero_counts: th.Tensor
     total_tokens: int
@@ -141,10 +141,10 @@ class FeatureStatistic:
 
 
 @dataclass
-class FeatureStatistics:
-    base: FeatureStatistic
-    instruction: FeatureStatistic
-    joint: FeatureStatistic
+class LatentStatistics:
+    base: LatentStatistic
+    instruction: LatentStatistic
+    joint: LatentStatistic
 
     abs_activation_diff: th.Tensor
     rel_activation_diff: th.Tensor
@@ -182,9 +182,9 @@ class FeatureStatistics:
 
 
 @dataclass
-class CombinedFeatureStatistics:
-    rescaled: FeatureStatistics
-    normal: FeatureStatistics
+class CombinedLatentStatistics:
+    rescaled: LatentStatistics
+    normal: LatentStatistics
 
     def normalize(self):
         self.rescaled.normalize()
@@ -197,46 +197,46 @@ class CombinedFeatureStatistics:
         return self
 
 
-def compute_statistics(features, total_tokens, non_zero_threshold=1e-8):
-    base_avg_activation = features.base.sum(dim=0)
-    instruction_avg_activation = features.instruction.sum(dim=0)
-    joint_avg_activation = features.joint.sum(dim=0)
-    base_non_zero_counts = (features.base > non_zero_threshold).sum(dim=0)
-    instruction_non_zero_counts = (features.instruction > non_zero_threshold).sum(dim=0)
-    joint_non_zero_counts = (features.joint > non_zero_threshold).sum(dim=0)
-    activation_diff = (features.base - features.instruction).sum(dim=0)
+def compute_statistics(latents, total_tokens, non_zero_threshold=1e-8):
+    base_avg_activation = latents.base.sum(dim=0)
+    instruction_avg_activation = latents.instruction.sum(dim=0)
+    joint_avg_activation = latents.joint.sum(dim=0)
+    base_non_zero_counts = (latents.base > non_zero_threshold).sum(dim=0)
+    instruction_non_zero_counts = (latents.instruction > non_zero_threshold).sum(dim=0)
+    joint_non_zero_counts = (latents.joint > non_zero_threshold).sum(dim=0)
+    activation_diff = (latents.base - latents.instruction).sum(dim=0)
     rel_activation_diff = (
-        (features.base - features.instruction)
+        (latents.base - latents.instruction)
         / (
-            th.stack([features.base, features.instruction], dim=0).max(dim=0).values
+            th.stack([latents.base, latents.instruction], dim=0).max(dim=0).values
             + 1e-8
         )
         + 1
     ) / 2
-    # only consider features that are non-zero in either base or instruction -> set others to 0
+    # only consider latents that are non-zero in either base or instruction -> set others to 0
     rel_activation_diff = (
         rel_activation_diff
         * (
-            (features.base > non_zero_threshold)
-            | (features.instruction > non_zero_threshold)
+            (latents.base > non_zero_threshold)
+            | (latents.instruction > non_zero_threshold)
         ).float()
     )
     rel_activation_diff = rel_activation_diff.sum(dim=0)
     either_non_zero_counts = (
-        (features.base > non_zero_threshold)
-        | (features.instruction > non_zero_threshold)
+        (latents.base > non_zero_threshold)
+        | (latents.instruction > non_zero_threshold)
     ).sum(dim=0)
 
-    base_statistic = FeatureStatistic(
+    base_statistic = LatentStatistic(
         base_avg_activation, base_non_zero_counts, total_tokens
     )
-    instruction_statistic = FeatureStatistic(
+    instruction_statistic = LatentStatistic(
         instruction_avg_activation, instruction_non_zero_counts, total_tokens
     )
-    joint_statistic = FeatureStatistic(
+    joint_statistic = LatentStatistic(
         joint_avg_activation, joint_non_zero_counts, total_tokens
     )
-    return FeatureStatistics(
+    return LatentStatistics(
         base=base_statistic,
         instruction=instruction_statistic,
         joint=joint_statistic,
@@ -246,7 +246,7 @@ def compute_statistics(features, total_tokens, non_zero_threshold=1e-8):
     )
 
 
-def feature_statistics(
+def latent_statistics(
     dataset,
     tokenizer,
     base_model,
@@ -255,6 +255,7 @@ def feature_statistics(
     layer,
     batch_size=128,
     non_zero_threshold=1e-8,
+    text_column="text",
 ):
     batch_idx = 0
     rescaled_stats = None
@@ -262,26 +263,26 @@ def feature_statistics(
 
     for batch in tqdm(DataLoader(dataset, batch_size=batch_size)):
         tokens = tokenizer(
-            batch["text"],
+            batch[text_column],
             return_tensors="pt",
             max_length=1024,
             truncation=True,
             padding=True,
         )
-        batch_rescaled_features, batch_normal_features = get_features(
+        batch_rescaled_latents, batch_normal_latents = get_latents(
             tokens, base_model, instruction_model, ae, layer
         )
-        batch_rescaled_features = filter_stack_features(
-            batch_rescaled_features, tokens["attention_mask"]
+        batch_rescaled_latents = filter_stack_latents(
+            batch_rescaled_latents, tokens["attention_mask"]
         )
-        batch_normal_features = filter_stack_features(
-            batch_normal_features, tokens["attention_mask"]
+        batch_normal_latents = filter_stack_latents(
+            batch_normal_latents, tokens["attention_mask"]
         )
         rescaled_stats_batch = compute_statistics(
-            batch_rescaled_features, tokens["attention_mask"].sum(), non_zero_threshold
+            batch_rescaled_latents, tokens["attention_mask"].sum(), non_zero_threshold
         )
         normal_stats_batch = compute_statistics(
-            batch_normal_features, tokens["attention_mask"].sum(), non_zero_threshold
+            batch_normal_latents, tokens["attention_mask"].sum(), non_zero_threshold
         )
 
         if batch_idx == 0:
@@ -296,7 +297,7 @@ def feature_statistics(
     rescaled_stats.normalize()
     normal_stats.normalize()
 
-    return CombinedFeatureStatistics(rescaled_stats, normal_stats)
+    return CombinedLatentStatistics(rescaled_stats, normal_stats)
 
 
 ### Visualization ###
@@ -339,22 +340,22 @@ def add_relative_annotations(fig):
 def filtered_stats(stats_fineweb, stats_lmsys, group_name, rescaled, indices_path):
     title_suffix = ""
     if group_name == "shared":
-        title_suffix = "(Shared Features)"
+        title_suffix = "(Shared Latents)"
     elif group_name == "instruction":
-        title_suffix = "(Instruction Only Features)"
+        title_suffix = "(Instruction Only Latents)"
     elif group_name == "base":
-        title_suffix = "(Base Only Features)"
-    # Extract features for the last token position
-    dead_indices = dead_feature_indices(
-        combined_feature_statistics=[stats_fineweb, stats_lmsys], rescaled=rescaled
+        title_suffix = "(Base Only Latents)"
+    # Extract latents for the last token position
+    dead_indices = dead_latent_indices(
+        combined_latent_statistics=[stats_fineweb, stats_lmsys], rescaled=rescaled
     )
     only_base_indices = th.load(
-        f"{indices_path}/only_base_decoder_feature_indices.pt"
+        f"{indices_path}/only_base_decoder_latent_indices.pt"
     ).cpu()
     only_it_indices = th.load(
-        f"{indices_path}/only_it_decoder_feature_indices.pt"
+        f"{indices_path}/only_it_decoder_latent_indices.pt"
     ).cpu()
-    shared_indices = th.load(f"{indices_path}/shared_decoder_feature_indices.pt").cpu()
+    shared_indices = th.load(f"{indices_path}/shared_decoder_latent_indices.pt").cpu()
 
     stats_fineweb = stats_fineweb.rescaled if rescaled else stats_fineweb.normal
     stats_lmsys = stats_lmsys.rescaled if rescaled else stats_lmsys.normal
@@ -372,7 +373,7 @@ def filtered_stats(stats_fineweb, stats_lmsys, group_name, rescaled, indices_pat
     return dead_indices, filter_indices, title_suffix
 
 
-def plot_feature_diff(
+def plot_latent_diff(
     save_dir,
     stats_fineweb,
     stats_lmsys,
@@ -420,10 +421,10 @@ def plot_feature_diff(
     # Y axis 2 subplot
     fig.update_yaxes(row=1, col=1, type="log")
     fig.update_yaxes(row=1, col=1, title="Count")
-    fig.update_xaxes(row=1, col=1, title="Feature Activation Difference")
+    fig.update_xaxes(row=1, col=1, title="Latent Activation Difference")
     # Update layout
     fig.update_layout(
-        title=f"<b>Average Relative Feature Activation Difference <br>{title_suffix}</b><br><sup>Number of Tokens: Fineweb {stats_fineweb.joint.total_tokens:.2e} - LMSYS {stats_lmsys.joint.total_tokens:.2e}</sup>",
+        title=f"<b>Average Relative Latent Activation Difference <br>{title_suffix}</b><br><sup>Number of Tokens: Fineweb {stats_fineweb.joint.total_tokens:.2e} - LMSYS {stats_lmsys.joint.total_tokens:.2e}</sup>",
     )
 
     # subtitle
@@ -437,7 +438,7 @@ def plot_feature_diff(
     # save
     if save:
         fig.write_image(
-            f"{save_dir}/feature_diff_{group_name}{'_rescaled' if rescaled else ''}.png",
+            f"{save_dir}/latent_diff_{group_name}{'_rescaled' if rescaled else ''}.png",
             scale=2,
         )
     return fig
@@ -454,7 +455,7 @@ def get_freq(stats, split="joint"):
         raise ValueError(f"Invalid split: {split}")
 
 
-def plot_feature_freq(
+def plot_latent_freq(
     save_dir,
     stats_fineweb,
     stats_lmsys,
@@ -467,11 +468,11 @@ def plot_feature_freq(
 ):
     title_suffix = ""
     if group_name == "shared":
-        title_suffix = " (Shared Features)"
+        title_suffix = " (Shared Latents)"
     elif group_name == "instruction":
-        title_suffix = " (Instruction Only Features)"
+        title_suffix = " (Instruction Only Latents)"
     elif group_name == "base":
-        title_suffix = " (Base Only Features)"
+        title_suffix = " (Base Only Latents)"
 
     fineweb_color = COLORS.get_shade(3, 300)
     lmsys_color = COLORS.get_shade(6, 600)
@@ -519,17 +520,17 @@ def plot_feature_freq(
     )
 
     fig.update_yaxes(title="Frequency")
-    fig.update_xaxes(title="Topk Features (Sorted)")
+    fig.update_xaxes(title="Topk Latents (Sorted)")
 
     fig.update_layout(
-        title=f"<b>Feature Frequency {title_suffix}</b><br><sup>Number of Tokens: Fineweb {stats_fineweb.joint.total_tokens:.2e} - LMSYS {stats_lmsys.joint.total_tokens:.2e}</sup>"
+        title=f"<b>Latent Frequency {title_suffix}</b><br><sup>Number of Tokens: Fineweb {stats_fineweb.joint.total_tokens:.2e} - LMSYS {stats_lmsys.joint.total_tokens:.2e}</sup>"
     )
 
     fig.update_layout(width=900, height=500)
     fig.update_layout(legend=dict(x=0.76, y=0.95))
     if save:
         fig.write_image(
-            f"{save_dir}/feature_freq_{group_name}_{split}{'_rescaled' if rescaled else ''}.png",
+            f"{save_dir}/latent_freq_{group_name}_{split}{'_rescaled' if rescaled else ''}.png",
             scale=2,
         )
     return fig

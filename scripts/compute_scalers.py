@@ -2,7 +2,7 @@
 import sys
 sys.path.append(".")
 import torch as th
-from typing import Callable
+from typing import Callable, Union
 from dictionary_learning import CrossCoder
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -76,9 +76,7 @@ def load_chat_reconstruction(
     **kwargs,
 ):
     reconstruction = crosscoder.decode(latent_activations)
-    return remove_latents(
-        reconstruction[:, 1, :], latent_activations[:, latent_indices], latent_vectors
-    )
+    return reconstruction[:, 1, :]
 
 
 def load_chat_error(
@@ -130,7 +128,17 @@ def main():
     parser.add_argument("--chat-reconstruction", action="store_true")
     parser.add_argument("--base-error", action="store_true")
     parser.add_argument("--base-reconstruction", action="store_true")
+    parser.add_argument("--random-vectors", action="store_true")
+    parser.add_argument("--random-indices", action="store_true")
     parser.add_argument("--connor-crosscoder", action="store_true")
+    parser.add_argument("--name", type=str, default=None)
+    parser.add_argument(
+        "--dtype",
+        type=str,
+        default="float32",
+        choices=["float32", "float64", "bfloat16"],
+        help="Data type for computations",
+    )
     args = parser.parse_args()
 
 
@@ -149,17 +157,20 @@ def main():
         args.device = "cpu"
     device = th.device(args.device)
 
+    # Setup dtype
+    dtype_map = {
+        "float32": th.float32,
+        "float64": th.float64,
+        "bfloat16": th.bfloat16
+    }
+    dtype = dtype_map[args.dtype]
+    logger.info(f"Using dtype: {dtype}")
+
     # Run tests first
     run_tests(verbose=True)
 
     if args.threshold_active_latents is not None:
         assert args.threshold_active_latents > 0 and args.threshold_active_latents < 1, "Threshold must be between 0 and 1"
-    
-    # Loading latent dataframe
-    # if os.path.exists(args.latent_df_path):
-    #     latent_df = pd.read_csv(args.latent_df_path)
-    # else:
-    #     latent_df = pd.read_csv(hf_hub_download(args.latent_df_path,filename="feature_df.csv", repo_type="dataset"))
 
     # Load crosscoder
     if args.connor_crosscoder:
@@ -169,7 +180,7 @@ def main():
     else:
         cc = CrossCoder.from_pretrained(args.crosscoder_path, from_hub=True)
         lmsys_split = args.dataset_split
-    cc = cc.to(device)
+    cc = cc.to(device).to(dtype)
 
     # Setup paths
     activation_store_dir = Path(args.activation_store_dir)
@@ -200,9 +211,10 @@ def main():
     dataset = th.utils.data.ConcatDataset([fineweb_cache, lmsys_chat_cache])
 
     # Get decoder weights
-    global it_decoder, base_decoder, chat_only_indices
-    it_decoder = cc.decoder.weight[1, :, :].clone()
-    base_decoder = cc.decoder.weight[0, :, :].clone()
+    it_decoder = cc.decoder.weight[1, :, :].clone().to(dtype)
+    assert it_decoder.shape == (cc.dict_size, cc.activation_dim)
+    base_decoder = cc.decoder.weight[0, :, :].clone().to(dtype)
+    assert base_decoder.shape == (cc.dict_size, cc.activation_dim)
 
     n_per_dataset = args.num_samples // 2
     test_idx = th.cat(
@@ -257,18 +269,51 @@ def main():
     if args.chat_error:
         computations.append(("it_error", load_chat_error))
     
+
+    latent_vectors = it_decoder[chat_only_indices].clone()
+    if args.random_vectors:
+        random_vectors = th.randn(len(chat_only_indices), cc.activation_dim, device=device)
+        assert random_vectors.shape == (len(chat_only_indices), cc.activation_dim)
+        # Scale random vectors to match the norm of the IT decoder vectors
+        it_decoder_norm = th.norm(latent_vectors, dim=1)
+        print(it_decoder_norm.shape)
+        print(th.norm(random_vectors, dim=1, keepdim=True).shape)
+        assert it_decoder_norm.shape == (len(chat_only_indices),)
+        random_vectors = random_vectors * (it_decoder_norm / th.norm(random_vectors, dim=1)).unsqueeze(1)
+        assert random_vectors.shape == (len(chat_only_indices), cc.activation_dim)
+        latent_vectors = random_vectors
+    if args.random_indices:
+        random_indices = th.randint(0, cc.dict_size, (len(chat_only_indices),), device=device)
+        assert random_indices.shape == (len(chat_only_indices),)
+        # Scale random indices to match the norm of the IT decoder vectors
+        random_indices_vectors = it_decoder[random_indices].clone()
+        assert random_indices_vectors.shape == (len(chat_only_indices), cc.activation_dim)
+        # Scale random vectors to match the norm of the IT decoder vectors
+        it_decoder_norm = th.norm(latent_vectors, dim=1)
+        assert it_decoder_norm.shape == (len(chat_only_indices),)
+        random_indices_vectors = random_indices_vectors * (it_decoder_norm / th.norm(random_indices_vectors, dim=1)).unsqueeze(1)
+        assert random_indices_vectors.shape == (len(chat_only_indices), cc.activation_dim)
+        latent_vectors = random_indices_vectors
+
     # Run all computations
     for name, loader_fn in computations:
         if latent_activation_postprocessing_fn is not None:
             name += f"_jumprelu{args.threshold_active_latents}"
+        if args.random_vectors:
+            name += f"_random_vectors_s{args.seed}"
+        if args.random_indices:
+            name += f"_random_indices_s{args.seed}"
+        if args.name:
+            name += f"_{args.name}"
         logger.info(f"Computing {name}")
         betas, count_active = closed_form_scalars(
-            it_decoder[chat_only_indices],
+            latent_vectors,
             chat_only_indices,
             dataloader,
             cc,
             loader_fn,
             device=device,
+            dtype=dtype,
             latent_activation_postprocessing_fn=latent_activation_postprocessing_fn,
         )
         th.save(betas, results_dir / f"betas_{name}.pt")

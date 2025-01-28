@@ -1,26 +1,26 @@
 import torch as th
 
 
-def filter_dead_features(features, other_tensors, non_zero_threshold=1e-8):
-    mask = th.stack([feature > non_zero_threshold for feature in features]).all(dim=0)
-    return [feature[mask] for feature in features], [
+def filter_dead_latents(latents, other_tensors, non_zero_threshold=1e-8):
+    mask = th.stack([latent > non_zero_threshold for latent in latents]).all(dim=0)
+    return [latent[mask] for latent in latents], [
         tensor[mask] for tensor in other_tensors
     ]
 
 
-def dead_feature_indices(combined_feature_statistics, rescaled=False):
+def dead_latent_indices(combined_latent_statistics, rescaled=False):
     if rescaled:
         mask = th.stack(
             [
                 statistic.rescaled.joint.non_zero_counts > 0
-                for statistic in combined_feature_statistics
+                for statistic in combined_latent_statistics
             ]
         ).all(dim=0)
     else:
         mask = th.stack(
             [
                 statistic.normal.joint.non_zero_counts > 0
-                for statistic in combined_feature_statistics
+                for statistic in combined_latent_statistics
             ]
         ).all(dim=0)
     return mask.logical_not().nonzero().flatten().tolist()
