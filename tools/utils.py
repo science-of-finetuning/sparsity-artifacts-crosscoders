@@ -1,25 +1,29 @@
-import json
 import warnings
 from pathlib import Path
-from typing import Any, Union
+from typing import Any, Union, Literal
 from collections import defaultdict
 from tempfile import TemporaryDirectory
+import json
 
 import torch as th
-import numpy as np
-from tqdm.auto import tqdm
+from torch import Tensor
 import torch.nn.functional as F
 from torch.nn.functional import cosine_similarity, cross_entropy, kl_div
+import numpy as np
+from tqdm.auto import tqdm
 import pandas as pd
 from huggingface_hub import hf_hub_download, hf_api
 import networkx as nx
 
-from torch import Tensor
 from torchmetrics.aggregation import BaseAggregator
 import matplotlib.pyplot as plt
 import plotly.express as px
 import plotly.graph_objects as go
 from dictionary_learning import CrossCoder
+from tiny_dashboard.dashboard_implementations import CrosscoderOnlineFeatureDashboard
+from tiny_dashboard import OfflineFeatureCentricDashboard
+from nnterp import load_model
+from transformers import AutoTokenizer
 
 template_path = (
     Path(__file__).parent.parent / "templates" / "gemma_chat_template_ctrl_tokens.jinja"
@@ -331,6 +335,7 @@ df_hf_repo = {
 
 
 def load_latent_df(crosscoder=None):
+    """Load the latent_df for the given crosscoder."""
     if crosscoder is None:
         crosscoder = "l13_crosscoder"
     df_path = hf_hub_download(
@@ -408,37 +413,49 @@ def push_latent_df(
         )
 
 
-def _feature_df(crosscoder=None):
+def _latent_df(crosscoder=None):
     if crosscoder is None:
         crosscoder = "l13_crosscoder"
-    global dfs
     if dfs[crosscoder] is None:
         dfs[crosscoder] = load_latent_df(crosscoder)
     return dfs[crosscoder]
 
 
-def base_only_latent_indices():
-    df = _feature_df()
+def base_only_latent_indices(crosscoder=None):
+    """Return the indices of the base only latents of the given crosscoder."""
+    df = _latent_df(crosscoder)
     # filter for tag = Base only
     return th.tensor(df[df["tag"] == "Base only"].index.tolist())
 
 
-def it_only_latent_indices():
-    df = _feature_df()
-    # filter for tag = IT only
-    return th.tensor(df[df["tag"] == "IT only"].index.tolist())
+def chat_only_latent_indices(crosscoder=None):
+    """Return the indices of the chat only latents of the given crosscoder."""
+    df = _latent_df(crosscoder)
+    # filter for tag = Chat only
+    return th.tensor(
+        df[df["tag"] == "Chat only" | df["tag"] == "IT only"].index.tolist()
+    )
 
 
-def shared_latent_indices():
-    df = _feature_df()
+def shared_latent_indices(crosscoder=None):
+    """Return the indices of the shared latents of the given crosscoder."""
+    df = _latent_df(crosscoder)
     # filter for tag = Shared
     return th.tensor(df[df["tag"] == "Shared"].index.tolist())
 
 
 class CCLatent:
+    """
+    A class for a latent in a crosscoder.
+
+    Args:
+        id_: the index of the latent
+        crosscoder: the crosscoder to use
+    """
+
     def __init__(self, id_: int, crosscoder=None):
         self.id = id_
-        self.row = _feature_df(crosscoder).loc[id_]
+        self.row = _latent_df(crosscoder).loc[id_]
         self.stats = self.row.to_dict()
         self.dead = False
         for k, v in self.stats.items():
@@ -491,6 +508,7 @@ def apply_connor_template(conv):
     )
 
 
+@th.no_grad()
 def load_connor_crosscoder():
     path = "blocks.14.hook_resid_pre"
     repo_id = "ckkissane/crosscoder-gemma-2-2b-model-diff"
@@ -535,12 +553,100 @@ crosscoders = defaultdict(lambda: None)
 
 
 def _crosscoder(crosscoder=None):
-    global crosscoders
     if crosscoder is None:
         crosscoder = "l13_crosscoder"
     if crosscoders[crosscoder] is None:
         crosscoders[crosscoder] = load_crosscoder(crosscoder)
     return crosscoders[crosscoder]
+
+
+def online_dashboard(crosscoder=None, max_acts=None):
+    """
+    Instantiate an online dashboard for crosscoder latent analysis.
+
+    Args:
+        crosscoder: the crosscoder to use
+        max_acts: a dictionary of max activations for each latent. If None, will be loaded from the latent_df of the crosscoder.
+    """
+    coder = _crosscoder(crosscoder)
+    if max_acts is None:
+        df = _latent_df(crosscoder)
+        max_acts_cols = ["max_act", "lmsys_max_act"]
+        for col in max_acts_cols:
+            if col in df.columns:
+                max_acts = df[col].dropna().to_dict()
+                break
+    base_model = load_model(
+        "google/gemma-2-2b", dtype=th.bfloat16, attn_implementation="eager"
+    )
+    chat_model = load_model(
+        "google/gemma-2-2b-chat", dtype=th.bfloat16, attn_implementation="eager"
+    )
+    return CrosscoderOnlineFeatureDashboard(
+        base_model,
+        chat_model,
+        coder,
+        13,
+        max_acts=max_acts,
+    )
+
+
+def load_max_activating_examples(
+    crosscoder=None, act_type: Literal["chat", "base", "both"] = "chat"
+):
+    """
+    Load the max activating examples for the given crosscoder and act_type.
+
+    Args:
+        crosscoder: the crosscoder to use
+        act_type: the type of examples to load
+    """
+    match act_type:
+        case "chat":
+            return th.load(
+                hf_hub_download(
+                    repo_id=df_hf_repo[crosscoder],
+                    filename="chat_examples.pt",
+                    repo_type="dataset",
+                )
+            )
+        case "base":
+            return th.load(
+                hf_hub_download(
+                    repo_id=df_hf_repo[crosscoder],
+                    filename="base_examples.pt",
+                    repo_type="dataset",
+                )
+            )
+        case "both":
+            return th.load(
+                hf_hub_download(
+                    repo_id=df_hf_repo[crosscoder],
+                    filename="chat_base_examples.pt",
+                    repo_type="dataset",
+                )
+            )
+
+
+def offline_dashboard(
+    crosscoder=None,
+    act_type: Literal["chat", "base", "both"] = "chat",
+    max_num_examples=50,
+):
+    """
+    Instantiate an offline dashboard for crosscoder latent analysis.
+
+    Args:
+        crosscoder: the crosscoder to use
+        act_type: the type of examples to load
+        max_num_examples: the maximum number of examples to load
+    """
+    max_acts_examples = load_max_activating_examples(crosscoder, act_type)
+    return OfflineFeatureCentricDashboard(
+        max_acts_examples,
+        tokenizer=AutoTokenizer.from_pretrained("google/gemma-2-2b-it"),
+        max_examples=max_num_examples,
+    )
 
 
 """
@@ -787,7 +893,6 @@ def plot_component_sizes(G, title=None, save_path=None):
 
 
 def draw_graph(G, crosscoder, title="", file=None):
-    df = _feature_df(crosscoder)
     plt.figure(figsize=(15, 5))
     pos = nx.spring_layout(G, k=0.035)  # reduced k from default
 
@@ -946,7 +1051,7 @@ def draw_interactive_graph(G, crosscoder, title=""):
         ("Base latents", "black", "circle"),
     ]
 
-    for i, (name, color, symbol) in enumerate(legend_items):
+    for name, color, symbol in legend_items:
         fig.add_trace(
             go.Scatter(
                 x=[None],
