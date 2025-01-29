@@ -99,7 +99,7 @@ def closed_form_scalars(
 
     for batch in tqdm(dataloader):
         batch_size_current = batch.shape[0]
-        batch = batch.to(dtype).to(device)
+        batch = batch.to(device).to(dtype)
         latent_activations = crosscoder.encode(batch)
         if latent_activation_postprocessing_fn is not None:
             latent_activations = latent_activation_postprocessing_fn(latent_activations)
