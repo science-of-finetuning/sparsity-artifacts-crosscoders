@@ -9,6 +9,7 @@ from tqdm import tqdm
 from pathlib import Path
 from dictionary_learning.cache import PairedActivationCache
 import numpy as np
+from functools import partial
 from loguru import logger
 import argparse
 import os
@@ -39,11 +40,16 @@ def compute_max_activations(dataloader, cc, device):
 def load_base_activation(batch, **kwargs):
     return batch[:, 0, :]
 
+def load_chat_activation(batch, **kwargs):
+    return batch[:, 1, :]
+
+
 def load_base_error(
     batch,
     crosscoder: CrossCoder,
     latent_activations: th.Tensor,
     latent_indices: th.Tensor,
+    base_decoder: th.Tensor,
     **kwargs,
 ):
     reconstruction = crosscoder.decode(latent_activations)
@@ -263,7 +269,7 @@ def main():
     if args.base_reconstruction:
         computations.append(("base_reconstruction", load_base_reconstruction))
     if args.base_error:
-        computations.append(("base_error", load_base_error))
+        computations.append(("base_error", partial(load_base_error, base_decoder=base_decoder)))
     if args.chat_reconstruction:
         computations.append(("it_reconstruction", load_chat_reconstruction))
     if args.chat_error:

@@ -12,6 +12,7 @@ import numpy as np
 from loguru import logger
 from functools import partial
 import argparse
+from torchmetrics import MeanSquaredError
 import os
 
 th.set_grad_enabled(False)
@@ -20,11 +21,20 @@ th.set_float32_matmul_precision("highest")
 from tools.latent_scaler.closed_form import remove_latents
 from tools.utils import load_connor_crosscoder
 
- # Define processing functions (reusing from compute_scalers.py)
-from compute_scalers import load_base_reconstruction, load_base_error, load_base_activation
-from compute_scalers import load_chat_reconstruction, load_chat_error, load_chat_activation
+# Define processing functions (reusing from compute_scalers.py)
+from compute_scalers import (
+    load_base_reconstruction,
+    load_base_error,
+    load_base_activation,
+)
+from compute_scalers import (
+    load_chat_reconstruction,
+    load_chat_error,
+    load_chat_activation,
+)
 
-def compute_variance_explained(
+
+def compute_stats(
     betas: th.Tensor,
     latent_vectors: th.Tensor,
     latent_indices: th.Tensor,
@@ -35,15 +45,31 @@ def compute_variance_explained(
     latent_activation_postprocessing_fn: Callable[[th.Tensor], th.Tensor] = None,
     device: th.device = th.device("cuda"),
     dtype: Union[th.dtype, None] = th.float32,
+    max_activations: th.Tensor = None,
+    compute_fve: bool = False,
+    n_buckets: int = 3,
 ) -> dict:
     """
-    Compute fraction of explained variance for each scaler.
+    Compute statistics for each scaler.
+
     """
+    dim_model = crosscoder.activation_dim
     assert betas.shape == (len(latent_indices),)
-    total_variance = th.zeros(len(latent_indices), device=device, dtype=dtype)
     explained_variance = th.zeros(len(latent_indices), device=device, dtype=dtype)
-    before_explained_variance = th.zeros(len(latent_indices), device=device, dtype=dtype)
+    before_explained_variance = th.zeros(
+        len(latent_indices), device=device, dtype=dtype
+    )
+    mse = th.zeros(len(latent_indices), device=device, dtype=th.float64)
+    mse_before = th.zeros(len(latent_indices), device=device, dtype=th.float64)
     count = th.zeros(len(latent_indices), device=device, dtype=dtype)
+
+    
+    if max_activations is not None:
+        assert len(max_activations) == len(latent_indices)
+        bucket_edges = th.stack([th.linspace(0, max_act, n_buckets + 1) for max_act in max_activations])
+        mse_buckets = th.zeros(n_buckets, device=device, dtype=th.float64)
+        mse_before_buckets = th.zeros(n_buckets, device=device, dtype=th.float64)
+        mse_count = th.zeros(n_buckets, device=device, dtype=dtype)
 
     for batch in tqdm(dataloader, desc="Computing variance explained"):
         batch_size = batch.shape[0]
@@ -69,7 +95,7 @@ def compute_variance_explained(
             latent_indices=latent_indices,
             latent_vectors=latent_vectors,
         )
-        print(activation.shape, target.shape)
+
         # Get relevant latent activations
         latent_activations = latent_activations[:, latent_indices]
         assert latent_activations.shape == (batch_size, len(latent_indices))
@@ -78,41 +104,102 @@ def compute_variance_explained(
         scaled_latents = latent_activations * betas.unsqueeze(0)
         assert scaled_latents.shape == (batch_size, len(latent_indices))
 
-        # Compute reconstructions using scaled latents
-        for i in range(len(latent_indices)):
-            if activation.dim() == 2:
-                assert scaled_latents[:, i].shape == (batch_size,)
-                assert latent_vectors[i].shape == (activation.shape[-1],)
-                reconstructions = activation + scaled_latents[:, i].unsqueeze(1) * latent_vectors[i].unsqueeze(0)
-                activation_before = activation
-            else:
-                assert activation.shape == (len(latent_indices),batch_size, activation.shape[-1])
-                reconstructions = activation[i] + scaled_latents[:, i].unsqueeze(1) * latent_vectors[i].unsqueeze(0)
-                activation_before = activation[i]
-            # Compute variances
+        # Compute reconstructions using scaled latents (vectorized)
+        if activation.dim() == 2:
+            # [batch_size, hidden_dim] + [batch_size, n_latents, 1] * [n_latents, hidden_dim]
+            reconstructions = activation.unsqueeze(1) + scaled_latents.unsqueeze(
+                2
+            ) * latent_vectors.unsqueeze(0)
+            reconstructions = reconstructions.permute(1, 0, 2)
+            activation_before = activation.unsqueeze(0).expand_as(reconstructions)
+
+            assert reconstructions.shape == (len(latent_indices), batch_size, dim_model)
+            assert activation_before.shape == (
+                len(latent_indices),
+                batch_size,
+                dim_model,
+            )
+        else:
+            assert activation.shape == (len(latent_indices), batch_size, dim_model)
+            assert scaled_latents.shape == (batch_size, len(latent_indices))
+            assert latent_vectors.shape == (len(latent_indices), dim_model)
+
+            # activation is already [n_latents, batch_size, hidden_dim]
+            # [n_latents, batch_size, hidden_dim] + [batch_size, n_latents, 1] * [n_latents, hidden_dim]
+            reconstructions = activation + scaled_latents.transpose(0, 1).unsqueeze(
+                2
+            ) * latent_vectors.unsqueeze(1)
+            activation_before = activation
+
+            assert reconstructions.shape == (len(latent_indices), batch_size, dim_model)
+            assert activation_before.shape == (
+                len(latent_indices),
+                batch_size,
+                dim_model,
+            )
+
+        # Compute variances
+        if target.dim() == 2:
+            assert target.shape == (batch_size, dim_model)
+            target = target.unsqueeze(0).expand_as(reconstructions)
             assert target.shape == reconstructions.shape
-            target_var = th.var(target, dim=0).sum()  # Total variance across all dimensions
-            residual_var = th.var(target - reconstructions, dim=0).sum()
-            before_residual_var = th.var(target - activation_before, dim=0).sum()
-            assert target_var.shape == ()
-            assert residual_var.shape == ()
-            explained_variance[i] += 1 - residual_var / target_var
-            count[i] += 1
-            before_explained_variance[i] += 1 - before_residual_var / target_var
+
+        residual = target - reconstructions
+        residual_before = target - activation_before
+        assert residual.shape == (len(latent_indices), batch_size, dim_model)
+        if compute_fve:
+            # [n_latents]
+            target_var = th.var(target, dim=1).sum(dim=-1)
+            residual_var = th.var(residual, dim=1).sum(dim=-1)
+            before_residual_var = th.var(residual_before, dim=1).sum(dim=-1)
+
+            assert target_var.shape == (len(latent_indices),)
+            assert residual_var.shape == (len(latent_indices),)
+            assert before_residual_var.shape == (len(latent_indices),)
+
+            explained_variance += 1 - residual_var / target_var
+            before_explained_variance += 1 - before_residual_var / target_var
+
+        # residual is [n_latents, batch_size, dim_model]
+        mse += residual.pow(2).sum(dim=1).mean(dim=-1)  # [n_latents]
+        mse_before += residual_before.pow(2).sum(dim=1).mean(dim=-1)  # [n_latents]
+        count += th.ones_like(mse) * batch_size
+
+        if max_activations is not None:
+            for i in range(1, n_buckets):
+                mask = ((latent_activations > bucket_edges[i-1]) & (latent_activations <= bucket_edges[i])).T.unsqueeze(-1)
+                assert mask.shape == (len(latent_indices), batch_size, 1)
+                residual_masked = residual*mask
+                residual_before_masked = residual_before*mask
+                mse_buckets[i] += residual_masked.pow(2).sum(dim=1).mean(dim=-1)
+                mse_before_buckets[i] += residual_before_masked.pow(2).sum(dim=1).mean(dim=-1)
+                mse_count[i] += mask.sum(dim=1).squeeze(-1)
 
         # Clean up GPU memory
-        del latent_activations, target, reconstructions
+        del latent_activations, target, reconstructions, residual, residual_before, activation_before
         if device == "cuda":
             th.cuda.empty_cache()
 
+    output = {}
     # Compute final metrics
-    frac_explained = explained_variance / count
-    frac_explained_before = before_explained_variance / count
-    return {
-        "frac_variance_explained": frac_explained.cpu(),
-        "frac_variance_explained_no_scaler": frac_explained_before.cpu(),
-        "count": count.cpu(),
-    }
+    if compute_fve:
+        frac_explained = explained_variance / count
+        frac_explained_before = before_explained_variance / count
+        output["frac_variance_explained"] = frac_explained.cpu().numpy()
+        output["frac_variance_explained_no_scaler"] = frac_explained_before.cpu().numpy()
+        output["count"] = count.cpu().numpy()
+
+    if max_activations is not None:
+        output["mse_buckets"] = mse_buckets.cpu().numpy() / mse_count.cpu().numpy()
+        output["mse_before_buckets"] = mse_before_buckets.cpu().numpy() / mse_count.cpu().numpy()
+        output["mse_count"] = mse_count.cpu().numpy()
+
+    output["mse"] = mse.cpu().numpy()
+    output["mse_before"] = mse_before.cpu().numpy()
+    output["mse_count"] = mse_count.cpu().numpy()
+
+    return output
+
 
 def load_betas(args, computation, results_dir):
     name = computation
@@ -120,16 +207,31 @@ def load_betas(args, computation, results_dir):
         name += f"_jumprelu{args.threshold_active_latents}"
     if args.name:
         name += f"_{args.name}"
-        
+
     betas_path = results_dir / f"betas_{name}.pt"
     logger.info(f"Processing betas from: {betas_path}")
-    
+
     if not betas_path.exists():
         raise FileNotFoundError(f"Betas file not found: {betas_path}")
 
     # Load betas and continue with existing logic
     betas = th.load(betas_path)
     return betas, name
+
+
+def compute_mse(
+    betas,
+    latent_vectors,
+    latent_indices,
+    dataloader,
+    crosscoder,
+    activation_postprocessing_fn,
+    target_fn,
+    device,
+    dtype,
+):
+    pass
+
 
 def main():
     # Reuse argument parsing from compute_scalers.py
@@ -143,10 +245,18 @@ def main():
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--num-workers", type=int, default=32)
-    parser.add_argument("--dtype", type=str, default="float32",
-                       choices=["float32", "float64", "bfloat16"])
+    parser.add_argument(
+        "--dtype",
+        type=str,
+        default="float32",
+        choices=["float32", "float64", "bfloat16"],
+    )
     # Add compute_scalers.py specific arguments for betas path construction
-    parser.add_argument("--results-dir", type=Path, default="/workspace/data/results/closed_form_scalars")
+    parser.add_argument(
+        "--results-dir",
+        type=Path,
+        default="/workspace/data/results/closed_form_scalars",
+    )
     parser.add_argument("--threshold-active-latents", type=float, default=None)
     parser.add_argument("--chat-error", action="store_true")
     parser.add_argument("--chat-reconstruction", action="store_true")
@@ -158,7 +268,6 @@ def main():
 
     # Construct betas path following compute_scalers.py logic
     results_dir = args.results_dir / args.crosscoder_path.replace("/", "_")
-    
 
     # Setup device and dtype
     if args.device == "cuda" and not th.cuda.is_available():
@@ -219,19 +328,33 @@ def main():
     # Determine which computation to verify
     computations = []
     if args.base_reconstruction:
-        computations.append(("base_reconstruction", load_base_reconstruction, load_base_activation))
+        computations.append(
+            ("base_reconstruction", load_base_reconstruction, load_base_activation)
+        )
     if args.base_error:
-        computations.append(("base_error", partial(load_base_error, base_decoder=base_decoder), load_base_activation))
+        computations.append(
+            (
+                "base_error",
+                partial(load_base_error, base_decoder=base_decoder),
+                load_base_activation,
+            )
+        )
     if args.chat_reconstruction:
-        computations.append(("it_reconstruction", load_chat_reconstruction, load_chat_activation))
+        computations.append(
+            ("it_reconstruction", load_chat_reconstruction, load_chat_activation)
+        )
     if args.chat_error:
         computations.append(("it_error", load_chat_error, load_chat_activation))
-    
+
     if len(computations) == 0:
         logger.info("No computations selected, running all")
         computations = [
             ("base_reconstruction", load_base_reconstruction, load_base_activation),
-            ("base_error", partial(load_base_error, base_decoder=base_decoder), load_base_activation),
+            (
+                "base_error",
+                partial(load_base_error, base_decoder=base_decoder),
+                load_base_activation,
+            ),
             ("it_reconstruction", load_chat_reconstruction, load_chat_activation),
             ("it_error", load_chat_error, load_chat_activation),
         ]
@@ -251,9 +374,7 @@ def main():
             dtype=dtype,
         )
         # Save results
-        output_path = (
-            results_dir / f"fve_{betas_name}.pt"
-        )
+        output_path = results_dir / f"fve_{betas_name}.pt"
         th.save(metrics, output_path)
         logger.info(f"Saved results to {output_path}")
 

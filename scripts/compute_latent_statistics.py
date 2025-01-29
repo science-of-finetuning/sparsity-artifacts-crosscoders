@@ -76,6 +76,7 @@ def main():
 
     # Load crosscoder
     if args.connor_crosscoder:
+        args.crosscoder_path = "ckkissane_crosscoder-gemma-2-2b-model-diff"
         cc = load_connor_crosscoder()
         text_column_chat = "text_base_format"
     else:
@@ -125,7 +126,7 @@ def main():
 
     # Save args
     with open(results_dir / "args.json", "w") as f:
-        json.dump(vars(args), f)
+        json.dump({k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()}, f)
 
     th.save(stats_fineweb, results_dir / "fineweb.pt")
     th.save(stats_lmsys, results_dir / "lmsys.pt")
