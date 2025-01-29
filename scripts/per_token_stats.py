@@ -30,7 +30,7 @@ from tqdm import tqdm, trange
 from datasets import load_dataset
 import plotly.express as px
 
-from utils import tokenize_with_ctrl_ids, chat_template
+from tools.utils import tokenize_with_ctrl_ids, chat_template
 
 
 def remove_bos(mask):
