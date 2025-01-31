@@ -43,7 +43,6 @@ def load_activation_dataset(
     base_model: str = "gemma-2-2b",
     instruct_model: str = "gemma-2-2b-it",
     layer: int = 13,
-    num_samples_per_dataset: int = None,
     split = "validation"
 ):
     # Load validation dataset
