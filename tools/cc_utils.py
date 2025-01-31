@@ -6,6 +6,8 @@ from tempfile import TemporaryDirectory
 from typing import Literal
 
 import pandas as pd
+import numpy as np
+from pandas.io.formats.printing import pprint_thing
 import torch as th
 from transformers import AutoTokenizer
 from huggingface_hub import hf_hub_download, hf_api
@@ -64,6 +66,11 @@ def push_latent_df(
         missing_columns = original_columns - new_columns - allow_remove_columns
         added_columns = new_columns - original_columns
         shared_columns = original_columns & new_columns
+        duplicated_columns = df.columns.duplicated()
+        if duplicated_columns.any():
+            raise ValueError(
+                f"Duplicated columns in uploaded df: {df.columns[duplicated_columns]}"
+            )
         if len(missing_columns) > 0:
             if force:
                 warnings.warn(f"Missing columns in uploaded df: {missing_columns}")
@@ -83,8 +90,29 @@ def push_latent_df(
                     f"Column {column} has different dtype in original and new df"
                 )
             # diff the columns
-            if not (original_df[column].equals(df[column])):
-                print(f"Column {column} has different values in original and new df")
+            if "float" in str(original_df[column].dtype):
+                equal = np.allclose(
+                    original_df[column].values, df[column].values, equal_nan=True
+                )
+            else:
+                equal = original_df[column].equals(df[column])
+            if not equal:
+                print(f"Column {column} has different values in original and new df:")
+                if "float" in str(original_df[column].dtype):
+                    diff_ratio = (
+                        ~np.isclose(
+                            original_df[column].values,
+                            df[column].values,
+                            equal_nan=True,
+                        )
+                    ).mean() * 100
+                else:
+                    diff_ratio = (original_df[column] != df[column]).mean() * 100
+                print(f"% of different values: {diff_ratio:.2f}%")
+
+                print(f"Original: {pprint_thing(original_df[column].values)}")
+                print(f"New     : {pprint_thing(df[column].values)}")
+                print("=" * 20 + "\n", flush=True)
     if confirm:
         print(f"Commit message: {commit_message}")
         r = input("Would you like to push the df to the hub? y/(n)")
