@@ -37,9 +37,7 @@ if __name__ == "__main__":
         kwargs.get("exp_id", None) or (generate_slug(2) if gen_id else "")
     )
     target_notebook_path = save_path / (
-        args.crosscoder
-        + (f"_{exp_id}" if exp_id else "")
-        + ".ipynb"
+        args.crosscoder + (f"_{exp_id}" if exp_id else "") + ".ipynb"
     )
     kwargs["exp_id"] = exp_id
     print(f"Saving to {target_notebook_path}")

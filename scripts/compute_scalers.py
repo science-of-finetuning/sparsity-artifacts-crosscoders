@@ -1,5 +1,6 @@
 # %%
 import sys
+
 sys.path.append(".")
 import torch as th
 from typing import Callable, Union
@@ -14,8 +15,9 @@ from loguru import logger
 import argparse
 
 import os
+
 th.set_grad_enabled(False)
-th.set_float32_matmul_precision('highest')
+th.set_float32_matmul_precision("highest")
 
 from tools.latent_scaler.closed_form import (
     remove_latents,
@@ -23,6 +25,7 @@ from tools.latent_scaler.closed_form import (
     run_tests,
 )
 from tools.utils import load_connor_crosscoder
+
 
 def compute_max_activations(dataloader, cc, device):
     max_activations = th.zeros(cc.dict_size, device=device)
@@ -38,8 +41,10 @@ def compute_max_activations(dataloader, cc, device):
             th.cuda.empty_cache()
     return max_activations
 
+
 def load_base_activation(batch, **kwargs):
     return batch[:, 0, :]
+
 
 def load_chat_activation(batch, **kwargs):
     return batch[:, 1, :]
@@ -59,6 +64,7 @@ def load_base_error(
         latent_activations[:, latent_indices],
         base_decoder[latent_indices],
     )
+
 
 def load_base_reconstruction(
     batch,
@@ -99,6 +105,7 @@ def load_chat_error(
         reconstruction[:, 1, :], latent_activations[:, latent_indices], latent_vectors
     )
 
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--seed", type=int, default=42)
@@ -116,7 +123,11 @@ def main():
     parser.add_argument("--base-model", type=str, default="gemma-2-2b")
     # parser.add_argument("--latent-df-path", type=str, default="Butanium/max-activating-examples-gemma-2-2b-l13-mu4.1e-02-lr1e-04")
     parser.add_argument("--instruct-model", type=str, default="gemma-2-2b-it")
-    parser.add_argument("--chat-only-indices-path", type=Path, default="/workspace/data/only_it_decoder_feature_indices.pt")
+    parser.add_argument(
+        "--chat-only-indices-path",
+        type=Path,
+        default="/workspace/data/only_it_decoder_feature_indices.pt",
+    )
     parser.add_argument("--layer", type=int, default=13)
     parser.add_argument(
         "--results-dir",
@@ -148,8 +159,12 @@ def main():
     )
     args = parser.parse_args()
 
-
-    if not args.chat_error and not args.chat_reconstruction and not args.base_error and not args.base_reconstruction:
+    if (
+        not args.chat_error
+        and not args.chat_reconstruction
+        and not args.base_error
+        and not args.base_reconstruction
+    ):
         logger.info("No computations selected, running all")
         args.chat_error = True
         args.chat_reconstruction = True
@@ -165,11 +180,7 @@ def main():
     device = th.device(args.device)
 
     # Setup dtype
-    dtype_map = {
-        "float32": th.float32,
-        "float64": th.float64,
-        "bfloat16": th.bfloat16
-    }
+    dtype_map = {"float32": th.float32, "float64": th.float64, "bfloat16": th.bfloat16}
     dtype = dtype_map[args.dtype]
     logger.info(f"Using dtype: {dtype}")
 
@@ -177,7 +188,9 @@ def main():
     run_tests(verbose=True)
 
     if args.threshold_active_latents is not None:
-        assert args.threshold_active_latents > 0 and args.threshold_active_latents < 1, "Threshold must be between 0 and 1"
+        assert (
+            args.threshold_active_latents > 0 and args.threshold_active_latents < 1
+        ), "Threshold must be between 0 and 1"
 
     # Load crosscoder
     if args.connor_crosscoder:
@@ -238,14 +251,13 @@ def main():
         num_workers=args.num_workers,
     )
 
-    chat_only_indices = th.load(
-        args.chat_only_indices_path, weights_only=True
-    )
-
+    chat_only_indices = th.load(args.chat_only_indices_path, weights_only=True)
 
     latent_activation_postprocessing_fn = None
     if args.threshold_active_latents is not None:
-        max_act_path = activation_store_dir / ".." / f"max_activations_N{args.num_samples}.pt"
+        max_act_path = (
+            activation_store_dir / ".." / f"max_activations_N{args.num_samples}.pt"
+        )
         if not os.path.exists(max_act_path):
             # Compute max activations
             max_activations = compute_max_activations(dataloader, cc, device)
@@ -259,47 +271,65 @@ def main():
         def jumprelu_latent_activations(latent_activations):
             # latent_activations: (batch_size, dict_size)
             # Set latent activations to 0 if their value lies below 10% of the max act.
-            latent_activations = latent_activations.masked_fill(latent_activations < threshold, 0)
+            latent_activations = latent_activations.masked_fill(
+                latent_activations < threshold, 0
+            )
             return latent_activations
+
         latent_activation_postprocessing_fn = jumprelu_latent_activations
     # Create results directory
     results_dir = args.results_dir / args.crosscoder_path.replace("/", "_")
     results_dir.mkdir(parents=True, exist_ok=True)
-    
+
     computations = []
     if args.base_reconstruction:
         computations.append(("base_reconstruction", load_base_reconstruction))
     if args.base_error:
-        computations.append(("base_error", partial(load_base_error, base_decoder=base_decoder)))
+        computations.append(
+            ("base_error", partial(load_base_error, base_decoder=base_decoder))
+        )
     if args.chat_reconstruction:
         computations.append(("it_reconstruction", load_chat_reconstruction))
     if args.chat_error:
         computations.append(("it_error", load_chat_error))
-    
 
     latent_vectors = it_decoder[chat_only_indices].clone()
     if args.random_vectors:
-        random_vectors = th.randn(len(chat_only_indices), cc.activation_dim, device=device)
+        random_vectors = th.randn(
+            len(chat_only_indices), cc.activation_dim, device=device
+        )
         assert random_vectors.shape == (len(chat_only_indices), cc.activation_dim)
         # Scale random vectors to match the norm of the IT decoder vectors
         it_decoder_norm = th.norm(latent_vectors, dim=1)
         print(it_decoder_norm.shape)
         print(th.norm(random_vectors, dim=1, keepdim=True).shape)
         assert it_decoder_norm.shape == (len(chat_only_indices),)
-        random_vectors = random_vectors * (it_decoder_norm / th.norm(random_vectors, dim=1)).unsqueeze(1)
+        random_vectors = random_vectors * (
+            it_decoder_norm / th.norm(random_vectors, dim=1)
+        ).unsqueeze(1)
         assert random_vectors.shape == (len(chat_only_indices), cc.activation_dim)
         latent_vectors = random_vectors
     if args.random_indices:
-        random_indices = th.randint(0, cc.dict_size, (len(chat_only_indices),), device=device)
+        random_indices = th.randint(
+            0, cc.dict_size, (len(chat_only_indices),), device=device
+        )
         assert random_indices.shape == (len(chat_only_indices),)
         # Scale random indices to match the norm of the IT decoder vectors
         random_indices_vectors = it_decoder[random_indices].clone()
-        assert random_indices_vectors.shape == (len(chat_only_indices), cc.activation_dim)
+        assert random_indices_vectors.shape == (
+            len(chat_only_indices),
+            cc.activation_dim,
+        )
         # Scale random vectors to match the norm of the IT decoder vectors
         it_decoder_norm = th.norm(latent_vectors, dim=1)
         assert it_decoder_norm.shape == (len(chat_only_indices),)
-        random_indices_vectors = random_indices_vectors * (it_decoder_norm / th.norm(random_indices_vectors, dim=1)).unsqueeze(1)
-        assert random_indices_vectors.shape == (len(chat_only_indices), cc.activation_dim)
+        random_indices_vectors = random_indices_vectors * (
+            it_decoder_norm / th.norm(random_indices_vectors, dim=1)
+        ).unsqueeze(1)
+        assert random_indices_vectors.shape == (
+            len(chat_only_indices),
+            cc.activation_dim,
+        )
         latent_vectors = random_indices_vectors
 
     # Run all computations

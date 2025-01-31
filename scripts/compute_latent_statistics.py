@@ -126,7 +126,9 @@ def main():
 
     # Save args
     with open(results_dir / "args.json", "w") as f:
-        json.dump({k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()}, f)
+        json.dump(
+            {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()}, f
+        )
 
     th.save(stats_fineweb, results_dir / "fineweb.pt")
     th.save(stats_lmsys, results_dir / "lmsys.pt")

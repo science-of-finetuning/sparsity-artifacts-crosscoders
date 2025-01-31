@@ -16,20 +16,57 @@ if __name__ == "__main__":
     parser.add_argument("--activation-store-dir", type=str, required=True)
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--context-len", type=int, default=1024)
-    parser.add_argument("--layers", type=int, nargs="+", help="Layer indices to collect activations from", required=True)
-    parser.add_argument("--dataset", type=str, required=True, help="Dataset to collect activations from. Examples are 'science-of-finetuning/lmsys-chat-1m-gemma-2-it-formatted' and 'science-of-finetuning/fineweb-100m-sample-test-set'")
-    parser.add_argument("--dataset-split", type=str, default="train", help="Split of the dataset to collect activations from. Examples are 'train' and 'test'")
-    parser.add_argument("--max-samples", type=int, default=10**6, help="Maximum number of samples to collect activations from")
-    parser.add_argument("--max-tokens", type=int, default=10**8, help="Maximum number of tokens to collect activations from")
-    parser.add_argument("--text-column", type=str, default="text", help="Column in the dataset to collect activations from")
-    parser.add_argument("--overwrite", action="store_true", help="Overwrite existing activations")
+    parser.add_argument(
+        "--layers",
+        type=int,
+        nargs="+",
+        help="Layer indices to collect activations from",
+        required=True,
+    )
+    parser.add_argument(
+        "--dataset",
+        type=str,
+        required=True,
+        help="Dataset to collect activations from. Examples are 'science-of-finetuning/lmsys-chat-1m-gemma-2-it-formatted' and 'science-of-finetuning/fineweb-100m-sample-test-set'",
+    )
+    parser.add_argument(
+        "--dataset-split",
+        type=str,
+        default="train",
+        help="Split of the dataset to collect activations from. Examples are 'train' and 'test'",
+    )
+    parser.add_argument(
+        "--max-samples",
+        type=int,
+        default=10**6,
+        help="Maximum number of samples to collect activations from",
+    )
+    parser.add_argument(
+        "--max-tokens",
+        type=int,
+        default=10**8,
+        help="Maximum number of tokens to collect activations from",
+    )
+    parser.add_argument(
+        "--text-column",
+        type=str,
+        default="text",
+        help="Column in the dataset to collect activations from",
+    )
+    parser.add_argument(
+        "--overwrite", action="store_true", help="Overwrite existing activations"
+    )
     args = parser.parse_args()
 
     if len(args.layers) == 0:
         raise ValueError("Must provide at least one layer")
 
-
-    model = AutoModelForCausalLM.from_pretrained(args.model, device_map="auto", torch_dtype=th.bfloat16, attn_implementation="eager")
+    model = AutoModelForCausalLM.from_pretrained(
+        args.model,
+        device_map="auto",
+        torch_dtype=th.bfloat16,
+        attn_implementation="eager",
+    )
     tokenizer = AutoTokenizer.from_pretrained(args.model)
     model = LanguageModel(model, tokenizer=tokenizer)
     num_layers = int(len(model.model.layers))
@@ -53,4 +90,18 @@ if __name__ == "__main__":
     out_dir.mkdir(parents=True, exist_ok=True)
     logger.info(f"Collecting activations to {out_dir}")
     time.sleep(10)
-    ActivationCache.collect(dataset[args.text_column], submodules, submodule_names, model, out_dir, shuffle_shards=False, io="out", shard_size=10**6, batch_size=args.batch_size, context_len=1024, d_model=d_model, last_submodule=submodules[-1], max_total_tokens=args.max_tokens)
+    ActivationCache.collect(
+        dataset[args.text_column],
+        submodules,
+        submodule_names,
+        model,
+        out_dir,
+        shuffle_shards=False,
+        io="out",
+        shard_size=10**6,
+        batch_size=args.batch_size,
+        context_len=1024,
+        d_model=d_model,
+        last_submodule=submodules[-1],
+        max_total_tokens=args.max_tokens,
+    )

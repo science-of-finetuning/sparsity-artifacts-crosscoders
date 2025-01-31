@@ -8,10 +8,18 @@ RATIO_COLOR = COLORS.get_shade(5, 500)
 BASE_COLOR = COLORS.get_shade(2, 600)
 CHAT_COLOR = COLORS.get_shade(7, 600)
 
-def plot_scaler_histograms(betas, target_type, baseline=None, title="Scaler Histogram Analysis for Reconstruction", xpos_legend=0.02, xpos_inset=0.85):
+
+def plot_scaler_histograms(
+    betas,
+    target_type,
+    baseline=None,
+    title="Scaler Histogram Analysis for Reconstruction",
+    xpos_legend=0.02,
+    xpos_inset=0.85,
+):
     """
     Create histograms comparing base and chat model scaler values and their ratio.
-    
+
     Args:
         betas (dict): Dictionary containing reconstruction values for base and chat models
         target_type (str): Type of target to plot (e.g., "reconstruction", "latent")
@@ -19,9 +27,9 @@ def plot_scaler_histograms(betas, target_type, baseline=None, title="Scaler Hist
     recon_base = betas["normal"]["base"][target_type]
     recon_chat = betas["normal"]["it"][target_type]
 
-    ratio = recon_base/recon_chat
+    ratio = recon_base / recon_chat
     if baseline is not None:
-        ratio_baseline = baseline/recon_chat
+        ratio_baseline = baseline / recon_chat
 
     # Calculate percentile thresholds for filtering outliers
     base_low, base_high = np.percentile(recon_base, [1, 99])
@@ -38,39 +46,80 @@ def plot_scaler_histograms(betas, target_type, baseline=None, title="Scaler Hist
     max_count = max(np.max(hist_base[0]), np.max(hist_chat[0]))
 
     # Create the figure
-    fig = make_subplots(rows=1, cols=3,
-                        subplot_titles=["Base/Chat Ratio",
-                                      "Base/Chat Ratio (zoom on -1 to 2)", 
-                                      "Base and Chat Scaler Values"],
-                        column_widths=[0.25, 0.375, 0.375])
+    fig = make_subplots(
+        rows=1,
+        cols=3,
+        subplot_titles=[
+            "Base/Chat Ratio",
+            "Base/Chat Ratio (zoom on -1 to 2)",
+            "Base and Chat Scaler Values",
+        ],
+        column_widths=[0.25, 0.375, 0.375],
+    )
 
     # Main histograms
     fig.add_trace(
-        go.Histogram(x=ratio[combined_mask], nbinsx=100, marker_color=RATIO_COLOR, name="Base/Chat Ratio"),
-        row=1, col=1
+        go.Histogram(
+            x=ratio[combined_mask],
+            nbinsx=100,
+            marker_color=RATIO_COLOR,
+            name="Base/Chat Ratio",
+        ),
+        row=1,
+        col=1,
     )
     if baseline is not None:
         fig.add_trace(
-            go.Histogram(x=ratio_baseline[combined_mask], nbinsx=100, marker_color="black", name="Base/Chat Ratio (Baseline)"),
-            row=1, col=1
+            go.Histogram(
+                x=ratio_baseline[combined_mask],
+                nbinsx=100,
+                marker_color="black",
+                name="Base/Chat Ratio (Baseline)",
+            ),
+            row=1,
+            col=1,
         )
 
     fig.add_trace(
-        go.Histogram(x=ratio[(ratio > -1) & (ratio < 2)], nbinsx=100, marker_color=RATIO_COLOR, showlegend=False),
-        row=1, col=2
+        go.Histogram(
+            x=ratio[(ratio > -1) & (ratio < 2)],
+            nbinsx=100,
+            marker_color=RATIO_COLOR,
+            showlegend=False,
+        ),
+        row=1,
+        col=2,
     )
     if baseline is not None:
         fig.add_trace(
-            go.Histogram(x=ratio_baseline[(ratio_baseline > -1) & (ratio_baseline < 2)], nbinsx=100, marker_color="black", showlegend=False),
-            row=1, col=2
+            go.Histogram(
+                x=ratio_baseline[(ratio_baseline > -1) & (ratio_baseline < 2)],
+                nbinsx=100,
+                marker_color="black",
+                showlegend=False,
+            ),
+            row=1,
+            col=2,
         )
     fig.add_trace(
-        go.Histogram(x=recon_base[combined_mask], name="Base Activation", nbinsx=100, marker_color=BASE_COLOR),
-        row=1, col=3
+        go.Histogram(
+            x=recon_base[combined_mask],
+            name="Base Activation",
+            nbinsx=100,
+            marker_color=BASE_COLOR,
+        ),
+        row=1,
+        col=3,
     )
     fig.add_trace(
-        go.Histogram(x=recon_chat[combined_mask], name="Chat Activation", nbinsx=100, marker_color=CHAT_COLOR),
-        row=1, col=3
+        go.Histogram(
+            x=recon_chat[combined_mask],
+            name="Chat Activation",
+            nbinsx=100,
+            marker_color=CHAT_COLOR,
+        ),
+        row=1,
+        col=3,
     )
 
     fig.update_annotations(yshift=-20)
@@ -78,12 +127,12 @@ def plot_scaler_histograms(betas, target_type, baseline=None, title="Scaler Hist
     fig.add_trace(
         go.Histogram(
             x=recon_base[(recon_base >= -1) & (recon_base <= 2)],
-            name="Base Model (zoom)", 
+            name="Base Model (zoom)",
             nbinsx=50,
-            xaxis='x4',
-            yaxis='y4',
+            xaxis="x4",
+            yaxis="y4",
             showlegend=False,
-            marker_color=BASE_COLOR
+            marker_color=BASE_COLOR,
         )
     )
     fig.add_trace(
@@ -91,10 +140,10 @@ def plot_scaler_histograms(betas, target_type, baseline=None, title="Scaler Hist
             x=recon_chat[(recon_chat >= -1) & (recon_chat <= 2)],
             name="Chat Model (zoom)",
             nbinsx=50,
-            xaxis='x4',
-            yaxis='y4',
+            xaxis="x4",
+            yaxis="y4",
             showlegend=False,
-            marker_color=CHAT_COLOR
+            marker_color=CHAT_COLOR,
         )
     )
 
@@ -104,22 +153,22 @@ def plot_scaler_histograms(betas, target_type, baseline=None, title="Scaler Hist
         height=500,
         showlegend=True,
         xaxis4=dict(
-            domain=[xpos_inset, xpos_inset+0.13],
-            anchor='y4',
+            domain=[xpos_inset, xpos_inset + 0.13],
+            anchor="y4",
             range=[-1, 2],
-            title='Zoom (-1 to 2)',
+            title="Zoom (-1 to 2)",
             showgrid=True,
-            linecolor='black',
+            linecolor="black",
             linewidth=2,
-            mirror=True
+            mirror=True,
         ),
         yaxis4=dict(
             domain=[0.5, 0.96],
-            anchor='x4',
+            anchor="x4",
             showgrid=True,
-            linecolor='black', 
+            linecolor="black",
             linewidth=2,
-            mirror=True
+            mirror=True,
         ),
         shapes=[
             dict(
@@ -135,15 +184,15 @@ def plot_scaler_histograms(betas, target_type, baseline=None, title="Scaler Hist
             )
         ],
     )
-       
+
     # Add legend to leftmost plot in top left
     fig.update_layout(
         legend=dict(
             x=xpos_legend,
             y=0.95,
-            xanchor='left',
-            yanchor='top',
-            bgcolor='rgba(255,255,255,0.8)'
+            xanchor="left",
+            yanchor="top",
+            bgcolor="rgba(255,255,255,0.8)",
         )
     )
     fig.update_layout(

@@ -18,6 +18,7 @@ class ComputedBucketedStats:
     """
     Contains stats computed from a BucketedStats object and allows for easy computation of global stats.
     """
+
     def __init__(self, bucketed_stats: pd.DataFrame):
         self.bucketed_stats = bucketed_stats
 
@@ -31,18 +32,18 @@ class ComputedBucketedStats:
         - total count
         """
         # Get the stats as numpy arrays for vectorized operations
-        means = self.bucketed_stats['mean'].unstack()  # latent x bucket
-        counts = self.bucketed_stats['nonzero count'].unstack()
-        mins = self.bucketed_stats['min'].unstack()
-        maxs = self.bucketed_stats['max'].unstack()
-        
+        means = self.bucketed_stats["mean"].unstack()  # latent x bucket
+        counts = self.bucketed_stats["nonzero count"].unstack()
+        mins = self.bucketed_stats["min"].unstack()
+        maxs = self.bucketed_stats["max"].unstack()
+
         # Compute weighted means vectorized
         # Replace NaN with 0 in means and corresponding counts with 0
         means_masked = np.nan_to_num(means, 0.0)
         counts_masked = np.where(np.isnan(means), 0, counts)
         sum_counts = counts_masked.sum(axis=1)  # sum per latent
         sum_counts[sum_counts == 0] = np.nan
-        with np.errstate(divide='ignore', invalid='ignore'):
+        with np.errstate(divide="ignore", invalid="ignore"):
             weighted_mean = (means_masked * counts_masked).sum(axis=1) / sum_counts
 
         # Global min/max per latent (ignoring NaN)
@@ -51,13 +52,15 @@ class ComputedBucketedStats:
         total_count = counts.sum(axis=1)
 
         # Create DataFrame with results
-        global_stats = pd.DataFrame({
-            'weighted_mean': weighted_mean,
-            'min': global_min,
-            'max': global_max,
-            'total_count': total_count
-        })
-        
+        global_stats = pd.DataFrame(
+            {
+                "weighted_mean": weighted_mean,
+                "min": global_min,
+                "max": global_max,
+                "total_count": total_count,
+            }
+        )
+
         return global_stats
 
 

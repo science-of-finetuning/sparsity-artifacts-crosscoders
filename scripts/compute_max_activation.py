@@ -58,6 +58,8 @@ if __name__ == "__main__":
         / f"layer_{args.layer}_out",
     )
     max_activations = compute_max_activation(model, cache, args.device, args.batch_size)
-    path = Path("results") / f"max_activations_{args.model}_{args.dataset}_{args.layer}.pt"
+    path = (
+        Path("results") / f"max_activations_{args.model}_{args.dataset}_{args.layer}.pt"
+    )
     path.parent.mkdir(parents=True, exist_ok=True)
     th.save(max_activations, path)

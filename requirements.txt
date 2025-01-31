@@ -11,3 +11,4 @@ tiny_dashboard
 datasets
 kaleido
 wandb
+loguru

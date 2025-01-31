@@ -29,10 +29,12 @@ def dead_latent_indices(combined_latent_statistics, rescaled=False):
 def mask_to_indices(mask):
     return th.nonzero(mask).squeeze().tolist()
 
+
 def indices_to_mask(indices, length):
     mask = th.zeros(length).bool()
     mask[indices] = True
     return mask
+
 
 def remove_dead_and_filter(tensor, dead_indices, filter_indices):
     dead_mask = th.zeros(len(tensor)).bool()

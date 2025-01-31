@@ -9,6 +9,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 
 from tools.cc_utils import CCLatent
+
 __all__ = [
     "draw_networkx_nodes",
     "plot_component_sizes",

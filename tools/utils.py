@@ -25,7 +25,7 @@ def load_activation_dataset(
     base_model: str = "gemma-2-2b",
     instruct_model: str = "gemma-2-2b-it",
     layer: int = 13,
-    split = "validation"
+    split="validation",
 ):
     # Load validation dataset
     activation_store_dir = Path(activation_store_dir)
@@ -38,9 +38,7 @@ def load_activation_dataset(
     base_model_fineweb = base_model_dir / "fineweb-1m-sample" / split
     base_model_lmsys = base_model_dir / "lmsys-chat-1m-gemma-formatted" / split
     instruct_model_fineweb = instruct_model_dir / "fineweb-1m-sample" / split
-    instruct_model_lmsys = (
-        instruct_model_dir / "lmsys-chat-1m-gemma-formatted" / split
-    )
+    instruct_model_lmsys = instruct_model_dir / "lmsys-chat-1m-gemma-formatted" / split
 
     fineweb_cache = PairedActivationCache(
         base_model_fineweb / submodule_name, instruct_model_fineweb / submodule_name
@@ -50,6 +48,7 @@ def load_activation_dataset(
     )
 
     return fineweb_cache, lmsys_cache
+
 
 def tokenize_with_ctrl_mask(
     convs: list[list[dict[str, str]]],
