@@ -1,5 +1,5 @@
 import torch as th
-from typing import Callable
+from typing import Callable, Union
 from dictionary_learning import CrossCoder
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -55,6 +55,7 @@ def closed_form_scalars(
     activation_postprocessing_fn: Callable[[th.Tensor], th.Tensor],
     latent_activation_postprocessing_fn: Callable[[th.Tensor], th.Tensor] = None,
     device: th.device = th.device("cuda"),
+    dtype: Union[th.dtype, None] = th.float32,
 ) -> th.Tensor:
     # beta = (latent_vector.T @ (data.T @ latent_vector) / ((latent_vector.norm() ** 2) * (latent_activations.norm() ** 2))
     # data: N x dim_model
@@ -89,16 +90,16 @@ def closed_form_scalars(
     dict_size = crosscoder.dict_size
     print(f"dim_model: {dim_model}, num_latent_vectors: {num_latent_vectors}, dict_size: {dict_size}")
     A = th.zeros(
-        (dim_model, num_latent_vectors), device=device
+        (dim_model, num_latent_vectors), device=device, dtype=dtype
     )  # data.T @ latent_activations
-    C = th.zeros(num_latent_vectors, device=device)  # latent_activations.norm() ** 2
-    D = th.zeros(num_latent_vectors, device=device)  # latent_vectors.norm() ** 2
+    C = th.zeros(num_latent_vectors, device=device, dtype=dtype)  # latent_activations.norm() ** 2
+    D = th.zeros(num_latent_vectors, device=device, dtype=dtype)  # latent_vectors.norm() ** 2
 
-    count_active = th.zeros(num_latent_vectors, device=device)
+    count_active = th.zeros(num_latent_vectors, device=device, dtype=dtype)
 
     for batch in tqdm(dataloader):
         batch_size_current = batch.shape[0]
-        batch = batch.to(device)
+        batch = batch.to(device).to(dtype)
         latent_activations = crosscoder.encode(batch)
         if latent_activation_postprocessing_fn is not None:
             latent_activations = latent_activation_postprocessing_fn(latent_activations)
@@ -286,6 +287,7 @@ def test_closed_form_scalars(
         crosscoder,
         processor,
         device=device,
+        dtype=dtype,
     )
 
     beta = beta.cpu()
