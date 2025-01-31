@@ -8,7 +8,7 @@ RATIO_COLOR = COLORS.get_shade(5, 500)
 BASE_COLOR = COLORS.get_shade(2, 600)
 CHAT_COLOR = COLORS.get_shade(7, 600)
 
-def plot_scaler_histograms(betas, target_type, title="Scaler Histogram Analysis for Reconstruction", xpos_legend=0.02, xpos_inset=0.85):
+def plot_scaler_histograms(betas, target_type, baseline=None, title="Scaler Histogram Analysis for Reconstruction", xpos_legend=0.02, xpos_inset=0.85):
     """
     Create histograms comparing base and chat model scaler values and their ratio.
     
@@ -16,10 +16,12 @@ def plot_scaler_histograms(betas, target_type, title="Scaler Histogram Analysis 
         betas (dict): Dictionary containing reconstruction values for base and chat models
         target_type (str): Type of target to plot (e.g., "reconstruction", "latent")
     """
-    recon_base = betas["normal"]["base"][target_type].cpu().numpy()
-    recon_chat = betas["normal"]["it"][target_type].cpu().numpy()
+    recon_base = betas["normal"]["base"][target_type]
+    recon_chat = betas["normal"]["it"][target_type]
 
     ratio = recon_base/recon_chat
+    if baseline is not None:
+        ratio_baseline = baseline/recon_chat
 
     # Calculate percentile thresholds for filtering outliers
     base_low, base_high = np.percentile(recon_base, [1, 99])
@@ -47,10 +49,21 @@ def plot_scaler_histograms(betas, target_type, title="Scaler Histogram Analysis 
         go.Histogram(x=ratio[combined_mask], nbinsx=100, marker_color=RATIO_COLOR, name="Base/Chat Ratio"),
         row=1, col=1
     )
+    if baseline is not None:
+        fig.add_trace(
+            go.Histogram(x=ratio_baseline[combined_mask], nbinsx=100, marker_color="black", name="Base/Chat Ratio (Baseline)"),
+            row=1, col=1
+        )
+
     fig.add_trace(
         go.Histogram(x=ratio[(ratio > -1) & (ratio < 2)], nbinsx=100, marker_color=RATIO_COLOR, showlegend=False),
         row=1, col=2
     )
+    if baseline is not None:
+        fig.add_trace(
+            go.Histogram(x=ratio_baseline[(ratio_baseline > -1) & (ratio_baseline < 2)], nbinsx=100, marker_color="black", showlegend=False),
+            row=1, col=2
+        )
     fig.add_trace(
         go.Histogram(x=recon_base[combined_mask], name="Base Activation", nbinsx=100, marker_color=BASE_COLOR),
         row=1, col=3

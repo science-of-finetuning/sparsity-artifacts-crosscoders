@@ -118,6 +118,7 @@ def filter_stack_latents(latents, attention_mask):
 class LatentStatistic:
     avg_activation: th.Tensor
     non_zero_counts: th.Tensor
+    max_activation: th.Tensor
     total_tokens: int
     is_normalized: bool = False
 
@@ -131,12 +132,14 @@ class LatentStatistic:
     def combine(self, other):
         self.avg_activation += other.avg_activation
         self.non_zero_counts += other.non_zero_counts
+        self.max_activation = th.maximum(self.max_activation, other.max_activation)
         self.total_tokens += other.total_tokens
         return self
 
     def to(self, device):
         self.avg_activation = self.avg_activation.to(device)
         self.non_zero_counts = self.non_zero_counts.to(device)
+        self.max_activation = self.max_activation.to(device)
         return self
 
 
@@ -201,6 +204,11 @@ def compute_statistics(latents, total_tokens, non_zero_threshold=1e-8):
     base_avg_activation = latents.base.sum(dim=0)
     instruction_avg_activation = latents.instruction.sum(dim=0)
     joint_avg_activation = latents.joint.sum(dim=0)
+    
+    base_max_activation = latents.base.max(dim=0).values
+    instruction_max_activation = latents.instruction.max(dim=0).values
+    joint_max_activation = latents.joint.max(dim=0).values
+    
     base_non_zero_counts = (latents.base > non_zero_threshold).sum(dim=0)
     instruction_non_zero_counts = (latents.instruction > non_zero_threshold).sum(dim=0)
     joint_non_zero_counts = (latents.joint > non_zero_threshold).sum(dim=0)
@@ -228,13 +236,22 @@ def compute_statistics(latents, total_tokens, non_zero_threshold=1e-8):
     ).sum(dim=0)
 
     base_statistic = LatentStatistic(
-        base_avg_activation, base_non_zero_counts, total_tokens
+        base_avg_activation, 
+        base_non_zero_counts, 
+        base_max_activation,
+        total_tokens
     )
     instruction_statistic = LatentStatistic(
-        instruction_avg_activation, instruction_non_zero_counts, total_tokens
+        instruction_avg_activation, 
+        instruction_non_zero_counts,
+        instruction_max_activation,
+        total_tokens
     )
     joint_statistic = LatentStatistic(
-        joint_avg_activation, joint_non_zero_counts, total_tokens
+        joint_avg_activation, 
+        joint_non_zero_counts,
+        joint_max_activation,
+        total_tokens
     )
     return LatentStatistics(
         base=base_statistic,
