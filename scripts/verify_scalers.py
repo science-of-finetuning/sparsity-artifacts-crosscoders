@@ -14,6 +14,7 @@ from functools import partial
 import argparse
 from torchmetrics import MeanSquaredError
 import os
+from tools.utils import load_activation_dataset
 
 th.set_grad_enabled(False)
 th.set_float32_matmul_precision("highest")
@@ -33,12 +34,16 @@ from compute_scalers import (
     load_chat_activation,
 )
 
+
 def get_bucket_edges(max_activations, n_buckets, add_noise_threshold=0.05):
     step_size = 1 / n_buckets
-    steps = th.arange(n_buckets+1) * step_size
+    steps = th.arange(n_buckets + 1) * step_size
     if add_noise_threshold is not None:
-        steps = th.cat([th.tensor([0, add_noise_threshold]), steps[1:]]).to(max_activations.device)
-    return th.stack([steps*max_act for max_act in max_activations])
+        steps = th.cat([th.tensor([0, add_noise_threshold]), steps[1:]]).to(
+            max_activations.device
+        )
+    return th.stack([steps * max_act for max_act in max_activations])
+
 
 def compute_stats(
     betas: th.Tensor,
@@ -76,8 +81,12 @@ def compute_stats(
         max_activations = max_activations[latent_indices].to(device)
         assert len(max_activations) == len(latent_indices)
         bucket_edges = get_bucket_edges(max_activations, n_buckets, add_noise_threshold)
-        mse_buckets = th.zeros(n_buckets, len(latent_indices), device=device, dtype=th.float64)
-        mse_before_buckets = th.zeros(n_buckets, len(latent_indices), device=device, dtype=th.float64)
+        mse_buckets = th.zeros(
+            n_buckets, len(latent_indices), device=device, dtype=th.float64
+        )
+        mse_before_buckets = th.zeros(
+            n_buckets, len(latent_indices), device=device, dtype=th.float64
+        )
         mse_count = th.zeros(n_buckets, len(latent_indices), device=device, dtype=dtype)
 
     for batch in tqdm(dataloader, desc="Computing scaler stats"):
@@ -175,19 +184,31 @@ def compute_stats(
         count += th.ones_like(mse) * batch_size
 
         if max_activations is not None:
-            for i in range(1, n_buckets+1):
-                mask = ((latent_activations > bucket_edges[:, i-1]) & (latent_activations <= bucket_edges[:, i])).T.unsqueeze(-1)
+            for i in range(1, n_buckets + 1):
+                mask = (
+                    (latent_activations > bucket_edges[:, i - 1])
+                    & (latent_activations <= bucket_edges[:, i])
+                ).T.unsqueeze(-1)
                 assert mask.shape == (len(latent_indices), batch_size, 1)
-                residual_masked = residual*mask
-                residual_before_masked = residual_before*mask
+                residual_masked = residual * mask
+                residual_before_masked = residual_before * mask
                 mse_bucket_result = residual_masked.pow(2).sum(dim=1).mean(dim=-1)
                 assert mse_bucket_result.shape == (len(latent_indices),)
-                mse_buckets[i-1] += mse_bucket_result
-                mse_before_buckets[i-1] += residual_before_masked.pow(2).sum(dim=1).mean(dim=-1)
-                mse_count[i-1] += mask.sum(dim=1).squeeze(-1)
+                mse_buckets[i - 1] += mse_bucket_result
+                mse_before_buckets[i - 1] += (
+                    residual_before_masked.pow(2).sum(dim=1).mean(dim=-1)
+                )
+                mse_count[i - 1] += mask.sum(dim=1).squeeze(-1)
 
         # Clean up GPU memory
-        del latent_activations, target, reconstructions, residual, residual_before, activation_before
+        del (
+            latent_activations,
+            target,
+            reconstructions,
+            residual,
+            residual_before,
+            activation_before,
+        )
         if device == "cuda":
             th.cuda.empty_cache()
 
@@ -197,12 +218,16 @@ def compute_stats(
         frac_explained = explained_variance / count
         frac_explained_before = before_explained_variance / count
         output["frac_variance_explained"] = frac_explained.cpu().numpy()
-        output["frac_variance_explained_no_scaler"] = frac_explained_before.cpu().numpy()
+        output["frac_variance_explained_no_scaler"] = (
+            frac_explained_before.cpu().numpy()
+        )
         output["count"] = count.cpu().numpy()
 
     if max_activations is not None:
         output["mse_buckets"] = mse_buckets.cpu().numpy() / mse_count.cpu().numpy()
-        output["mse_before_buckets"] = mse_before_buckets.cpu().numpy() / mse_count.cpu().numpy()
+        output["mse_before_buckets"] = (
+            mse_before_buckets.cpu().numpy() / mse_count.cpu().numpy()
+        )
         output["mse_count"] = mse_count.cpu().numpy()
         output["bucket_edges"] = bucket_edges.cpu().numpy()
     output["mse"] = mse.cpu().numpy() / count.cpu().numpy()
@@ -228,11 +253,13 @@ def load_betas(args, computation, results_dir):
     betas = th.load(betas_path)
     return betas, name
 
+
 def load_zero_vector(
     batch,
     **kwargs,
 ):
     return th.zeros_like(batch[:, 0, :])
+
 
 def main():
     # Reuse argument parsing from compute_scalers.py
@@ -290,28 +317,23 @@ def main():
 
     # Load validation dataset
     activation_store_dir = Path(args.activation_store_dir)
-    base_model_dir = activation_store_dir / args.base_model
-    instruct_model_dir = activation_store_dir / args.instruct_model
 
-    submodule_name = f"layer_{args.layer}_out"
-
-    # Load validation caches
-    base_model_fineweb = base_model_dir / "fineweb-1m-sample/validation"
-    base_model_lmsys = base_model_dir / "lmsys-chat-1m-gemma-formatted/validation"
-    instruct_model_fineweb = instruct_model_dir / "fineweb-1m-sample/validation"
-    instruct_model_lmsys = (
-        instruct_model_dir / "lmsys-chat-1m-gemma-formatted/validation"
+    fineweb_cache, lmsys_cache = load_activation_dataset(
+        activation_store_dir,
+        base_model=args.base_model,
+        instruct_model=args.instruct_model,
+        layer=args.layer,
+        split=args.dataset_split,
+        num_samples_per_dataset=args.num_samples,
+    )
+    num_samples_per_dataset = args.num_samples // 2
+    dataset = th.utils.data.ConcatDataset(
+        [
+            th.utils.data.Subset(fineweb_cache, th.arange(num_samples_per_dataset)),
+            th.utils.data.Subset(lmsys_cache, th.arange(num_samples_per_dataset)),
+        ]
     )
 
-    fineweb_cache = PairedActivationCache(
-        base_model_fineweb / submodule_name, instruct_model_fineweb / submodule_name
-    )
-    lmsys_cache = PairedActivationCache(
-        base_model_lmsys / submodule_name, instruct_model_lmsys / submodule_name
-    )
-
-    dataset = th.utils.data.ConcatDataset([fineweb_cache, lmsys_cache])
-    dataset = th.utils.data.Subset(dataset, th.arange(args.num_samples))
     logger.info(f"Number of activations: {len(dataset)}")
     dataloader = th.utils.data.DataLoader(
         dataset,
@@ -349,7 +371,9 @@ def main():
             ("it_reconstruction", load_zero_vector, load_chat_reconstruction)
         )
     if args.chat_error:
-        computations.append(("it_error", load_chat_reconstruction, load_chat_activation))
+        computations.append(
+            ("it_error", load_chat_reconstruction, load_chat_activation)
+        )
 
     if len(computations) == 0:
         logger.info("No computations selected, running all")

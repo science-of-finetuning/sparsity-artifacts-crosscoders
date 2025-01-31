@@ -20,6 +20,7 @@ import matplotlib.pyplot as plt
 import plotly.express as px
 import plotly.graph_objects as go
 from dictionary_learning import CrossCoder
+from dictionary_learning.cache import PairedActivationCache
 
 template_path = (
     Path(__file__).parent.parent / "templates" / "gemma_chat_template_ctrl_tokens.jinja"
@@ -31,6 +32,39 @@ with open(template_path, "r") as f:
     ctrl_template = f.read()
 with open(chat_template_path, "r") as f:
     chat_template = f.read()
+
+
+def load_activation_dataset(
+    activation_store_dir: Path,
+    base_model: str = "gemma-2-2b",
+    instruct_model: str = "gemma-2-2b-it",
+    layer: int = 13,
+    num_samples_per_dataset: int = None,
+    split = "validation"
+):
+    # Load validation dataset
+    activation_store_dir = Path(activation_store_dir)
+    base_model_dir = activation_store_dir / base_model
+    instruct_model_dir = activation_store_dir / instruct_model
+
+    submodule_name = f"layer_{layer}_out"
+
+    # Load validation caches
+    base_model_fineweb = base_model_dir / "fineweb-1m-sample" / split
+    base_model_lmsys = base_model_dir / "lmsys-chat-1m-gemma-formatted" / split
+    instruct_model_fineweb = instruct_model_dir / "fineweb-1m-sample" / split
+    instruct_model_lmsys = (
+        instruct_model_dir / "lmsys-chat-1m-gemma-formatted" / split
+    )
+
+    fineweb_cache = PairedActivationCache(
+        base_model_fineweb / submodule_name, instruct_model_fineweb / submodule_name
+    )
+    lmsys_cache = PairedActivationCache(
+        base_model_lmsys / submodule_name, instruct_model_lmsys / submodule_name
+    )
+
+    return fineweb_cache, lmsys_cache
 
 
 class Mean1DMetric(BaseAggregator):

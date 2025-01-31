@@ -12,6 +12,7 @@ import numpy as np
 from functools import partial
 from loguru import logger
 import argparse
+
 import os
 th.set_grad_enabled(False)
 th.set_float32_matmul_precision('highest')
