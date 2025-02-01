@@ -15,6 +15,7 @@ import argparse
 from torchmetrics import MeanSquaredError
 import os
 from tools.utils import load_activation_dataset
+from tools.compute_utils import BucketedStats, RunningMeanStd
 
 th.set_grad_enabled(False)
 th.set_float32_matmul_precision("highest")
@@ -28,6 +29,9 @@ if __name__ == "__main__":
         load_base_reconstruction,
         load_base_error,
         load_base_activation,
+        load_chat_reconstruction,
+        load_chat_error,
+        load_chat_activation,
     )
 else:
     # Deal with relative imports from other scripts
@@ -35,17 +39,26 @@ else:
         load_base_reconstruction,
         load_base_error,
         load_base_activation,
+        load_chat_reconstruction,
+        load_chat_error,
+        load_chat_activation,
     )
 
-def get_bucket_edges(max_activations, n_buckets, add_noise_threshold=0.05):
+def get_bucket_edges(n_buckets, add_noise_threshold=0.05):
     step_size = 1 / n_buckets
-    steps = (th.arange(n_buckets + 1) * step_size).to(max_activations.device)
+    steps = (th.arange(n_buckets + 1) * step_size)
     if add_noise_threshold is not None:
-        steps = th.cat([th.tensor([0, add_noise_threshold]), steps[1:]]).to(
-            max_activations.device
-        )
-    return th.stack([steps * max_act for max_act in max_activations])
+        steps = th.cat([th.tensor([0, add_noise_threshold]), steps[1:]])
+    return steps
 
+
+def squared_error(residual):
+    # residual: [n_latents, batch_size, dim_model]
+    # return: [n_latents, batch_size]
+    n_latents, batch_size, dim_model = residual.shape
+    out = residual.pow(2).sum(dim=2)
+    assert out.shape == (n_latents, batch_size)
+    return out
 
 def compute_stats(
     betas: th.Tensor,
@@ -59,7 +72,6 @@ def compute_stats(
     device: th.device = th.device("cuda"),
     dtype: Union[th.dtype, None] = th.float32,
     max_activations: th.Tensor = None,
-    compute_fve: bool = False,
     n_buckets: int = 3,
     add_noise_threshold: float = None,
 ) -> dict:
@@ -68,12 +80,10 @@ def compute_stats(
     """
     dim_model = crosscoder.activation_dim
     assert betas.shape == (len(latent_indices),)
-    explained_variance = th.zeros(len(latent_indices), device=device, dtype=dtype)
-    before_explained_variance = th.zeros(
-        len(latent_indices), device=device, dtype=dtype
-    )
     mse = th.zeros(len(latent_indices), device=device, dtype=th.float64)
+    mse_std = RunningMeanStd(shape=(len(latent_indices),))
     mse_before = th.zeros(len(latent_indices), device=device, dtype=th.float64)
+    mse_before_std = RunningMeanStd(shape=(len(latent_indices),))
     count = th.zeros(len(latent_indices), device=device, dtype=dtype)
 
     if max_activations is not None:
@@ -82,14 +92,20 @@ def compute_stats(
         assert max_activations.shape == (crosscoder.dict_size,)
         max_activations = max_activations[latent_indices].to(device)
         assert len(max_activations) == len(latent_indices)
-        bucket_edges = get_bucket_edges(max_activations, n_buckets, add_noise_threshold)
-        mse_buckets = th.zeros(
-            n_buckets, len(latent_indices), device=device, dtype=th.float64
+        bucket_edges = get_bucket_edges(n_buckets, add_noise_threshold)
+
+        mse_buckets = BucketedStats(
+            num_latents=len(latent_indices),
+            max_activations=max_activations,
+            device=device,
+            bucket_edges=bucket_edges,
         )
-        mse_before_buckets = th.zeros(
-            n_buckets, len(latent_indices), device=device, dtype=th.float64
+        mse_before_buckets = BucketedStats(
+            num_latents=len(latent_indices),
+            max_activations=max_activations,
+            device=device,
+            bucket_edges=bucket_edges,
         )
-        mse_count = th.zeros(n_buckets, len(latent_indices), device=device, dtype=dtype)
 
     count_active = th.zeros(len(latent_indices), device=device, dtype=dtype)
 
@@ -173,40 +189,23 @@ def compute_stats(
         residual = target - reconstructions
         residual_before = target - activation_before
         assert residual.shape == (len(latent_indices), batch_size, dim_model)
-        if compute_fve:
-            # [n_latents]
-            target_var = th.var(target, dim=1).sum(dim=-1)
-            residual_var = th.var(residual, dim=1).sum(dim=-1)
-            before_residual_var = th.var(residual_before, dim=1).sum(dim=-1)
-
-            assert target_var.shape == (len(latent_indices),)
-            assert residual_var.shape == (len(latent_indices),)
-            assert before_residual_var.shape == (len(latent_indices),)
-
-            explained_variance += 1 - residual_var / target_var
-            before_explained_variance += 1 - before_residual_var / target_var
 
         # residual is [n_latents, batch_size, dim_model]
-        mse += residual.pow(2).sum(dim=1).mean(dim=-1).double()  # [n_latents]
-        mse_before += residual_before.pow(2).sum(dim=1).mean(dim=-1).double()  # [n_latents]
+        # squared_error_residual is [n_latents, batch_size]
+        squared_error_residual = squared_error(residual)
+        squared_error_residual_before = squared_error(residual_before)
+        assert squared_error_residual.shape == (len(latent_indices), batch_size)
+        assert squared_error_residual_before.shape == (len(latent_indices), batch_size)
+
+        mse += squared_error_residual.sum(dim=-1).double()  # [n_latents]
+        mse_before += squared_error_residual_before.sum(dim=-1).double()  # [n_latents]
+        mse_std.update(mse.permute(1, 0))
+        mse_before_std.update(mse_before.permute(1, 0))
         count += th.ones_like(mse) * batch_size
 
         if max_activations is not None:
-            for i in range(1, n_buckets + 1):
-                mask = (
-                    (latent_activations > bucket_edges[:, i - 1])
-                    & (latent_activations <= bucket_edges[:, i])
-                ).T.unsqueeze(-1)
-                assert mask.shape == (len(latent_indices), batch_size, 1)
-                residual_masked = residual * mask
-                residual_before_masked = residual_before * mask
-                mse_bucket_result = residual_masked.pow(2).sum(dim=1).mean(dim=-1)
-                assert mse_bucket_result.shape == (len(latent_indices),)
-                mse_buckets[i - 1] += mse_bucket_result
-                mse_before_buckets[i - 1] += (
-                    residual_before_masked.pow(2).sum(dim=1).mean(dim=-1)
-                )
-                mse_count[i - 1] += mask.sum(dim=1).squeeze(-1)
+            mse_buckets.update(latent_activations, squared_error_residual.permute(1, 0))
+            mse_before_buckets.update(latent_activations, squared_error_residual_before.permute(1, 0))
 
         # Clean up GPU memory
         del (
@@ -221,27 +220,17 @@ def compute_stats(
             th.cuda.empty_cache()
 
     output = {}
-    # Compute final metrics
-    if compute_fve:
-        frac_explained = explained_variance / count
-        frac_explained_before = before_explained_variance / count
-        output["frac_variance_explained"] = frac_explained.cpu().numpy()
-        output["frac_variance_explained_no_scaler"] = (
-            frac_explained_before.cpu().numpy()
-        )
-        output["count"] = count.cpu().numpy()
 
+    # Compute final metrics
     if max_activations is not None:
-        output["mse_buckets"] = mse_buckets.cpu().numpy() / mse_count.cpu().numpy()
-        output["mse_before_buckets"] = (
-            mse_before_buckets.cpu().numpy() / mse_count.cpu().numpy()
-        )
-        output["mse_count"] = mse_count.cpu().numpy()
+        output["mse_buckets"] = mse_buckets.finish().to_dict()
+        output["mse_before_buckets"] = mse_before_buckets.finish().to_dict()
         output["bucket_edges"] = bucket_edges.cpu().numpy()
 
     output["mse"] = mse.cpu().numpy() / count.cpu().numpy()
     output["mse_before"] = mse_before.cpu().numpy() / count.cpu().numpy()
-    output["count_active"] = count_active.cpu().numpy()
+    output["mse_std"] = mse_std.compute()
+    output["mse_before_std"] = mse_before_std.compute()
     return output
 
 
