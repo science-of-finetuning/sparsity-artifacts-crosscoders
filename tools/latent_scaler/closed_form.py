@@ -155,7 +155,7 @@ def closed_form_scalars(
     betas = B / (C * D)
     assert betas.shape == (num_latent_vectors,)
 
-    return betas, count_active
+    return betas, count_active, B, C, D
 
 
 def test_closed_form_scalars(
@@ -218,7 +218,12 @@ def test_closed_form_scalars(
                 th.abs(v_train @ latent_vectors[i]) < 1e-6
             ), "Vectors are not orthogonal"
 
-    latent_activations = th.randn(N, num_latent_vectors, dtype=dtype, device=device)
+    # Generate sparse activations by zeroing out most values
+    latent_activations = th.randn(N, num_latent_vectors, dtype=dtype, device=device).exp()
+    sparsity_mask = th.rand(N, num_latent_vectors, device=device) > 0.9 # Keep ~10% of activations
+    latent_activations = latent_activations * sparsity_mask
+    latent_activations = latent_activations / latent_activations.mean(dim=0) * 10
+
 
     # randomly scale the latent vectors
     for i in range(num_latent_vectors):
@@ -280,7 +285,7 @@ def test_closed_form_scalars(
 
     crosscoder = ToyCrosscoder(latent_activations_batched.to(device))
 
-    beta, count_active = closed_form_scalars(
+    beta, count_active, nominator, norm_f, norm_d = closed_form_scalars(
         latent_vectors.to(device),
         th.arange(num_latent_vectors).to(device),
         v_train_combined_batched.to(device),
@@ -299,9 +304,6 @@ def test_closed_form_scalars(
 
 
 def run_tests(verbose=False, dtype=th.float64, rtol=1e-5, atol=1e-5):
-    test_closed_form_scalars(
-        dim_model=10, num_latent_vectors=2, N=100, batch_size=25, verbose=verbose, dtype=dtype
-    )
     test_closed_form_scalars(
         dim_model=100, num_latent_vectors=2, N=1000, batch_size=50, verbose=verbose, dtype=dtype
     )

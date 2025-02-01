@@ -12,6 +12,7 @@ import numpy as np
 from functools import partial
 from loguru import logger
 import argparse
+from tools.utils import load_activation_dataset
 
 import os
 th.set_grad_enabled(False)
@@ -139,6 +140,10 @@ def main():
     parser.add_argument("--random-indices", action="store_true")
     parser.add_argument("--connor-crosscoder", action="store_true")
     parser.add_argument("--name", type=str, default=None)
+    parser.add_argument("--epochs", type=int, default=1)
+    parser.add_argument("-SRD", "--special-results-dir", type=str, default="", help="Addon to the results directory. Results will be saved in results_dir/SRD/model_name/")
+    parser.add_argument("--n-offset", type=int, default=0, help="Offset for the number of samples. If non-zero, the start index will be n_offset * num_samples")
+    parser.add_argument("--shuffle-within-dataset", action="store_true")
     parser.add_argument(
         "--dtype",
         type=str,
@@ -174,6 +179,7 @@ def main():
     logger.info(f"Using dtype: {dtype}")
 
     # Run tests first
+    print("Running tests...")
     run_tests(verbose=True)
 
     if args.threshold_active_latents is not None:
@@ -190,32 +196,30 @@ def main():
     cc = cc.to(device).to(dtype)
 
     # Setup paths
+    # Load validation dataset
     activation_store_dir = Path(args.activation_store_dir)
-    base_model_dir = activation_store_dir / args.base_model
-    instruct_model_dir = activation_store_dir / args.instruct_model
 
-    base_model_fineweb = base_model_dir / "fineweb-1m-sample" / args.dataset_split
-    base_model_lmsys_chat = (
-        base_model_dir / "lmsys-chat-1m-gemma-formatted" / lmsys_split
-    )
-    instruct_model_fineweb = (
-        instruct_model_dir / "fineweb-1m-sample" / args.dataset_split
-    )
-    instruct_model_lmsys_chat = (
-        instruct_model_dir / "lmsys-chat-1m-gemma-formatted" / lmsys_split
-    )
-    submodule_name = f"layer_{args.layer}_out"
-
-    # Load caches and create dataset
-    fineweb_cache = PairedActivationCache(
-        base_model_fineweb / submodule_name, instruct_model_fineweb / submodule_name
-    )
-    lmsys_chat_cache = PairedActivationCache(
-        base_model_lmsys_chat / submodule_name,
-        instruct_model_lmsys_chat / submodule_name,
+    fineweb_cache, lmsys_cache = load_activation_dataset(
+        activation_store_dir,
+        base_model=args.base_model,
+        instruct_model=args.instruct_model,
+        layer=args.layer,
+        split=args.dataset_split,
     )
 
-    dataset = th.utils.data.ConcatDataset([fineweb_cache, lmsys_chat_cache])
+    num_samples_per_dataset = args.num_samples // 2
+    dataset = th.utils.data.ConcatDataset(
+        [
+            th.utils.data.Subset(fineweb_cache, th.arange(args.n_offset * num_samples_per_dataset, (args.n_offset + 1) * num_samples_per_dataset)),
+            th.utils.data.Subset(lmsys_cache, th.arange(args.n_offset * num_samples_per_dataset, (args.n_offset + 1) * num_samples_per_dataset)),
+        ]
+    )
+
+    if args.epochs > 1:
+        dataset = th.utils.data.ConcatDataset([dataset] * args.epochs)
+
+    if args.shuffle_within_dataset:
+        dataset = th.utils.data.Subset(dataset, th.randperm(len(dataset)))
 
     # Get decoder weights
     it_decoder = cc.decoder.weight[1, :, :].clone().to(dtype)
@@ -223,11 +227,6 @@ def main():
     base_decoder = cc.decoder.weight[0, :, :].clone().to(dtype)
     assert base_decoder.shape == (cc.dict_size, cc.activation_dim)
 
-    n_per_dataset = args.num_samples // 2
-    test_idx = th.cat(
-        [th.arange(n_per_dataset), th.arange(n_per_dataset) + len(fineweb_cache)]
-    )
-    dataset = th.utils.data.Subset(dataset, test_idx)
     logger.info(f"Number of activations: {len(dataset)}")
 
     dataloader = th.utils.data.DataLoader(
@@ -262,8 +261,12 @@ def main():
             latent_activations = latent_activations.masked_fill(latent_activations < threshold, 0)
             return latent_activations
         latent_activation_postprocessing_fn = jumprelu_latent_activations
+    
     # Create results directory
-    results_dir = args.results_dir / args.crosscoder_path.replace("/", "_")
+    if args.special_results_dir:
+        results_dir = args.results_dir / args.special_results_dir / args.crosscoder_path.replace("/", "_")
+    else:
+        results_dir = args.results_dir / args.crosscoder_path.replace("/", "_")
     results_dir.mkdir(parents=True, exist_ok=True)
     
     computations = []
@@ -289,6 +292,7 @@ def main():
         random_vectors = random_vectors * (it_decoder_norm / th.norm(random_vectors, dim=1)).unsqueeze(1)
         assert random_vectors.shape == (len(chat_only_indices), cc.activation_dim)
         latent_vectors = random_vectors
+
     if args.random_indices:
         random_indices = th.randint(0, cc.dict_size, (len(chat_only_indices),), device=device)
         assert random_indices.shape == (len(chat_only_indices),)
@@ -304,6 +308,7 @@ def main():
 
     # Run all computations
     for name, loader_fn in computations:
+        name += f"_N{args.num_samples}_n_offset{args.n_offset}"
         if latent_activation_postprocessing_fn is not None:
             name += f"_jumprelu{args.threshold_active_latents}"
         if args.random_vectors:
@@ -313,7 +318,7 @@ def main():
         if args.name:
             name += f"_{args.name}"
         logger.info(f"Computing {name}")
-        betas, count_active = closed_form_scalars(
+        betas, count_active, nominator, norm_f, norm_d = closed_form_scalars(
             latent_vectors,
             chat_only_indices,
             dataloader,
@@ -325,6 +330,9 @@ def main():
         )
         th.save(betas, results_dir / f"betas_{name}.pt")
         th.save(count_active, results_dir / f"count_active_{name}.pt")
+        th.save(nominator, results_dir / f"nominator_{name}.pt")
+        th.save(norm_f, results_dir / f"norm_f_{name}.pt")
+        th.save(norm_d, results_dir / f"norm_d_{name}.pt")
 
 
 if __name__ == "__main__":

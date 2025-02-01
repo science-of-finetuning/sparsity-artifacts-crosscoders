@@ -23,21 +23,23 @@ from tools.latent_scaler.closed_form import remove_latents
 from tools.utils import load_connor_crosscoder
 
 # Define processing functions (reusing from compute_scalers.py)
-from compute_scalers import (
-    load_base_reconstruction,
-    load_base_error,
-    load_base_activation,
-)
-from compute_scalers import (
-    load_chat_reconstruction,
-    load_chat_error,
-    load_chat_activation,
-)
-
+if __name__ == "__main__":
+    from compute_scalers import (
+        load_base_reconstruction,
+        load_base_error,
+        load_base_activation,
+    )
+else:
+    # Deal with relative imports from other scripts
+    from .compute_scalers import (
+        load_base_reconstruction,
+        load_base_error,
+        load_base_activation,
+    )
 
 def get_bucket_edges(max_activations, n_buckets, add_noise_threshold=0.05):
     step_size = 1 / n_buckets
-    steps = th.arange(n_buckets + 1) * step_size
+    steps = (th.arange(n_buckets + 1) * step_size).to(max_activations.device)
     if add_noise_threshold is not None:
         steps = th.cat([th.tensor([0, add_noise_threshold]), steps[1:]]).to(
             max_activations.device
@@ -89,12 +91,18 @@ def compute_stats(
         )
         mse_count = th.zeros(n_buckets, len(latent_indices), device=device, dtype=dtype)
 
+    count_active = th.zeros(len(latent_indices), device=device, dtype=dtype)
+
     for batch in tqdm(dataloader, desc="Computing scaler stats"):
         batch_size = batch.shape[0]
         batch = batch.to(dtype).to(device)
 
         # Get latent activations
         latent_activations = crosscoder.encode(batch)
+        non_zero_mask = (latent_activations != 0).sum(dim=0)[latent_indices]
+        assert non_zero_mask.shape == (len(latent_indices),)
+        count_active += non_zero_mask
+
         if latent_activation_postprocessing_fn is not None:
             latent_activations = latent_activation_postprocessing_fn(latent_activations)
 
@@ -179,8 +187,8 @@ def compute_stats(
             before_explained_variance += 1 - before_residual_var / target_var
 
         # residual is [n_latents, batch_size, dim_model]
-        mse += residual.pow(2).sum(dim=1).mean(dim=-1)  # [n_latents]
-        mse_before += residual_before.pow(2).sum(dim=1).mean(dim=-1)  # [n_latents]
+        mse += residual.pow(2).sum(dim=1).mean(dim=-1).double()  # [n_latents]
+        mse_before += residual_before.pow(2).sum(dim=1).mean(dim=-1).double()  # [n_latents]
         count += th.ones_like(mse) * batch_size
 
         if max_activations is not None:
@@ -230,14 +238,22 @@ def compute_stats(
         )
         output["mse_count"] = mse_count.cpu().numpy()
         output["bucket_edges"] = bucket_edges.cpu().numpy()
+
     output["mse"] = mse.cpu().numpy() / count.cpu().numpy()
     output["mse_before"] = mse_before.cpu().numpy() / count.cpu().numpy()
-
+    output["count_active"] = count_active.cpu().numpy()
     return output
 
 
 def load_betas(args, computation, results_dir):
+    if args.from_sgd:
+        betas = th.load(args.sgd_betas_path)["scalers"]
+        name = f"sgd_{args.sgd_betas_path.stem}_N{args.train_num_samples}_n_offset{args.train_n_offset}"
+        return betas, name
+
     name = computation
+    name += f"_N{args.train_num_samples}_n_offset{args.train_n_offset}"
+
     if args.threshold_active_latents is not None:
         name += f"_jumprelu{args.threshold_active_latents}"
     if args.name:
@@ -276,6 +292,8 @@ def main():
     parser.add_argument("--max-activations", type=Path, default=None)
     parser.add_argument("--n-buckets", type=int, default=3)
     parser.add_argument("--add-noise-threshold", type=float, default=None)
+    parser.add_argument("--from-sgd", action="store_true", help="Load from SGD scaler")
+    parser.add_argument("--sgd-betas-path", type=Path, default=None)
     parser.add_argument(
         "--dtype",
         type=str,
@@ -295,11 +313,23 @@ def main():
     parser.add_argument("--base-reconstruction", action="store_true")
     parser.add_argument("--name", type=str, default=None)
     parser.add_argument("--num-samples", type=int, default=1000000)
+    parser.add_argument("--train-num-samples", type=int, default=None)
     parser.add_argument("--dataset-split", type=str, default="validation")
+    parser.add_argument("--special-results-dir", type=str, default="", help="Addon to the results directory. Results will be loaded and saved in results_dir/SRD/model_name/")
+    parser.add_argument("--n-offset", type=int, default=0)
+    parser.add_argument("--train-n-offset", type=int, default=None)
     args = parser.parse_args()
 
+    if args.train_num_samples is None:
+        args.train_num_samples = args.num_samples
+    if args.train_n_offset is None:
+        args.train_n_offset = args.n_offset
+
     # Construct betas path following compute_scalers.py logic
-    results_dir = args.results_dir / args.crosscoder_path.replace("/", "_")
+    if args.special_results_dir:
+        results_dir = args.results_dir / args.special_results_dir / args.crosscoder_path.replace("/", "_")
+    else:
+        results_dir = args.results_dir / args.crosscoder_path.replace("/", "_")
 
     # Setup device and dtype
     if args.device == "cuda" and not th.cuda.is_available():
@@ -324,13 +354,12 @@ def main():
         instruct_model=args.instruct_model,
         layer=args.layer,
         split=args.dataset_split,
-        num_samples_per_dataset=args.num_samples,
     )
     num_samples_per_dataset = args.num_samples // 2
     dataset = th.utils.data.ConcatDataset(
         [
-            th.utils.data.Subset(fineweb_cache, th.arange(num_samples_per_dataset)),
-            th.utils.data.Subset(lmsys_cache, th.arange(num_samples_per_dataset)),
+            th.utils.data.Subset(fineweb_cache, th.arange(args.n_offset * num_samples_per_dataset, (args.n_offset + 1) * num_samples_per_dataset)),
+            th.utils.data.Subset(lmsys_cache, th.arange(args.n_offset * num_samples_per_dataset, (args.n_offset + 1) * num_samples_per_dataset)),
         ]
     )
 
@@ -339,7 +368,6 @@ def main():
         dataset,
         batch_size=args.batch_size,
         shuffle=False,
-        drop_last=True,
         pin_memory=True,
         num_workers=args.num_workers,
     )
@@ -397,6 +425,8 @@ def main():
     for name, loader_fn, target_fn in computations:
         logger.info(f"Computing stats for {name}")
         betas, betas_name = load_betas(args, name, results_dir)
+        if args.train_num_samples is not None:
+            betas_name += f"_NT{args.train_num_samples}_n_offset_train{args.train_n_offset}"
         metrics = compute_stats(
             betas=betas,
             latent_vectors=latent_vectors,
@@ -412,7 +442,7 @@ def main():
             add_noise_threshold=args.add_noise_threshold,
         )
         # Save results
-        output_path = results_dir / f"stats_{betas_name}_.pt"
+        output_path = results_dir / f"stats_{betas_name}_{args.dataset_split}.pt"
         th.save(metrics, output_path)
         logger.info(f"Saved results to {output_path}")
 
