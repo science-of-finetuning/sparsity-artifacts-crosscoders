@@ -247,7 +247,7 @@ def compute_stats(
 
 def load_betas(args, computation, results_dir):
     if args.from_sgd:
-        betas = th.load(args.sgd_betas_path)["scalers"]
+        betas = th.load(args.sgd_betas_path)["scaler"]
         name = f"sgd_{args.sgd_betas_path.stem}_N{args.train_num_samples}_n_offset{args.train_n_offset}"
         return betas, name
 
