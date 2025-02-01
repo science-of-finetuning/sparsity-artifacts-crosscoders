@@ -88,12 +88,18 @@ def closed_form_scalars(
     dim_model = latent_vectors.size(1)
     num_latent_vectors = latent_vectors.size(0)
     dict_size = crosscoder.dict_size
-    print(f"dim_model: {dim_model}, num_latent_vectors: {num_latent_vectors}, dict_size: {dict_size}")
+    print(
+        f"dim_model: {dim_model}, num_latent_vectors: {num_latent_vectors}, dict_size: {dict_size}"
+    )
     A = th.zeros(
         (dim_model, num_latent_vectors), device=device, dtype=dtype
     )  # data.T @ latent_activations
-    C = th.zeros(num_latent_vectors, device=device, dtype=dtype)  # latent_activations.norm() ** 2
-    D = th.zeros(num_latent_vectors, device=device, dtype=dtype)  # latent_vectors.norm() ** 2
+    C = th.zeros(
+        num_latent_vectors, device=device, dtype=dtype
+    )  # latent_activations.norm() ** 2
+    D = th.zeros(
+        num_latent_vectors, device=device, dtype=dtype
+    )  # latent_vectors.norm() ** 2
 
     count_active = th.zeros(num_latent_vectors, device=device, dtype=dtype)
 
@@ -305,16 +311,44 @@ def test_closed_form_scalars(
 
 def run_tests(verbose=False, dtype=th.float64, rtol=1e-5, atol=1e-5):
     test_closed_form_scalars(
-        dim_model=100, num_latent_vectors=2, N=1000, batch_size=50, verbose=verbose, dtype=dtype
+        dim_model=10,
+        num_latent_vectors=2,
+        N=100,
+        batch_size=25,
+        verbose=verbose,
+        dtype=dtype,
     )
     test_closed_form_scalars(
-        dim_model=100, num_latent_vectors=10, N=1000, batch_size=50, verbose=verbose, dtype=dtype
+        dim_model=100,
+        num_latent_vectors=2,
+        N=1000,
+        batch_size=50,
+        verbose=verbose,
+        dtype=dtype,
     )
     test_closed_form_scalars(
-        dim_model=1000, num_latent_vectors=128, N=10000, batch_size=100, verbose=verbose, dtype=dtype
+        dim_model=100,
+        num_latent_vectors=10,
+        N=1000,
+        batch_size=50,
+        verbose=verbose,
+        dtype=dtype,
     )
     test_closed_form_scalars(
-        dim_model=1000, num_latent_vectors=128, N=10000, batch_size=200, verbose=verbose, dtype=dtype
+        dim_model=1000,
+        num_latent_vectors=128,
+        N=10000,
+        batch_size=100,
+        verbose=verbose,
+        dtype=dtype,
+    )
+    test_closed_form_scalars(
+        dim_model=1000,
+        num_latent_vectors=128,
+        N=10000,
+        batch_size=200,
+        verbose=verbose,
+        dtype=dtype,
     )
     test_closed_form_scalars(
         dim_model=10,

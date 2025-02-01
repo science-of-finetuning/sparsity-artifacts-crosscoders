@@ -11,9 +11,14 @@ from typing import Optional
 from dictionary_learning import CrossCoder
 from dictionary_learning.trainers import CrossCoderTrainer
 from dictionary_learning.training import trainSAE
-from tools.latent_scaler import FeatureScaler, IndividualFeatureScalerTrainer, FeatureScalerTrainer
+from tools.latent_scaler import (
+    FeatureScaler,
+    IndividualFeatureScalerTrainer,
+    FeatureScalerTrainer,
+)
 
 th.set_float32_matmul_precision("highest")
+
 
 def train_feature_scaler(
     target_layer: int,
@@ -54,9 +59,13 @@ def train_feature_scaler(
     instruct_model_dir = activation_store_dir / instruct_model
 
     base_model_fineweb = base_model_dir / "fineweb-1m-sample" / dataset_split
-    base_model_lmsys_chat = base_model_dir / "lmsys-chat-1m-gemma-formatted" / dataset_split
+    base_model_lmsys_chat = (
+        base_model_dir / "lmsys-chat-1m-gemma-formatted" / dataset_split
+    )
     instruct_model_fineweb = instruct_model_dir / "fineweb-1m-sample" / dataset_split
-    instruct_model_lmsys_chat = instruct_model_dir / "lmsys-chat-1m-gemma-formatted" / dataset_split
+    instruct_model_lmsys_chat = (
+        instruct_model_dir / "lmsys-chat-1m-gemma-formatted" / dataset_split
+    )
 
     submodule_name = f"layer_{layer}_out"
 
@@ -76,7 +85,7 @@ def train_feature_scaler(
     else:
         from_hub = True
         logger.info(f"Loading cross-coder from hub at {cc_path}")
-    
+
     cc = CrossCoder.from_pretrained(cc_path, from_hub=from_hub)
     target_decoder_layer = target_layer
     # load the feature indices
@@ -100,9 +109,7 @@ def train_feature_scaler(
         source_decoder_weights = random_vectors
         logger.info(f"Using {len(indices)} random source vectors with matched norms.")
     elif len(indices):
-        source_decoder_weights = decoder_weight[
-            source_layer, indices, :
-        ]
+        source_decoder_weights = decoder_weight[source_layer, indices, :]
         logger.info(f"Using vectors from source layer {source_layer}.")
     else:
         logger.info("No indices to modify.")
@@ -110,14 +117,14 @@ def train_feature_scaler(
     activation_dim = cc.activation_dim
     dictionary_size = cc.dict_size
     # build the run name
-    run_name_str = f"L{layer}-mu{mu:.1e}-lr{lr:.0e}-s{seed}" 
+    run_name_str = f"L{layer}-mu{mu:.1e}-lr{lr:.0e}-s{seed}"
     if individual_indices:
         run_name_str += "-Individual"
     if run_name is not None:
         run_name_str += f"-{run_name}"
     if zero_init_scaler:
         run_name_str += "-ZeroInit"
-    
+
     if random_indices:
         run_name_str = "RandomIndices" + run_name_str
     if random_source:
@@ -191,7 +198,7 @@ def train_feature_scaler(
     )
     validation_dataloader = th.utils.data.DataLoader(
         validation_dataset,
-        batch_size=batch_size*2, 
+        batch_size=batch_size * 2,
         shuffle=False,
         num_workers=workers,
         pin_memory=True,
@@ -211,7 +218,7 @@ def train_feature_scaler(
         save_last_eval=True,
         save_steps=save_every_n_steps,
         start_of_training_eval=start_of_training_eval,
-        save_dir=Path(output_dir) / "feature_scaler" / run_name_str
+        save_dir=Path(output_dir) / "feature_scaler" / run_name_str,
     )
 
     # save the feature scaler
@@ -220,7 +227,9 @@ def train_feature_scaler(
     with open(out_dir / "args.json", "w") as f:
         json.dump(
             {
-                "feature_indices": feature_indices.tolist() if feature_indices is not None else [],
+                "feature_indices": (
+                    feature_indices.tolist() if feature_indices is not None else []
+                ),
                 "target_layer": target_layer,
                 "source_layer": source_layer,
                 "activation_store_dir": str(activation_store_dir),
@@ -264,7 +273,12 @@ if __name__ == "__main__":
     parser.add_argument("--mu", type=float, default=0)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max-steps", type=int, default=None)
-    parser.add_argument("--validate-every-n-steps", type=int, default=10000, help="If None, will not validate")
+    parser.add_argument(
+        "--validate-every-n-steps",
+        type=int,
+        default=10000,
+        help="If None, will not validate",
+    )
     parser.add_argument("--save-every-n-steps", type=int, default=5000)
     parser.add_argument("--run-name", type=str, default=None)
     parser.add_argument("--lr", type=float, default=1e-3)
@@ -276,14 +290,18 @@ if __name__ == "__main__":
     parser.add_argument("--individual-indices", action="store_true")
     parser.add_argument("--warmup-steps", type=int, default=1000)
     parser.add_argument("--start-of-training-eval", action="store_true")
-    parser.add_argument("--float64", action="store_true", help="Use float64 for the training run - this is slower but more accurate and runs the correctness tests.")
+    parser.add_argument(
+        "--float64",
+        action="store_true",
+        help="Use float64 for the training run - this is slower but more accurate and runs the correctness tests.",
+    )
 
     args = parser.parse_args()
     print(args)
     assert not (
         args.random_indices and args.random_source
     ), "Cannot specify both random-indices and random-source."
-    
+
     logger.info(f"Loading feature indices from file {args.feature_indices_file}")
     if args.feature_indices_file is not None:
         feature_indices = th.load(args.feature_indices_file)

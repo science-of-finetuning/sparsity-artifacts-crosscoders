@@ -63,9 +63,7 @@ def get_latents(batch, base_model, instruction_model, ae, layer):
     activations = activations.view(-1, activations.shape[-2], activations.shape[-1])
     latents_joint, latents_split = ae.encode(activations, return_no_sum=True)
     # rescale latents by decoder column norms
-    rescaled_latents_split = latents_split * ae.decoder.weight.norm(dim=2).unsqueeze(
-        0
-    )
+    rescaled_latents_split = latents_split * ae.decoder.weight.norm(dim=2).unsqueeze(0)
     rescaled_latents_joint = latents_joint * ae.decoder.weight.norm(dim=2).sum(
         dim=0, keepdim=True
     )
@@ -94,9 +92,7 @@ def get_latents(batch, base_model, instruction_model, ae, layer):
         base=base_latents_rescaled,
         instruction=instruction_latents_rescaled,
         joint=rescaled_latents_joint,
-    ), Latents(
-        base=base_latents, instruction=instruction_latents, joint=latents_joint
-    )
+    ), Latents(base=base_latents, instruction=instruction_latents, joint=latents_joint)
 
 
 def filter_stack_latents(latents, attention_mask):
@@ -105,9 +101,9 @@ def filter_stack_latents(latents, attention_mask):
     base_latents = latents.base.view(-1, latents.base.shape[-1])[
         attention_mask.view(-1).bool()
     ]
-    instruction_latents = latents.instruction.view(
-        -1, latents.instruction.shape[-1]
-    )[attention_mask.view(-1).bool()]
+    instruction_latents = latents.instruction.view(-1, latents.instruction.shape[-1])[
+        attention_mask.view(-1).bool()
+    ]
     joint_latents = latents.joint.view(-1, latents.joint.shape[-1])[
         attention_mask.view(-1).bool()
     ]
@@ -204,11 +200,11 @@ def compute_statistics(latents, total_tokens, non_zero_threshold=1e-8):
     base_avg_activation = latents.base.sum(dim=0)
     instruction_avg_activation = latents.instruction.sum(dim=0)
     joint_avg_activation = latents.joint.sum(dim=0)
-    
+
     base_max_activation = latents.base.max(dim=0).values
     instruction_max_activation = latents.instruction.max(dim=0).values
     joint_max_activation = latents.joint.max(dim=0).values
-    
+
     base_non_zero_counts = (latents.base > non_zero_threshold).sum(dim=0)
     instruction_non_zero_counts = (latents.instruction > non_zero_threshold).sum(dim=0)
     joint_non_zero_counts = (latents.joint > non_zero_threshold).sum(dim=0)
@@ -231,27 +227,20 @@ def compute_statistics(latents, total_tokens, non_zero_threshold=1e-8):
     )
     rel_activation_diff = rel_activation_diff.sum(dim=0)
     either_non_zero_counts = (
-        (latents.base > non_zero_threshold)
-        | (latents.instruction > non_zero_threshold)
+        (latents.base > non_zero_threshold) | (latents.instruction > non_zero_threshold)
     ).sum(dim=0)
 
     base_statistic = LatentStatistic(
-        base_avg_activation, 
-        base_non_zero_counts, 
-        base_max_activation,
-        total_tokens
+        base_avg_activation, base_non_zero_counts, base_max_activation, total_tokens
     )
     instruction_statistic = LatentStatistic(
-        instruction_avg_activation, 
+        instruction_avg_activation,
         instruction_non_zero_counts,
         instruction_max_activation,
-        total_tokens
+        total_tokens,
     )
     joint_statistic = LatentStatistic(
-        joint_avg_activation, 
-        joint_non_zero_counts,
-        joint_max_activation,
-        total_tokens
+        joint_avg_activation, joint_non_zero_counts, joint_max_activation, total_tokens
     )
     return LatentStatistics(
         base=base_statistic,
@@ -369,9 +358,7 @@ def filtered_stats(stats_fineweb, stats_lmsys, group_name, rescaled, indices_pat
     only_base_indices = th.load(
         f"{indices_path}/only_base_decoder_latent_indices.pt"
     ).cpu()
-    only_it_indices = th.load(
-        f"{indices_path}/only_it_decoder_latent_indices.pt"
-    ).cpu()
+    only_it_indices = th.load(f"{indices_path}/only_it_decoder_latent_indices.pt").cpu()
     shared_indices = th.load(f"{indices_path}/shared_decoder_latent_indices.pt").cpu()
 
     stats_fineweb = stats_fineweb.rescaled if rescaled else stats_fineweb.normal

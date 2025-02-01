@@ -178,11 +178,15 @@ def compute_feature_metrics(
 
     return results
 
+
 def normalized_relproj(proj_a, proj_b):
     denom = th.max(proj_a, proj_b) - th.min(proj_a, proj_b)
-    return th.where(denom == 0, 
-                   th.tensor(float('nan'), device=proj_a.device),
-                   ((proj_a - proj_b) / denom + 1) * 0.5)
+    return th.where(
+        denom == 0,
+        th.tensor(float("nan"), device=proj_a.device),
+        ((proj_a - proj_b) / denom + 1) * 0.5,
+    )
+
 
 def compute_feature_metrics_optimized(
     dataloader,
@@ -256,9 +260,9 @@ def compute_feature_metrics_optimized(
             proj_it_min = th.minimum(proj_it_min, proj_it.min(dim=0)[0])
             proj_it_max = th.maximum(proj_it_max, proj_it.max(dim=0)[0])
 
-        bucket_edges = th.stack([
-            th.linspace(scalar_min[i], scalar_max[i], n_buckets + 1) for i in range(D)
-        ]).to(device)
+        bucket_edges = th.stack(
+            [th.linspace(scalar_min[i], scalar_max[i], n_buckets + 1) for i in range(D)]
+        ).to(device)
         assert bucket_edges.shape == (D, n_buckets + 1)
         print("Bucket edges", bucket_edges.shape)
 
@@ -292,18 +296,24 @@ def compute_feature_metrics_optimized(
                 )
                 # Compute normalized relative projections (non-zero denominator)
                 normalized_rel_proj = normalized_relproj(proj_base, proj_it)
-                
+
                 # Update relative projection statistics
                 sum_rel_proj[d_start:d_end] += th.nansum(rel_proj, dim=0)
                 count_rel_proj[d_start:d_end] += rel_proj_valid_mask.sum(dim=0)
-                sum_normalized_rel_proj[d_start:d_end] += th.nansum(normalized_rel_proj, dim=0)
-                count_normalized_rel_proj[d_start:d_end] += (~th.isnan(normalized_rel_proj)).sum(dim=0)
+                sum_normalized_rel_proj[d_start:d_end] += th.nansum(
+                    normalized_rel_proj, dim=0
+                )
+                count_normalized_rel_proj[d_start:d_end] += (
+                    ~th.isnan(normalized_rel_proj)
+                ).sum(dim=0)
 
                 for b in range(n_buckets):
                     bucket_mask = (
-                        batch_features[:, d_start:d_end] >= bucket_edges[d_start:d_end, b]
+                        batch_features[:, d_start:d_end]
+                        >= bucket_edges[d_start:d_end, b]
                     ) & (
-                        batch_features[:, d_start:d_end] < bucket_edges[d_start:d_end, b + 1]
+                        batch_features[:, d_start:d_end]
+                        < bucket_edges[d_start:d_end, b + 1]
                     )
                     bucket_count[d_start:d_end, b] += bucket_mask.sum(dim=0)
 
@@ -314,21 +324,24 @@ def compute_feature_metrics_optimized(
                         proj_base[bucket_mask] / proj_it[bucket_mask],
                         th.tensor(float("nan"), device=device),
                     )
-                    bucket_rel_proj[d_start:d_end, b] += th.nansum(batch_bucket_rel_proj)
+                    bucket_rel_proj[d_start:d_end, b] += th.nansum(
+                        batch_bucket_rel_proj
+                    )
                     bucket_rel_proj_count[
                         d_start:d_end, b
                     ] += batch_bucket_rel_proj_mask.sum(dim=0)
 
                     # Compute normalized bucket relative projections
-                    batch_normalized_rel_proj = normalized_relproj(proj_base[bucket_mask], proj_it[bucket_mask])
+                    batch_normalized_rel_proj = normalized_relproj(
+                        proj_base[bucket_mask], proj_it[bucket_mask]
+                    )
                     bucket_normalized_rel_proj[d_start:d_end, b] += th.nansum(
                         batch_normalized_rel_proj
                     )
-                    bucket_normalized_rel_proj_count[
-                        d_start:d_end, b
-                    ] += (~th.isnan(batch_normalized_rel_proj)).sum()
+                    bucket_normalized_rel_proj_count[d_start:d_end, b] += (
+                        ~th.isnan(batch_normalized_rel_proj)
+                    ).sum()
 
-    
                     # Update overall statistics
                     if compute_correlations:
                         new_count = count[d_start:d_end] + proj_base.size(0)
@@ -336,9 +349,15 @@ def compute_feature_metrics_optimized(
                         delta_proj_it = proj_it - mean_proj_it[d_start:d_end]
                         delta_scalar = scalar_batch - mean_scalar[d_start:d_end]
 
-                        mean_proj_base[d_start:d_end] += delta_proj_base.sum(dim=0) / new_count
-                        mean_proj_it[d_start:d_end] += delta_proj_it.sum(dim=0) / new_count
-                        mean_scalar[d_start:d_end] += delta_scalar.sum(dim=0) / new_count
+                        mean_proj_base[d_start:d_end] += (
+                            delta_proj_base.sum(dim=0) / new_count
+                        )
+                        mean_proj_it[d_start:d_end] += (
+                            delta_proj_it.sum(dim=0) / new_count
+                        )
+                        mean_scalar[d_start:d_end] += (
+                            delta_scalar.sum(dim=0) / new_count
+                        )
 
                         delta2_proj_base = proj_base - mean_proj_base[d_start:d_end]
                         delta2_proj_it = proj_it - mean_proj_it[d_start:d_end]
@@ -347,10 +366,18 @@ def compute_feature_metrics_optimized(
                         M2_proj_base[d_start:d_end] += (
                             delta_proj_base * delta2_proj_base
                         ).sum(dim=0)
-                        M2_proj_it[d_start:d_end] += (delta_proj_it * delta2_proj_it).sum(dim=0)
-                        M2_scalar[d_start:d_end] += (delta_scalar * delta2_scalar).sum(dim=0)
-                        covar_base[d_start:d_end] += (delta_proj_base * delta2_scalar).sum(dim=0)
-                        covar_it[d_start:d_end] += (delta_proj_it * delta2_scalar).sum(dim=0)
+                        M2_proj_it[d_start:d_end] += (
+                            delta_proj_it * delta2_proj_it
+                        ).sum(dim=0)
+                        M2_scalar[d_start:d_end] += (delta_scalar * delta2_scalar).sum(
+                            dim=0
+                        )
+                        covar_base[d_start:d_end] += (
+                            delta_proj_base * delta2_scalar
+                        ).sum(dim=0)
+                        covar_it[d_start:d_end] += (delta_proj_it * delta2_scalar).sum(
+                            dim=0
+                        )
                         count[d_start:d_end] = new_count
 
                 del feat_batch, proj_base, proj_it, scalar_batch
@@ -536,7 +563,7 @@ if __name__ == "__main__":
     parser.add_argument("--output-dir", type=str, default="results")
     parser.add_argument("--dataset-split", type=str, default="validation")
     parser.add_argument("--compute-correlations", action="store_true")
-    
+
     args = parser.parse_args()
 
     main(

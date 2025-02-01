@@ -10,9 +10,6 @@ Token groups are:
 """
 
 import sys
-
-sys.path.append(".")
-
 from argparse import ArgumentParser
 from pathlib import Path
 import json
@@ -30,6 +27,7 @@ from tqdm import tqdm, trange
 from datasets import load_dataset
 import plotly.express as px
 
+sys.path.append(".")
 from tools.utils import tokenize_with_ctrl_ids, chat_template
 
 
@@ -69,37 +67,52 @@ class ComputedActivationStats:
     def get_group_stats(self, group_name):
         """Helper to get basic stats for a token group"""
         group_stats = self.stats.xs(group_name, level="token_group")
+        # First multiply mean by count for the entire dataframe
+        group_stats["weighted_mean"] = group_stats["mean"].astype(
+            np.float64
+        ) * group_stats["nonzero count"].astype(np.float64)
+        group_stats["weighted_mean"] = group_stats["weighted_mean"].fillna(0)
+        # Now we can use fast sum aggregation
+        means = (
+            group_stats.groupby(["feature", "bucket"])["weighted_mean"]
+            .agg("sum")
+            .unstack(level="bucket")
+            .values
+        ).sum(axis=1)
+
         counts = (
             group_stats.groupby(["feature", "bucket"])["nonzero count"]
             .agg("sum")
             .unstack(level="bucket")
             .values
-        )
-        means = (
-            group_stats.groupby(["feature", "bucket"])["mean"]
-            .agg("sum")
-            .unstack(level="bucket")
-            .values
-        ).astype(np.float64)
+        ).sum(axis=1)
+
+        # Vectorized division
+        with np.errstate(
+            divide="ignore",
+            invalid="ignore",
+        ):
+            means = np.divide(means, counts.astype(np.float64))
+            means[counts == 0] = np.nan
+        group_stats.drop(columns=["weighted_mean"], inplace=True)
         maxs = (
             group_stats.groupby(["feature", "bucket"])["max"]
             .agg("max")
             .unstack(level="bucket")
             .values
-        ).max(axis=1)
+        ).copy()
+        nan_maxs = np.isnan(maxs).all(axis=1)
+        maxs[nan_maxs] = 0
+        maxs = np.nanmax(maxs, axis=1)
+        maxs[nan_maxs] = np.nan
+        assert (np.isnan(maxs) == np.isnan(means)).all()
         return {
             "stats": group_stats,
-            "counts": counts,
-            "means": means,
-            "maxs": maxs,
+            "count": counts,
+            "mean": means,
+            "max": maxs,
             "total_count": self.token_counts[group_name],
         }
-
-    def compute_global_mean(self, counts, means):
-        """Helper to compute weighted mean across buckets"""
-        global_counts = counts.sum(axis=1).astype(np.float64)
-        global_counts[global_counts == 0] = np.nan
-        return (means * counts).sum(axis=1) / global_counts
 
     @pd.option_context("mode.copy_on_write", True)
     def compute_feature_stats(self):
@@ -192,12 +205,12 @@ class ComputedActivationStats:
         # Total activation counts for different group pairs
         group_pairs_totals = {
             "ctrl_non_ctrl": sum(
-                group["counts"].sum(axis=1)
+                group["count"]
                 for name, group in groups_data.items()
                 if name in ["ctrl", "non_ctrl"]
             ).astype(np.float64),
             "assistant_user": sum(
-                group["counts"].sum(axis=1)
+                group["count"]
                 for name, group in groups_data.items()
                 if name in ["assistant", "user"]
             ).astype(np.float64),
@@ -207,12 +220,10 @@ class ComputedActivationStats:
 
         # Compute global stats for all groups
         for name, group in groups_data.items():
-            global_counts = group["counts"].sum(axis=1)
+            global_counts = group["count"]
             global_stats[f"lmsys_{name}_freq"] = global_counts / group["total_count"]
-            global_stats[f"{name}_mean"] = self.compute_global_mean(
-                group["counts"], group["means"]
-            )
-            global_stats[f"{name}_max"] = group["maxs"]
+            global_stats[f"{name}_mean"] = group["mean"]
+            global_stats[f"{name}_max"] = group["max"]
 
             # Compute percentages for relevant groups
             if name in ["ctrl", "non_ctrl"]:
@@ -225,15 +236,12 @@ class ComputedActivationStats:
                 )
             elif name == "bos":
                 total_acts_with_bos = sum(
-                    groups_data[g]["counts"].sum(axis=1).astype(np.float64)
-                    for g in ["ctrl", "non_ctrl", "bos"]
-                )
+                    groups_data[g]["count"] for g in ["ctrl", "non_ctrl", "bos"]
+                ).astype(np.float64)
                 total_acts_with_bos[total_acts_with_bos == 0] = np.nan
                 global_stats["lmsys_bos_%"] = global_counts / total_acts_with_bos
             elif name.startswith("ctrl_"):
-                ctrl_counts = (
-                    groups_data["ctrl"]["counts"].sum(axis=1).astype(np.float64)
-                )
+                ctrl_counts = groups_data["ctrl"]["count"].astype(np.float64)
                 ctrl_counts[ctrl_counts == 0] = np.nan
                 global_stats[f"lmsys_{name}_%"] = global_counts / ctrl_counts
 
@@ -582,7 +590,9 @@ def process_stats(stats: ComputedActivationStats, verbose=1):
             pd.testing.assert_series_equal(new_stats[col], feature_df[col])
         except Exception as e:
             print(f"Mismatch in {col}: {e}")
-    feature_df = feature_df[[c for c in feature_df.columns if c not in intersection_columns]]
+    feature_df = feature_df[
+        [c for c in feature_df.columns if c not in intersection_columns]
+    ]
     # select stats for bucket -1
     new_stats = new_stats.merge(feature_df, left_index=True, right_index=True)
     # Reorder columns to group related metrics
@@ -602,7 +612,9 @@ def process_stats(stats: ComputedActivationStats, verbose=1):
         "enc_norm_diff","dec_base_norm", "dec_instruct_norm", "enc_base_norm", "enc_instruct_norm", 
     ]
     # fmt: on
-    new_stats = new_stats[ordered_cols + [col for col in new_stats.columns if col not in ordered_cols]]
+    new_stats = new_stats[
+        ordered_cols + [col for col in new_stats.columns if col not in ordered_cols]
+    ]
     # # add enc base norm feature
     new_stats.to_csv("results/per_token_stats/feature_stats_global.csv")
 
