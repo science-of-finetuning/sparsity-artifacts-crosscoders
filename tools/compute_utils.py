@@ -325,7 +325,7 @@ def compute_entropy(batch, model, pred_mask):
 
 # https://github.com/DLR-RM/stable-baselines3/blob/master/stable_baselines3/common/running_mean_std.py
 class RunningMeanStd:
-    def __init__(self, epsilon: float = 1e-4, shape: tuple[int, ...] = ()):
+    def __init__(self):
         """
         Calculates the running mean and std of a data stream
         https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance#Parallel_algorithm
@@ -333,18 +333,19 @@ class RunningMeanStd:
         :param epsilon: helps with arithmetic issues
         :param shape: the shape of the data stream's output
         """
-        self.mean = th.zeros(shape, dtype=th.float64)
-        self.var = th.ones(shape, dtype=th.float64)
-        self.count = epsilon
+        self.mean = None
+        self.var = None
+        self.count = 0
 
     def copy(self) -> "RunningMeanStd":
         """
         :return: Return a copy of the current object.
         """
-        new_object = RunningMeanStd(shape=self.mean.shape)
-        new_object.mean = self.mean.clone()
-        new_object.var = self.var.clone()
-        new_object.count = float(self.count)
+        new_object = RunningMeanStd()
+        if self.mean is not None:
+            new_object.mean = self.mean.clone()
+            new_object.var = self.var.clone()
+            new_object.count = float(self.count)
         return new_object
 
     def combine(self, other: "RunningMeanStd") -> None:
@@ -356,14 +357,23 @@ class RunningMeanStd:
         self.update_from_moments(other.mean, other.var, other.count)
 
     def update(self, arr: th.Tensor) -> None:
-        batch_mean = arr.mean(dim=0)
-        batch_var = arr.var(dim=0)
+        batch_mean = arr.double().mean(dim=0)
+        batch_var = arr.double().var(dim=0)
         batch_count = arr.shape[0]
-        self.update_from_moments(batch_mean, batch_var, batch_count)
+        if batch_count == 0:
+            return
+        if self.mean is None:
+            self.mean = batch_mean
+            self.var = batch_var
+            self.count = batch_count
+        else:
+            self.update_from_moments(batch_mean, batch_var, batch_count)
 
     def update_from_moments(
         self, batch_mean: th.Tensor, batch_var: th.Tensor, batch_count: float
     ) -> None:
+        if batch_count == 0:
+            return
         delta = batch_mean - self.mean
         tot_count = self.count + batch_count
 
@@ -378,16 +388,23 @@ class RunningMeanStd:
         new_var = m_2 / (self.count + batch_count)
 
         new_count = batch_count + self.count
-
         self.mean = new_mean
         self.var = new_var
         self.count = new_count
 
-    def compute(self) -> tuple[th.Tensor, th.Tensor, float]:
+    def compute(
+        self, return_dict=False
+    ) -> tuple[th.Tensor, th.Tensor, float] | dict[str, float]:
         """
         Compute the running mean and variance and also return the count
 
         Returns:
             mean, var, count
         """
+        if return_dict:
+            return {
+                "mean": self.mean.item(),
+                "var": self.var.item(),
+                "count": self.count,
+            }
         return self.mean, self.var, self.count
