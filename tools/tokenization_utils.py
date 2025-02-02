@@ -1,15 +1,17 @@
 from pathlib import Path
 import torch as th
 
-
 template_path = Path(__file__).parent.parent / "templates"
-with open(template_path / "gemma_chat_template_ctrl_tokens.jinja", "r") as f:
-    ctrl_template = f.read()
 with open(template_path / "gemma_chat_template.jinja", "r") as f:
     chat_template = f.read()
-with open(template_path / "base_gemma_chat_template.jinja", "r") as f:
-    base_chat_template = f.read()
-
+with open(template_path / "gemma_chat_template_ctrl_tokens.jinja", "r") as f:
+    ctrl_template = f.read()
+with open(template_path / "customizable_gemma_chat_template.jinja", "r") as f:
+    customizable_chat_template = f.read()
+with open(
+    template_path / "customizable_gemma_chat_template_ctrl_tokens.jinja", "r"
+) as f:
+    customizable_ctrl_template = f.read()
 
 sample_batch = [
     [
@@ -96,6 +98,7 @@ def custom_chat_template(
     user_token="user",
     assistant_token="model",
     enforce_length=True,
+    ctrl_tokens=False,
 ):
     """
     Create a custom chat template with alternative tokens
@@ -124,16 +127,24 @@ def custom_chat_template(
         assert (
             len(tokenizer.tokenize(assistant_token)) == 1
         ), "assistant_token must be a single token"
+    if ctrl_tokens:
+        template = customizable_ctrl_template
+    else:
+        template = customizable_chat_template
     template = (
-        base_chat_template.replace("<start_of_turn>", sanitize(start_of_turn_token))
+        template.replace("<start_of_turn>", sanitize(start_of_turn_token))
         .replace("<end_of_turn>", sanitize(end_of_turn_token))
         .replace("<user>", sanitize(user_token))
         .replace("model", sanitize(assistant_token))
     )
+    if ctrl_tokens:
+        original_template = ctrl_template
+    else:
+        original_template = chat_template
     if enforce_length:
         tokenized = tokenizer.apply_chat_template(
             sample_batch,
-            chat_template=chat_template,
+            chat_template=original_template,
             return_dict=True,
             return_assistant_tokens_mask=True,
         )
