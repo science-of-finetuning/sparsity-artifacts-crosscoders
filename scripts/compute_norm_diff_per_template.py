@@ -4,6 +4,7 @@ import sys
 import json
 
 import torch as th
+import torch.nn.functional as F
 from datasets import load_dataset
 from tqdm.auto import trange, tqdm
 import numpy as np
@@ -59,18 +60,15 @@ def run_batch(
             clean_act = clean_activations[i].to(output.device)
 
             # Compute cosine similarity
-            output_norm = output.norm(dim=-1, keepdim=True)
-            clean_norm = clean_act.norm(dim=-1, keepdim=True)
-            cosim = (
-                (output * clean_act).sum(dim=-1)
-                / (output_norm * clean_norm).squeeze(-1)
-            ).save()
+            cosim = F.cosine_similarity(output, clean_act, dim=-1).save()
 
             norm_diff = (output - clean_act).norm(dim=-1).save()
             norm = output.norm(dim=-1).save()
             norm_diffs.append(norm_diff)
             norms.append(norm)
             cosims.append(cosim)
+
+    assert cosims[0].shape == norm_diffs[0].shape == norms[0].shape
 
     for i in range(num_layers):
         update_group_metrics(
@@ -203,7 +201,7 @@ def plot_results(results, save_path):
         results: Dictionary with structure:
             results[template_name][metric_type]["mean"/"max"/"min"][layer_idx][model][token_group]
             where:
-                - metric_type is "rel_diff" or "diff_norm"
+                - metric_type is "rel_diff", "diff_norm", or "cosim"
                 - model is "chat" or "base"
                 - token_group is "control", "other", or "other_no_bos"
         save_path: Path to save the plots
@@ -216,11 +214,14 @@ def plot_results(results, save_path):
 
     # Save lineplots
     for temp_name, temp_metrics in results.items():
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+        fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(20, 6))
         plot_metric_comparison(
             temp_metrics["diff_norm"], ax1, f"{temp_name} - Diff Norm"
         )
         plot_metric_comparison(temp_metrics["rel_diff"], ax2, f"{temp_name} - Rel Diff")
+        plot_metric_comparison(
+            temp_metrics["cosim"], ax3, f"{temp_name} - Cosine Similarity"
+        )
         plt.tight_layout()
         plt.savefig(lineplot_dir / f"lineplot_{temp_name}.png", dpi=300)
         plt.close()
@@ -244,7 +245,7 @@ def plot_results(results, save_path):
     # Define combinations for heatmaps
     model_types = ["chat", "base"]
     token_groups = ["control", "other", "other_no_bos", "all"]
-    metrics = ["rel_diff", "diff_norm"]
+    metrics = ["rel_diff", "diff_norm", "cosim"]  # Added cosim to metrics
 
     for metric in metrics:
         for model in model_types:
@@ -274,11 +275,12 @@ def plot_results(results, save_path):
                     cmap="viridis",
                 )
 
-                metric_name = (
-                    "Relative Norm Differences"
-                    if metric == "rel_diff"
-                    else "Norm Differences"
-                )
+                metric_name = {
+                    "rel_diff": "Relative Norm Differences",
+                    "diff_norm": "Norm Differences",
+                    "cosim": "Cosine Similarity",
+                }[metric]
+
                 plt.title(
                     f"{metric_name} at Layer {TARGET_LAYER}\n{model.upper()} Model - {token_group} tokens"
                 )
@@ -337,7 +339,7 @@ def plot_metric_comparison(metric_data, ax, title):
     ax.grid(True, alpha=0.3)
 
 
-# python scripts/compute_norm_diff_per_template.py --use-float16 --compare-template-delimiter blockquote --compare-model chat && python scripts/compute_norm_diff_per_template.py --use-float16 --compare-template-delimiter blockquote --compare-model base
+# python scripts/compute_norm_diff_per_template.py --use-float16 --compare-template-delimiter blockquote --compare-model chat && python scripts/compute_norm_diff_per_template.py --use-float16 --compare-template-delimiter blockquote --compare-model base  && python scripts/compute_norm_diff_per_template.py --use-float16
 if __name__ == "__main__":
     import argparse
 
@@ -478,7 +480,7 @@ if __name__ == "__main__":
                         for i in range(num_layers)
                     ],
                 }
-                for k in ["rel_diff", "diff_norm"]
+                for k in ["rel_diff", "diff_norm", "cosim"]  # Added cosim here
             }
             for temp_name in templates
         }
