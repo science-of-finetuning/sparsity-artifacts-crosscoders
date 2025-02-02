@@ -78,7 +78,7 @@ if __name__ == "__main__":
 
     d_model = model.config.hidden_size
     logger.info(f"d_model={d_model}")
-
+    
     store_dir = Path(args.activation_store_dir)
     store_dir.mkdir(parents=True, exist_ok=True)
     dataset_name = args.dataset.split("/")[-1]

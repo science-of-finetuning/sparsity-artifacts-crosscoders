@@ -325,7 +325,7 @@ def compute_entropy(batch, model, pred_mask):
 
 # https://github.com/DLR-RM/stable-baselines3/blob/master/stable_baselines3/common/running_mean_std.py
 class RunningMeanStd:
-    def __init__(self, epsilon: float = 1e-4, shape: tuple[int, ...] = ()):
+    def __init__(self, epsilon: float = 1e-4, shape: tuple[int, ...] = (), device: str = "cpu"):
         """
         Calculates the running mean and std of a data stream
         https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance#Parallel_algorithm
@@ -333,15 +333,15 @@ class RunningMeanStd:
         :param epsilon: helps with arithmetic issues
         :param shape: the shape of the data stream's output
         """
-        self.mean = th.zeros(shape, dtype=th.float64)
-        self.var = th.ones(shape, dtype=th.float64)
+        self.mean = th.zeros(shape, dtype=th.float64, device=device)
+        self.var = th.ones(shape, dtype=th.float64, device=device)
         self.count = epsilon
 
     def copy(self) -> "RunningMeanStd":
         """
         :return: Return a copy of the current object.
         """
-        new_object = RunningMeanStd(shape=self.mean.shape)
+        new_object = RunningMeanStd(shape=self.mean.shape, device=self.mean.device)
         new_object.mean = self.mean.clone()
         new_object.var = self.var.clone()
         new_object.count = float(self.count)

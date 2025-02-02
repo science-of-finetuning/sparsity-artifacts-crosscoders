@@ -122,7 +122,6 @@ def main():
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("-N", "--num-samples", type=int, default=20_000_000)
     parser.add_argument("--base-model", type=str, default="gemma-2-2b")
-    # parser.add_argument("--latent-df-path", type=str, default="Butanium/max-activating-examples-gemma-2-2b-l13-mu4.1e-02-lr1e-04")
     parser.add_argument("--instruct-model", type=str, default="gemma-2-2b-it")
     parser.add_argument(
         "--chat-only-indices-path",
