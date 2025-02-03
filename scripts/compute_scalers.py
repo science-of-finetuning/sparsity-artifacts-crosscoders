@@ -154,6 +154,7 @@ def main():
     parser.add_argument("-SRD", "--special-results-dir", type=str, default="", help="Addon to the results directory. Results will be saved in results_dir/SRD/model_name/")
     parser.add_argument("--n-offset", type=int, default=0, help="Offset for the number of samples. If non-zero, the start index will be n_offset * num_samples")
     parser.add_argument("--shuffle-within-dataset", action="store_true")
+    parser.add_argument("--lmsys-subfolder", type=str, default=None, help="Subfolder for the LMSYS dataset")
     parser.add_argument(
         "--dtype",
         type=str,
@@ -217,6 +218,7 @@ def main():
         instruct_model=args.instruct_model,
         layer=args.layer,
         split=args.dataset_split,
+        lmsys_subfolder=args.lmsys_subfolder
     )
 
     num_samples_per_dataset = args.num_samples // 2

@@ -76,6 +76,7 @@ def compute_stats(
     add_noise_threshold: float = None,
     compute_individual_errors: bool = False,
     num_samples: int = None,
+    compute_latent_activations: bool = False,
 ) -> dict:
     """
     Compute statistics for each scaler.
@@ -114,6 +115,8 @@ def compute_stats(
         mse_individual = th.zeros(len(latent_indices), num_samples, device=device, dtype=th.float32)
         mse_before_individual = th.zeros(len(latent_indices), num_samples, device=device, dtype=th.float32)
 
+    if compute_latent_activations:
+        latent_activations_individual = th.zeros(len(latent_indices), num_samples, device=device, dtype=th.float32)
 
     start_idx = 0
     for batch in tqdm(dataloader, desc="Computing scaler stats"):
@@ -146,6 +149,9 @@ def compute_stats(
         # Get relevant latent activations
         latent_activations = latent_activations[:, latent_indices]
         assert latent_activations.shape == (batch_size, len(latent_indices))
+
+        if compute_latent_activations:
+            latent_activations_individual[:, start_idx:end_idx] = latent_activations.permute(1, 0)
 
         # Scale latent activations by betas
         scaled_latents = latent_activations * betas.unsqueeze(0)
@@ -208,6 +214,7 @@ def compute_stats(
         mse_before_std.update(squared_error_residual_before.permute(1, 0))
         count += th.ones_like(mse) * batch_size
 
+
         if max_activations is not None:
             mse_buckets.update(latent_activations, squared_error_residual.permute(1, 0))
             mse_before_buckets.update(latent_activations, squared_error_residual_before.permute(1, 0))
@@ -241,6 +248,9 @@ def compute_stats(
     if compute_individual_errors:
         output["mse_individual"] = mse_individual.cpu().numpy()
         output["mse_before_individual"] = mse_before_individual.cpu().numpy()
+
+    if compute_latent_activations:
+        output["latent_activations_individual"] = latent_activations_individual.cpu().numpy()
 
     mse_mean, mse_std, mse_count = mse_std.compute()
     output["mse_mean"] = mse_mean.cpu().numpy()
@@ -329,7 +339,9 @@ def main():
     parser.add_argument("--n-offset", type=int, default=0)
     parser.add_argument("--train-n-offset", type=int, default=None)
     parser.add_argument("-CIE", "--compute-individual-errors", action="store_true")
+    parser.add_argument("-CLA", "--compute-latent-activations", action="store_true")
     parser.add_argument("--betas-subset-path", type=Path, default=None, help="Path to a file containing indices of latents to include in the verification (Indices in the betas file, not latent indices)")
+    parser.add_argument("--lmsys-subfolder", type=str, default=None, help="Subfolder for the LMSYS dataset")
     args = parser.parse_args()
 
     if args.train_num_samples is None:
@@ -371,6 +383,7 @@ def main():
         instruct_model=args.instruct_model,
         layer=args.layer,
         split=args.dataset_split,
+        lmsys_subfolder=args.lmsys_subfolder
     )
     num_samples_per_dataset = args.num_samples // 2
     dataset = th.utils.data.ConcatDataset(
@@ -465,6 +478,7 @@ def main():
             add_noise_threshold=args.add_noise_threshold,
             compute_individual_errors=args.compute_individual_errors,
             num_samples=len(dataset),
+            compute_latent_activations=args.compute_latent_activations,
         )
         # Save results
         output_path = results_dir / f"stats_{betas_name}_{args.dataset_split}.pt"

@@ -56,6 +56,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--overwrite", action="store_true", help="Overwrite existing activations"
     )
+    parser.add_argument(
+        "--store-tokens", action="store_true", help="Store tokens in the activation cache"
+    )
     args = parser.parse_args()
 
     if len(args.layers) == 0:
@@ -78,7 +81,7 @@ if __name__ == "__main__":
 
     d_model = model.config.hidden_size
     logger.info(f"d_model={d_model}")
-    
+
     store_dir = Path(args.activation_store_dir)
     store_dir.mkdir(parents=True, exist_ok=True)
     dataset_name = args.dataset.split("/")[-1]
@@ -104,4 +107,5 @@ if __name__ == "__main__":
         d_model=d_model,
         last_submodule=submodules[-1],
         max_total_tokens=args.max_tokens,
+        store_tokens=args.store_tokens,
     )
