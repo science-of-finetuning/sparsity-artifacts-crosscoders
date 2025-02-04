@@ -66,33 +66,6 @@ def load_base_error(
         base_decoder[latent_indices],
     )
 
-
-def load_base_reconstruction(
-    batch,
-    crosscoder: CrossCoder,
-    latent_activations: th.Tensor,
-    latent_indices: th.Tensor,
-    latent_vectors: th.Tensor,
-    **kwargs,
-):
-    reconstruction = crosscoder.decode(latent_activations)
-    return remove_latents(
-        reconstruction[:, 0, :], latent_activations[:, latent_indices], latent_vectors
-    )
-
-
-def load_chat_reconstruction(
-    batch,
-    crosscoder: CrossCoder,
-    latent_activations: th.Tensor,
-    latent_indices: th.Tensor,
-    latent_vectors: th.Tensor,
-    **kwargs,
-):
-    reconstruction = crosscoder.decode(latent_activations)
-    return reconstruction[:, 1, :]
-
-
 def load_chat_error(
     batch,
     crosscoder: CrossCoder,
@@ -105,6 +78,30 @@ def load_chat_error(
     return batch[:, 1, :] - remove_latents(
         reconstruction[:, 1, :], latent_activations[:, latent_indices], latent_vectors
     )
+
+
+def load_base_reconstruction(
+    batch,
+    crosscoder: CrossCoder,
+    latent_activations: th.Tensor,
+    latent_indices: th.Tensor,
+    latent_vectors: th.Tensor,
+    **kwargs,
+):
+    reconstruction = crosscoder.decode(latent_activations)
+    return reconstruction[:, 0, :]
+
+
+def load_chat_reconstruction(
+    batch,
+    crosscoder: CrossCoder,
+    latent_activations: th.Tensor,
+    latent_indices: th.Tensor,
+    latent_vectors: th.Tensor,
+    **kwargs,
+):
+    reconstruction = crosscoder.decode(latent_activations)
+    return reconstruction[:, 1, :]
 
 
 def main():

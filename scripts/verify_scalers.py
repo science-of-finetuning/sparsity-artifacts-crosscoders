@@ -416,8 +416,8 @@ def main():
         computations.append(
             (
                 "base_error",
-                load_base_reconstruction,
-                load_base_activation,
+                load_zero_vector,
+                load_base_error,
             )
         )
     if args.base_reconstruction:
@@ -430,7 +430,7 @@ def main():
         )
     if args.chat_error:
         computations.append(
-            ("it_error", load_chat_reconstruction, load_chat_activation)
+            ("it_error", load_zero_vector, load_chat_error)
         )
 
     if len(computations) == 0:
@@ -439,11 +439,11 @@ def main():
             ("base_reconstruction", load_zero_vector, load_base_reconstruction),
             (
                 "base_error",
-                load_base_reconstruction,
-                load_base_activation,
+                load_zero_vector,
+                load_base_error,
             ),
             ("it_reconstruction", load_zero_vector, load_chat_reconstruction),
-            ("it_error", load_chat_reconstruction, load_chat_activation),
+            ("it_error", load_zero_vector, load_chat_error),
         ]
 
     if args.max_activations is not None:

@@ -9,6 +9,8 @@ from pathlib import Path
 import os
 import time
 
+th.set_float32_matmul_precision("medium")
+
 if __name__ == "__main__":
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
     parser = argparse.ArgumentParser()
@@ -59,7 +61,22 @@ if __name__ == "__main__":
     parser.add_argument(
         "--store-tokens", action="store_true", help="Store tokens in the activation cache"
     )
+    parser.add_argument(
+        "--disable-multiprocessing", action="store_true", help="Disable multiprocessing"
+    )
+    parser.add_argument(
+        "--dtype", type=str, default="bfloat16", help="Data type to use for activations"
+    )
     args = parser.parse_args()
+
+    if args.dtype == "bfloat16":
+        dtype = th.bfloat16
+    elif args.dtype == "float16":
+        dtype = th.float16
+    elif args.dtype == "float32":
+        dtype = th.float32
+    else:
+        raise ValueError(f"Invalid dtype: {args.dtype}")
 
     if len(args.layers) == 0:
         raise ValueError("Must provide at least one layer")
@@ -67,11 +84,12 @@ if __name__ == "__main__":
     model = AutoModelForCausalLM.from_pretrained(
         args.model,
         device_map="auto",
-        torch_dtype=th.bfloat16,
+        torch_dtype=dtype,
         attn_implementation="eager",
     )
     tokenizer = AutoTokenizer.from_pretrained(args.model)
     model = LanguageModel(model, tokenizer=tokenizer)
+    print(model.dtype)
     num_layers = int(len(model.model.layers))
     layers = args.layers
     logger.info(f"Collecting activations from layers: {layers}")
@@ -108,4 +126,5 @@ if __name__ == "__main__":
         last_submodule=submodules[-1],
         max_total_tokens=args.max_tokens,
         store_tokens=args.store_tokens,
+        multiprocessing=not args.disable_multiprocessing,
     )
