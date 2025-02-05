@@ -27,22 +27,22 @@ def plot_scaler_histograms(
     recon_base = betas["normal"]["base"][target_type]
     recon_chat = betas["normal"]["it"][target_type]
 
+    # Filter out NaN values from both reconstructions
+    # Convert to numpy arrays to handle NaN values consistently
+    recon_base = recon_base.numpy() if hasattr(recon_base, 'numpy') else recon_base
+    recon_chat = recon_chat.numpy() if hasattr(recon_chat, 'numpy') else recon_chat
+    
+    valid_mask = ~(np.isnan(recon_base) | np.isnan(recon_chat))
+    recon_base = recon_base[valid_mask]
+    recon_chat = recon_chat[valid_mask]
+
     ratio = recon_base / recon_chat
     if baseline is not None:
         ratio_baseline = baseline / recon_chat
 
-    # Calculate percentile thresholds for filtering outliers
-    base_low, base_high = np.percentile(recon_base, [1, 99])
-    chat_low, chat_high = np.percentile(recon_chat, [1, 99])
-
-    # Create masks for non-outlier data points
-    base_mask = (recon_base >= base_low) & (recon_base <= base_high)
-    chat_mask = (recon_chat >= chat_low) & (recon_chat <= chat_high)
-    combined_mask = base_mask & chat_mask
-
     # Calculate histogram data for main plots first
-    hist_base = np.histogram(recon_base[combined_mask], bins=100)
-    hist_chat = np.histogram(recon_chat[combined_mask], bins=100)
+    hist_base = np.histogram(recon_base, bins=100)
+    hist_chat = np.histogram(recon_chat, bins=100)
     max_count = max(np.max(hist_base[0]), np.max(hist_chat[0]))
 
     # Create the figure
@@ -60,7 +60,7 @@ def plot_scaler_histograms(
     # Main histograms
     fig.add_trace(
         go.Histogram(
-            x=ratio[combined_mask],
+            x=ratio,
             nbinsx=100,
             marker_color=RATIO_COLOR,
             name="Base/Chat Ratio",
@@ -71,7 +71,7 @@ def plot_scaler_histograms(
     if baseline is not None:
         fig.add_trace(
             go.Histogram(
-                x=ratio_baseline[combined_mask],
+                x=ratio_baseline,
                 nbinsx=100,
                 marker_color="black",
                 name="Base/Chat Ratio (Baseline)",
@@ -103,7 +103,7 @@ def plot_scaler_histograms(
         )
     fig.add_trace(
         go.Histogram(
-            x=recon_base[combined_mask],
+            x=recon_base,
             name="Base Activation",
             nbinsx=100,
             marker_color=BASE_COLOR,
@@ -113,7 +113,7 @@ def plot_scaler_histograms(
     )
     fig.add_trace(
         go.Histogram(
-            x=recon_chat[combined_mask],
+            x=recon_chat,
             name="Chat Activation",
             nbinsx=100,
             marker_color=CHAT_COLOR,

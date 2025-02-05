@@ -417,7 +417,7 @@ def main():
             (
                 "base_error",
                 load_zero_vector,
-                load_base_error,
+                partial(load_base_error, base_decoder=base_decoder)
             )
         )
     if args.base_reconstruction:
@@ -439,8 +439,8 @@ def main():
             ("base_reconstruction", load_zero_vector, load_base_reconstruction),
             (
                 "base_error",
-                load_zero_vector,
-                load_base_error,
+                load_base_reconstruction,
+                partial(load_base_error, base_decoder=base_decoder),
             ),
             ("it_reconstruction", load_zero_vector, load_chat_reconstruction),
             ("it_error", load_zero_vector, load_chat_error),

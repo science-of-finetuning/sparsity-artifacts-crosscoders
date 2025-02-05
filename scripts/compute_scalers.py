@@ -356,12 +356,16 @@ def main():
             dtype=dtype,
             latent_activation_postprocessing_fn=latent_activation_postprocessing_fn,
         )
-        th.save(betas, results_dir / f"betas_{name}.pt")
-        th.save(count_active, results_dir / f"count_active_{name}.pt")
-        th.save(nominator, results_dir / f"nominator_{name}.pt")
-        th.save(norm_f, results_dir / f"norm_f_{name}.pt")
-        th.save(norm_d, results_dir / f"norm_d_{name}.pt")
+        th.save(betas.cpu(), results_dir / f"betas_{name}.pt")
+        th.save(count_active.cpu(), results_dir / f"count_active_{name}.pt")
+        th.save(nominator.cpu(), results_dir / f"nominator_{name}.pt")
+        th.save(norm_f.cpu(), results_dir / f"norm_f_{name}.pt")
+        th.save(norm_d.cpu(), results_dir / f"norm_d_{name}.pt")
 
+        if args.random_indices or args.random_vectors:
+            th.save(latent_vectors.cpu(), results_dir / f"latent_vectors_{name}.pt")
+        if args.random_indices:
+            th.save(random_indices.cpu(), results_dir / f"random_indices_{name}.pt")
 
 if __name__ == "__main__":
     main()

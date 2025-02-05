@@ -149,7 +149,7 @@ def chat_only_latent_indices(crosscoder=None):
     df = _latent_df(crosscoder)
     # filter for tag = Chat only
     return th.tensor(
-        df[df["tag"] == "Chat only" | df["tag"] == "IT only"].index.tolist()
+        df[(df["tag"] == "Chat only") | (df["tag"] == "IT only")].index.tolist()
     )
 
 

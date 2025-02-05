@@ -4,6 +4,7 @@ set -x
 # Initialize variables for --n-train and --n-val.
 n_train=""
 n_val=""
+no_train=false
 other_args=()
 
 # Parse input arguments.
@@ -27,6 +28,10 @@ while (( "$#" )); do
                 exit 1
             fi
             ;;
+        --no-train)
+            no_train=true
+            shift
+            ;;
         *)
             other_args+=("$1")
             shift
@@ -49,7 +54,9 @@ N_TRAIN=${n_train:-1000000}
 N_VAL=${n_val:-1000000}
 
 # Invoke the compute-scalers.sh script with -N set from --n-train.
-# bash run/compute-scalers.sh -N "$N_TRAIN" "${other_args[@]}"  
+if [ "$no_train" = false ]; then
+    bash run/compute-scalers.sh -N "$N_TRAIN" "${other_args[@]}"  
+fi
 
 # Invoke the verify-scalers.sh script twice (for train and validation)
 # with -N set from --n-val, and add the appropriate dataset split.
