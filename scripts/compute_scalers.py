@@ -282,6 +282,7 @@ def main():
         results_dir = args.results_dir / args.crosscoder_path.replace("/", "_")
     results_dir.mkdir(parents=True, exist_ok=True)
 
+    print("Saving results to ", results_dir)
     computations = []
     if args.base_reconstruction:
         computations.append(("base_reconstruction", load_base_reconstruction))

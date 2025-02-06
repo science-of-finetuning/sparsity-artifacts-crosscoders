@@ -14,6 +14,7 @@ def plot_scaler_histograms(
     target_type,
     baseline=None,
     title="Scaler Histogram Analysis for Reconstruction",
+    baseline_title="Baseline",
     xpos_legend=0.02,
     xpos_inset=0.85,
 ):
@@ -36,8 +37,11 @@ def plot_scaler_histograms(
     recon_base = recon_base[valid_mask]
     recon_chat = recon_chat[valid_mask]
 
+
     ratio = recon_base / recon_chat
     if baseline is not None:
+        baseline = baseline.numpy() if hasattr(baseline, 'numpy') else baseline
+        baseline = baseline[valid_mask]
         ratio_baseline = baseline / recon_chat
 
     # Calculate histogram data for main plots first
@@ -74,7 +78,7 @@ def plot_scaler_histograms(
                 x=ratio_baseline,
                 nbinsx=100,
                 marker_color="black",
-                name="Base/Chat Ratio (Baseline)",
+                name=f"Baseline Ratio<br><sup>({baseline_title})</sup>",
             ),
             row=1,
             col=1,
