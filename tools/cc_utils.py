@@ -276,7 +276,14 @@ def _crosscoder(crosscoder=None):
     return crosscoders[crosscoder]
 
 
-def online_dashboard(crosscoder=None, max_acts=None):
+def online_dashboard(
+    crosscoder=None,
+    max_acts=None,
+    crosscoder_device="auto",
+    base_device="auto",
+    chat_device="auto",
+    torch_dtype=th.bfloat16,
+):
     """
     Instantiate an online dashboard for crosscoder latent analysis.
 
@@ -285,6 +292,9 @@ def online_dashboard(crosscoder=None, max_acts=None):
         max_acts: a dictionary of max activations for each latent. If None, will be loaded from the latent_df of the crosscoder.
     """
     coder = _crosscoder(crosscoder)
+    if crosscoder_device == "auto":
+        crosscoder_device = "cuda:0" if th.cuda.is_available() else "cpu"
+    coder = coder.to(crosscoder_device)
     if max_acts is None:
         df = _latent_df(crosscoder)
         max_acts_cols = ["max_act", "lmsys_max_act"]
@@ -293,10 +303,16 @@ def online_dashboard(crosscoder=None, max_acts=None):
                 max_acts = df[col].dropna().to_dict()
                 break
     base_model = load_model(
-        "google/gemma-2-2b", dtype=th.bfloat16, attn_implementation="eager"
+        "google/gemma-2-2b",
+        torch_dtype=torch_dtype,
+        attn_implementation="eager",
+        device_map=base_device,
     )
     chat_model = load_model(
-        "google/gemma-2-2b-chat", dtype=th.bfloat16, attn_implementation="eager"
+        "google/gemma-2-2b-it",
+        torch_dtype=torch_dtype,
+        attn_implementation="eager",
+        device_map=chat_device,
     )
     return CrosscoderOnlineFeatureDashboard(
         base_model,
@@ -304,6 +320,7 @@ def online_dashboard(crosscoder=None, max_acts=None):
         coder,
         13,
         max_acts=max_acts,
+        crosscoder_device=crosscoder_device,
     )
 
 
