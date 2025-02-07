@@ -1,6 +1,6 @@
 **/results/**
 *.log
-junk/**
+junk**
 **/__pycache__/**
 wandb/**
 results-runai/**
