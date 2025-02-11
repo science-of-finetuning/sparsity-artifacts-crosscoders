@@ -12,3 +12,4 @@ datasets
 kaleido
 wandb
 loguru
+pytest
