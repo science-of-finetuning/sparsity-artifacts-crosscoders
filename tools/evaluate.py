@@ -1,14 +1,18 @@
-from dictionary_learning.dictionary import CrossCoder
-from collections import defaultdict
-import torch as th
-from tools.split_gemma import split_gemma
-from tqdm.auto import tqdm
-import json
-import wandb
+import sys
 from pathlib import Path
+from collections import defaultdict
+import json
+
+sys.path.append(str(Path(__file__).parent.parent))
+
+import torch as th
+from tqdm.auto import tqdm
+import wandb
 from torch.nn.functional import kl_div
 from torchmetrics.aggregation import MeanMetric
-from setup_to_eval import *
+from dictionary_learning.dictionary import CrossCoder
+from tools.split_gemma import split_gemma
+from tools.setup_to_eval import *
 
 ROOT_PATH = Path(__file__).parent
 CHAT_TEMPLATE = open(ROOT_PATH / "templates/gemma_chat_template.jinja").read()

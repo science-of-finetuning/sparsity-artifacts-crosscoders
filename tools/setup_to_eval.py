@@ -21,52 +21,52 @@ def create_half_fn_dict_main(
 ) -> dict[str, HalfStepPreprocessFn]:
     half_fns = {}
 
-    half_fns["1-instruct"] = IdentityPreprocessFn(continue_with="instruct")
+    half_fns["1-chat"] = IdentityPreprocessFn(continue_with="chat")
 
-    # steer the base activations with all features from IT decoder and continue with instruct   ===   replace it error with base error
+    # steer the base activations with all features from IT decoder and continue with chat   ===   replace it error with base error
     half_fns["2-steer_all"] = CrossCoderSteeringFeature(
         crosscoder,
         steer_activations_of="base",
-        steer_with_features_from="instruct",
-        continue_with="instruct",
+        steer_with_features_from="chat",
+        continue_with="chat",
         features_to_steer=None,
     )
 
-    half_fns["3-base_to_instruct"] = SwitchPreprocessFn(continue_with="instruct")
+    half_fns["3-base_to_chat"] = SwitchPreprocessFn(continue_with="chat")
 
-    # steer the base activations with the IT only features from instruct decoder and continue with instruct
+    # steer the base activations with the IT only features from chat decoder and continue with chat
     half_fns["4-steer_it_only"] = CrossCoderSteeringFeature(
         crosscoder,
         steer_activations_of="base",
-        steer_with_features_from="instruct",
-        continue_with="instruct",
+        steer_with_features_from="chat",
+        continue_with="chat",
         features_to_steer=it_only_features,
     )
     # 5/ RANDOM
 
-    # instruct reconstruction
-    half_fns["6-instruct_reconstruct"] = CrossCoderReconstruction(
-        crosscoder, reconstruct_with="instruct", continue_with="instruct"
+    # chat reconstruction
+    half_fns["6-chat_reconstruct"] = CrossCoderReconstruction(
+        crosscoder, reconstruct_with="chat", continue_with="chat"
     )
-    # Take the instruct activations and remove the IT only features
+    # Take the chat activations and remove the IT only features
     half_fns["7-remove_it_only"] = CrossCoderSteeringFeature(
         crosscoder,
-        steer_activations_of="instruct",
+        steer_activations_of="chat",
         steer_with_features_from="base",
-        continue_with="instruct",
+        continue_with="chat",
         features_to_steer=it_only_features,
     )
 
-    # steer the base activations with the IT only & base only features from instruct decoder and continue with instruct
+    # steer the base activations with the IT only & base only features from chat decoder and continue with chat
     half_fns["?-steer_it_and_base_only"] = CrossCoderSteeringFeature(
         crosscoder,
         steer_activations_of="base",
-        steer_with_features_from="instruct",
-        continue_with="instruct",
+        steer_with_features_from="chat",
+        continue_with="chat",
         features_to_steer=it_only_features + base_only_features,
     )
 
-    # reconstruct instruct and finish with instruct
+    # reconstruct chat and finish with chat
 
     return half_fns
 
@@ -78,27 +78,27 @@ def create_half_fn_dict_secondary(
     half_fns["base_reconstruct"] = CrossCoderReconstruction(
         crosscoder, reconstruct_with="base", continue_with="base"
     )
-    # steer the base activations with the IT only features from instruct decoder and continue with base
+    # steer the base activations with the IT only features from chat decoder and continue with base
     half_fns["steer_it_only_to_base"] = CrossCoderSteeringFeature(
         crosscoder,
         steer_activations_of="base",
-        steer_with_features_from="instruct",
+        steer_with_features_from="chat",
         continue_with="base",
         features_to_steer=it_only_features,
     )
-    # steer the base activations with the IT only & base only features from instruct decoder and continue with base
+    # steer the base activations with the IT only & base only features from chat decoder and continue with base
     half_fns["steer_it_and_base_only_to_base"] = CrossCoderSteeringFeature(
         crosscoder,
         steer_activations_of="base",
-        steer_with_features_from="instruct",
+        steer_with_features_from="chat",
         continue_with="base",
         features_to_steer=it_only_features + base_only_features,
     )
-    # steer the base activations with the base only features from instruct decoder and continue with base
+    # steer the base activations with the base only features from chat decoder and continue with base
     half_fns["steer_base_only_to_base"] = CrossCoderSteeringFeature(
         crosscoder,
         steer_activations_of="base",
-        steer_with_features_from="instruct",
+        steer_with_features_from="chat",
         continue_with="base",
         features_to_steer=base_only_features,
     )
@@ -106,16 +106,16 @@ def create_half_fn_dict_secondary(
     half_fns["steer_all_to_base"] = CrossCoderSteeringFeature(
         crosscoder,
         steer_activations_of="base",
-        steer_with_features_from="instruct",
+        steer_with_features_from="chat",
         continue_with="base",
         features_to_steer=None,
     )
-    # steer the base activations with the base only features from instruct decoder and continue with instruct
+    # steer the base activations with the base only features from chat decoder and continue with chat
     half_fns["steer_base_only"] = CrossCoderSteeringFeature(
         crosscoder,
         steer_activations_of="base",
-        steer_with_features_from="instruct",
-        continue_with="instruct",
+        steer_with_features_from="chat",
+        continue_with="chat",
         features_to_steer=base_only_features,
     )
 
@@ -140,8 +140,8 @@ def create_half_fn_dict_steer_seeds(
         half_fns[name] = CrossCoderSteeringFeature(
             crosscoder,
             steer_activations_of="base",
-            steer_with_features_from="instruct",
-            continue_with="instruct",
+            steer_with_features_from="chat",
+            continue_with="chat",
             features_to_steer=features_to_steer,
             filter_treshold=threshold,
         )
@@ -165,9 +165,9 @@ def create_half_fn_dict_remove_seeds(
             name += f"_t{threshold}"
         half_fns[name] = CrossCoderSteeringFeature(
             crosscoder,
-            steer_activations_of="instruct",
+            steer_activations_of="chat",
             steer_with_features_from="base",
-            continue_with="instruct",
+            continue_with="chat",
             features_to_steer=features_to_steer,
             filter_treshold=threshold,
         )
@@ -177,8 +177,8 @@ def create_half_fn_dict_remove_seeds(
 def create_half_fn_dict_no_cross() -> dict[str, HalfStepPreprocessFn]:
     half_fns = {}
     half_fns["base"] = IdentityPreprocessFn(continue_with="base")
-    half_fns["instruct - debugging"] = IdentityPreprocessFn(continue_with="instruct")
-    half_fns["instruct_to_base"] = SwitchPreprocessFn(continue_with="base")
+    half_fns["chat - debugging"] = IdentityPreprocessFn(continue_with="chat")
+    half_fns["chat_to_base"] = SwitchPreprocessFn(continue_with="base")
     return half_fns
 
 
@@ -188,37 +188,37 @@ def create_half_fn_dict_no_cross() -> dict[str, HalfStepPreprocessFn]:
 #     half_fns = {
 #         "remove_it_only_custom": CrossCoderSteeringFeature(
 #             crosscoder,
-#             steer_activations_of="instruct",
+#             steer_activations_of="chat",
 #             steer_with_features_from="base",
-#             continue_with="instruct",
+#             continue_with="chat",
 #             features_to_steer=it_only_features,
 #         ),
 #         "remove_it_and_base_only_custom": CrossCoderSteeringFeature(
 #             crosscoder,
-#             steer_activations_of="instruct",
+#             steer_activations_of="chat",
 #             steer_with_features_from="base",
-#             continue_with="instruct",
+#             continue_with="chat",
 #             features_to_steer=it_only_features + base_only_features,
 #         ),
 #         "steer_it_only_custom_to_base": CrossCoderSteeringFeature(
 #             crosscoder,
 #             steer_activations_of="base",
-#             steer_with_features_from="instruct",
+#             steer_with_features_from="chat",
 #             continue_with="base",
 #             features_to_steer=it_only_features,
 #         ),
 #         "steer_it_only_custom": CrossCoderSteeringFeature(
 #             crosscoder,
 #             steer_activations_of="base",
-#             steer_with_features_from="instruct",
-#             continue_with="instruct",
+#             steer_with_features_from="chat",
+#             continue_with="chat",
 #             features_to_steer=it_only_features,
 #         ),
 #         "steer_it_and_base_only_custom": CrossCoderSteeringFeature(
 #             crosscoder,
 #             steer_activations_of="base",
-#             steer_with_features_from="instruct",
-#             continue_with="instruct",
+#             steer_with_features_from="chat",
+#             continue_with="chat",
 #             features_to_steer=it_only_features + base_only_features,
 #         ),
 #     }
@@ -238,17 +238,17 @@ def create_half_fn_thresholded_features(
         f"steer_t{threshold}{sf_name}_all": CrossCoderSteeringFeature(
             crosscoder,
             steer_activations_of="base",
-            steer_with_features_from="instruct",
-            continue_with="instruct",
+            steer_with_features_from="chat",
+            continue_with="chat",
             features_to_steer=features_to_steer,
             filter_treshold=threshold,
             scale_steering_feature=steering_factor,
         ),
         f"rm_t{threshold}{sf_name}_all": CrossCoderSteeringFeature(
             crosscoder,
-            steer_activations_of="instruct",
+            steer_activations_of="chat",
             steer_with_features_from="base",
-            continue_with="instruct",
+            continue_with="chat",
             features_to_steer=features_to_steer,
             filter_treshold=threshold,
             scale_steering_feature=steering_factor,
@@ -258,17 +258,17 @@ def create_half_fn_thresholded_features(
         half_fns[f"steer_t{threshold}{sf_name}_{feature}"] = CrossCoderSteeringFeature(
             crosscoder,
             steer_activations_of="base",
-            steer_with_features_from="instruct",
-            continue_with="instruct",
+            steer_with_features_from="chat",
+            continue_with="chat",
             features_to_steer=[feature],
             filter_treshold=threshold,
             scale_steering_feature=steering_factor,
         )
         half_fns[f"rm_t{threshold}{sf_name}_{feature}"] = CrossCoderSteeringFeature(
             crosscoder,
-            steer_activations_of="instruct",
+            steer_activations_of="chat",
             steer_with_features_from="base",
-            continue_with="instruct",
+            continue_with="chat",
             features_to_steer=[feature],
             filter_treshold=threshold,
             scale_steering_feature=steering_factor,
@@ -287,8 +287,8 @@ def create_tresholded_baseline_half_fns(
         f"baseline_t{threshold}_all": CrossCoderSteeringFeature(
             crosscoder,
             steer_activations_of="base",
-            steer_with_features_from="instruct",
-            continue_with="instruct",
+            steer_with_features_from="chat",
+            continue_with="chat",
             features_to_steer=features_to_steer,
             filter_treshold=threshold,
             ignore_encoder=False,
@@ -299,8 +299,8 @@ def create_tresholded_baseline_half_fns(
         half_fns[f"baseline_t{threshold}_{feature}"] = CrossCoderSteeringFeature(
             crosscoder,
             steer_activations_of="base",
-            steer_with_features_from="instruct",
-            continue_with="instruct",
+            steer_with_features_from="chat",
+            continue_with="chat",
             features_to_steer=[feature],
             filter_treshold=threshold,
             ignore_encoder=False,
@@ -319,9 +319,9 @@ def create_tresholded_it_baseline_half_fns(
     half_fns = {
         f"it_baseline_t{threshold}_all": CrossCoderSteeringFeature(
             crosscoder,
-            steer_activations_of="instruct",
-            steer_with_features_from="instruct",
-            continue_with="instruct",
+            steer_activations_of="chat",
+            steer_with_features_from="chat",
+            continue_with="chat",
             features_to_steer=features_to_steer,
             filter_treshold=threshold,
             ignore_encoder=False,
@@ -331,9 +331,9 @@ def create_tresholded_it_baseline_half_fns(
     for feature in features_to_steer:
         half_fns[f"it_baseline_t{threshold}_{feature}"] = CrossCoderSteeringFeature(
             crosscoder,
-            steer_activations_of="instruct",
-            steer_with_features_from="instruct",
-            continue_with="instruct",
+            steer_activations_of="chat",
+            steer_with_features_from="chat",
+            continue_with="chat",
             features_to_steer=[feature],
             filter_treshold=threshold,
             ignore_encoder=False,
@@ -358,8 +358,8 @@ def create_tresholded_baseline_random_half_fns(
             CrossCoderSteeringFeature(
                 crosscoder,
                 steer_activations_of="base",
-                steer_with_features_from="instruct",
-                continue_with="instruct",
+                steer_with_features_from="chat",
+                continue_with="chat",
                 features_to_steer=features_to_steer,
                 filter_treshold=threshold,
                 ignore_encoder=False,
@@ -389,8 +389,8 @@ def create_tresholded_baseline_random_steering_half_fns(
             CrossCoderSteeringFeature(
                 crosscoder,
                 steer_activations_of="base",
-                steer_with_features_from="instruct",
-                continue_with="instruct",
+                steer_with_features_from="chat",
+                continue_with="chat",
                 monitored_features=features_to_monitor,
                 features_to_steer=features_to_steer,
                 filter_treshold=threshold,
@@ -400,9 +400,9 @@ def create_tresholded_baseline_random_steering_half_fns(
         half_fns[f"rm_t{threshold}_s{seed}_n{len(features_to_monitor)}"] = (
             CrossCoderSteeringFeature(
                 crosscoder,
-                steer_activations_of="instruct",
+                steer_activations_of="chat",
                 steer_with_features_from="base",
-                continue_with="instruct",
+                continue_with="chat",
                 monitored_features=features_to_monitor,
                 features_to_steer=features_to_steer,
                 filter_treshold=threshold,

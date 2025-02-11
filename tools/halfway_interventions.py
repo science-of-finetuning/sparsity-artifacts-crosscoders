@@ -6,7 +6,7 @@ from typing import Literal
 
 
 def ensure_model(arg: str):
-    if arg not in ["base", "instruct", "it"]:
+    if arg not in ["base", "chat"]:
         raise ValueError(f"arg must be one of 'base', 'instruct', 'it', got {arg}")
     return arg
 
@@ -49,7 +49,7 @@ class HalfStepPreprocessFn(ABC):
 
 
 class IdentityPreprocessFn(HalfStepPreprocessFn):
-    def __init__(self, continue_with: Literal["base", "instruct", "it"]):
+    def __init__(self, continue_with: Literal["base", "chat"]):
         self.continue_with = ensure_model(continue_with)
 
     def continue_with_model(self, result):
@@ -64,7 +64,7 @@ class IdentityPreprocessFn(HalfStepPreprocessFn):
 
 
 class SwitchPreprocessFn(HalfStepPreprocessFn):
-    def __init__(self, continue_with: Literal["base", "instruct", "it"]):
+    def __init__(self, continue_with: Literal["base", "chat"]):
         self.continue_with = ensure_model(continue_with)
 
     def preprocess(self, base_activations, instruct_activations):
@@ -92,8 +92,8 @@ class CrossCoderReconstruction(IdentityPreprocessFn):
     def __init__(
         self,
         crosscoder: CrossCoder,
-        reconstruct_with: Literal["base", "instruct", "it"],
-        continue_with: Literal["base", "instruct", "it"],
+        reconstruct_with: Literal["base", "chat"],
+        continue_with: Literal["base", "chat"],
     ):
         super().__init__(continue_with)
         self.crosscoder = crosscoder
@@ -123,10 +123,10 @@ class CrossCoderSteeringFeature(IdentityPreprocessFn):
     def __init__(
         self,
         crosscoder: CrossCoder,
-        steer_activations_of: Literal["base", "instruct", "it"],
-        steer_with_features_from: Literal["base", "instruct", "it"],
+        steer_activations_of: Literal["base", "chat"],
+        steer_with_features_from: Literal["base", "chat"],
         features_to_steer: list[int] | None,
-        continue_with: Literal["base", "instruct", "it"],
+        continue_with: Literal["base", "chat"],
         monitored_features: list[int] | None = None,
         filter_treshold: float | None = None,
         scale_steering_feature: float = 1.0,
@@ -207,10 +207,10 @@ class CrossCoderOutProjection(IdentityPreprocessFn):
     def __init__(
         self,
         crosscoder: CrossCoder,
-        steer_activations_of: Literal["base", "instruct", "it"],
-        steer_with_features_from: Literal["base", "instruct", "it"],
+        steer_activations_of: Literal["base", "chat"],
+        steer_with_features_from: Literal["base", "chat"],
         features_to_steer: list[int] | None,
-        continue_with: Literal["base", "instruct", "it"],
+        continue_with: Literal["base", "chat"],
         scale_steering_feature: float = 1.0,
     ):
         super().__init__(continue_with)
@@ -220,7 +220,7 @@ class CrossCoderOutProjection(IdentityPreprocessFn):
 
         self.steer_with_features_from = ensure_model(steer_with_features_from)
         self.projection_matrices = []
-        self.layer_idx = int(self.steer_with_features_from == "instruct")
+        self.layer_idx = int(self.steer_with_features_from == "chat")
         for i in features_to_steer:
             normalized_decoder_vector = (
                 crosscoder.decoder.weight[self.layer_idx, i]
