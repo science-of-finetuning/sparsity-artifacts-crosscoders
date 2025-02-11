@@ -260,3 +260,121 @@ class CrossCoderOutProjection(IdentityPreprocessFn):
     def all_layers(self, act):
         return self.project_out(act)
 
+
+class BasePatchIntervention(IdentityPreprocessFn):
+    """Base class for interventions that patch activations from one model to another.
+
+    This class provides common functionality for patching activations based on a mask.
+    Derived classes should implement get_patch_mask() to specify which tokens to patch.
+
+    Args:
+        continue_with: Which model should complete generation ("base" or "chat")
+        source: Which model to copy activations from ("base" or "chat")
+    """
+
+    def __init__(
+        self,
+        continue_with: Literal["base", "chat"],
+        patch_source: Literal["base", "chat"],
+    ):
+        super().__init__(continue_with)
+        self.patch_source = ensure_model(patch_source)
+
+    def _validate_mask(self, mask: th.Tensor, activations: th.Tensor) -> None:
+        """Validates that a mask has correct shape and type if provided."""
+        if not isinstance(mask, th.Tensor):
+            raise TypeError(f"Mask must be a tensor, got {type(mask)}")
+        if mask.dtype != th.bool:
+            raise TypeError(f"Mask must be boolean, got {mask.dtype}")
+        if mask.shape != activations.shape[:2]:  # batch x seq
+            raise ValueError(
+                f"Mask shape {mask.shape} doesn't match activation shape {activations.shape[:2]}"
+            )
+
+    def get_patch_mask(self, **kwargs) -> th.Tensor:
+        """Returns boolean mask indicating which tokens to patch. Override in derived classes."""
+        raise NotImplementedError
+
+    def preprocess(
+        self, base_activations: th.Tensor, instruct_activations: th.Tensor, **kwargs
+    ):
+        mask = self.get_patch_mask(**kwargs)
+        self._validate_mask(mask, base_activations)
+
+        # Get source and target based on configuration
+        source, destination = (
+            (
+                base_activations,
+                instruct_activations,
+            )
+            if self.patch_source == "base"
+            else (
+                instruct_activations,
+                base_activations,
+            )
+        )
+
+        # Apply patch
+        modified = destination.clone()
+        modified[mask] = source[mask]
+
+        return self.continue_with_model(modified)
+
+
+class ControlTokenPatchIntervention(BasePatchIntervention):
+    """Patches control tokens from one model to another.
+
+    This intervention copies control token activations (specified by ctrl_mask)
+    from the source model to the target model.
+
+    Args:
+        continue_with: Which model should complete generation ("base" or "chat")
+        patch_source: Which model to copy activations from ("base" or "chat")
+
+    Kwargs for preprocess:
+        ctrl_mask: Boolean tensor of shape [batch_size, seq_len] indicating control tokens
+    """
+
+    def get_patch_mask(self, **kwargs) -> th.Tensor:
+        return kwargs.get("ctrl_mask")
+
+
+class KFirstPatchIntervention(BasePatchIntervention):
+    """Patches the first k assistant tokens from one model to another.
+
+    This intervention copies the first k assistant token activations
+    (specified by k_first_ass_toks_mask) from the source model to the target model.
+
+    Args:
+        continue_with: Which model should complete generation ("base" or "chat")
+        patch_source: Which model to copy activations from ("base" or "chat")
+
+    Kwargs for preprocess:
+        k_first_ass_toks_mask: Boolean tensor of shape [batch_size, seq_len]
+                              indicating first k assistant tokens
+    """
+
+    def get_patch_mask(self, **kwargs) -> th.Tensor:
+        return kwargs.get("k_first_ass_toks_mask")
+
+
+class CombinedPatchIntervention(BasePatchIntervention):
+    """Patches tokens specified by combining control and first k assistant token masks.
+
+    This intervention combines ctrl_mask and k_first_ass_toks_mask using OR operation
+    to patch tokens from the source model to the target model.
+
+    Args:
+        continue_with: Which model should complete generation ("base" or "chat")
+        patch_source: Which model to copy activations from ("base" or "chat")
+
+    Kwargs for preprocess:
+        ctrl_mask: Boolean tensor of shape [batch_size, seq_len] indicating control tokens
+        k_first_ass_toks_mask: Boolean tensor of shape [batch_size, seq_len]
+                              indicating first k assistant tokens
+    """
+
+    def get_patch_mask(self, **kwargs) -> th.Tensor:
+        ctrl_mask = kwargs.get("ctrl_mask")
+        k_first_mask = kwargs.get("k_first_ass_toks_mask")
+        return ctrl_mask | k_first_mask
