@@ -225,7 +225,7 @@ def compute_chunked_cosine_similarity(weights1, weights2, chunk_size=4):
             for _id in range(th.cuda.device_count()):
                 th.cuda.synchronize(f"cuda:{_id}")
             th.cpu.synchronize()
-        cosim_matrix_chunk = th.nn.functional.cosine_similarity(
+        cosim_matrix_chunk = cosine_similarity(
             chunk.unsqueeze(1).to(device, non_blocking=True),
             weights2.unsqueeze(0).to(device, non_blocking=True),
             dim=2,
