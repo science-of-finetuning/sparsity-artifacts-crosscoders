@@ -3,25 +3,23 @@ from pathlib import Path
 from collections import defaultdict
 import json
 
-sys.path.append(str(Path(__file__).parent.parent))
 
 import torch as th
 from tqdm.auto import tqdm
-import wandb
 from torch.nn.functional import kl_div
 from torchmetrics.aggregation import MeanMetric
-from dictionary_learning.dictionary import CrossCoder
-from tools.split_gemma import split_gemma
-from tools.setup_to_eval import *
+import wandb
 
-ROOT_PATH = Path(__file__).parent
-CHAT_TEMPLATE = open(ROOT_PATH / "templates/gemma_chat_template.jinja").read()
+
+sys.path.append(str(Path(__file__).parent.parent))
+from tools.split_gemma import split_gemma
+from tools.setup_to_eval import *  # noqa
+from tools.tokenization_utils import tokenize_with_ctrl_mask
+from tools.utils import mask_k_first_ones_vec
 
 
 def MeanMetricToDevice(device):
     return lambda: MeanMetric().to(device)
-
-
 
 
 @th.inference_mode()
@@ -36,8 +34,35 @@ def evaluate_interventions(
     max_seq_len=1024,
     log_every=100,
     checkpoint_every=2000,
+    k_first: int = 10,
     save_path: Path | None = None,
 ):
+    """
+    Evaluate different intervention strategies on language models.
+
+    Args:
+        base_model: Base language model to evaluate
+        instruct_model: Instruction-tuned model to evaluate
+        dataset: Dataset of conversations to evaluate on
+        preprocess_before_last_half_fns: Dict mapping strategy names to preprocessing functions
+        layer_to_stop: Layer index to split model at (default: 13)
+        batch_size: Batch size for evaluation (default: 8)
+        device: Device to run on (default: "cuda")
+        max_seq_len: Maximum sequence length (default: 1024)
+        log_every: How often to log metrics (default: 100)
+        checkpoint_every: How often to save checkpoints (default: 2000)
+        k_first: Number of first tokens to consider (default: 10)
+        save_path: Path to save results (default: None)
+
+    Returns:
+        Dict containing evaluation metrics:
+        - loss: Negative log likelihood
+        - perplexity: Model perplexity
+        - kl-instruct: KL divergence vs instruction model
+        - kl-base: KL divergence vs base model
+        - loss_wrt_instruct_pred: Loss relative to instruction model predictions
+        - perplexity_wrt_instruct_pred: Perplexity relative to instruction model predictions
+    """
     nlls = defaultdict(MeanMetricToDevice(device))
     perplexity = defaultdict(MeanMetricToDevice(device))
     instruct_kl = defaultdict(MeanMetricToDevice(device))
@@ -84,40 +109,34 @@ def evaluate_interventions(
 
     for i in tqdm(range(0, len(dataset), batch_size)):
         batch = dataset[i : i + batch_size]
-        batch_tokens = instruct_model.tokenizer.apply_chat_template(
+        batch_tokens = tokenize_with_ctrl_mask(
             batch,
-            tokenize=True,
-            return_assistant_tokens_mask=True,
-            chat_template=CHAT_TEMPLATE,
+            tokenizer=instruct_model.tokenizer,
             return_dict=True,
             return_tensors="pt",
             padding=True,
             truncation=True,
             max_length=max_seq_len,
         )
-        batch_tokens["input_ids"] = batch_tokens["input_ids"][:, -max_seq_len:].to(
+        input_ids = batch_tokens["input_ids"].to(device)
+        attn_mask = batch_tokens["attention_mask"].to(device)
+        assistant_mask = th.tensor(batch_tokens["assistant_masks"]).bool().to(device)
+        ctrl_mask = batch_tokens["ctrl_mask"].to(device)
+        k_first_ass_toks_mask = mask_k_first_ones_vec(assistant_mask, k_first).to(
             device
         )
-        batch_tokens["attention_mask"] = batch_tokens["attention_mask"][
-            :, -max_seq_len:
-        ].to(device)
-        batch_tokens["assistant_masks"] = (
-            th.tensor(batch_tokens["assistant_masks"])[:, -max_seq_len:]
-            .bool()
-            .to(device)
-        )
-        # manual truncation because return_assistant_tokens_mask + truncate = 🤮
+        next_ass_toks_mask = assistant_mask & ~k_first_ass_toks_mask
         base_activations, base_causal_mask_raw, base_position_ids = (
             base_model.first_half_forward(
-                input_ids=batch_tokens["input_ids"],
-                attention_mask=batch_tokens["attention_mask"],
+                input_ids=input_ids,
+                attention_mask=attn_mask,
                 layer_idx=layer_to_stop,
             )
         )
         instruct_activations, instruct_causal_mask_raw, instruct_position_ids = (
             instruct_model.first_half_forward(
-                input_ids=batch_tokens["input_ids"],
-                attention_mask=batch_tokens["attention_mask"],
+                input_ids=input_ids,
+                attention_mask=attn_mask,
                 layer_idx=layer_to_stop,
             )
         )
@@ -141,22 +160,29 @@ def evaluate_interventions(
             preprocess_before_last_half_fn,
         ) in preprocess_before_last_half_fns.items():
             base_activations_edited, instruct_activations_edited, mask = (
-                preprocess_before_last_half_fn(base_activations, instruct_activations)
+                preprocess_before_last_half_fn(
+                    base_activations,
+                    instruct_activations,
+                    ctrl_mask=ctrl_mask,
+                    assistant_mask=assistant_mask,
+                    k_first_ass_toks_mask=k_first_ass_toks_mask,
+                    next_ass_toks_mask=next_ass_toks_mask,
+                )
             )
             if mask is not None:
                 base_logits = base_logits_raw[mask]
                 instruct_logits = instruct_logits_raw[mask]
                 base_causal_mask = base_causal_mask_raw[mask]
                 instruct_causal_mask = instruct_causal_mask_raw[mask]
-                assistant_mask = batch_tokens["assistant_masks"][mask]
-                labels = batch_tokens["input_ids"][mask][assistant_mask]
+                assistant_mask = assistant_mask[mask]
+                labels = input_ids[mask][assistant_mask]
             else:
                 base_logits = base_logits_raw
                 instruct_logits = instruct_logits_raw
                 base_causal_mask = base_causal_mask_raw
                 instruct_causal_mask = instruct_causal_mask_raw
-                assistant_mask = batch_tokens["assistant_masks"]
-                labels = batch_tokens["input_ids"][assistant_mask]
+                assistant_mask = assistant_mask
+                labels = input_ids[assistant_mask]
             final_out = None
             if base_activations_edited is not None:
                 final_out = base_model.second_half_forward(

@@ -3,7 +3,8 @@ import torch as th
 
 template_path = Path(__file__).parent.parent / "templates"
 with open(template_path / "gemma_chat_template.jinja", "r") as f:
-    chat_template = f.read()
+    gemma_chat_template = f.read()
+    chat_template = gemma_chat_template  # for backwards compatibility
 with open(template_path / "gemma_chat_template_ctrl_tokens.jinja", "r") as f:
     ctrl_template = f.read()
 with open(template_path / "customizable_gemma_chat_template.jinja", "r") as f:
@@ -41,8 +42,19 @@ def tokenize_with_ctrl_mask(
     **tokenizer_kwargs,
 ) -> dict:
     """
-    Create a mask that is 1 for chat control tokens and 0 for other tokens
+    Tokenizes conversations with a control mask indicating chat control tokens.
+
+    This function tokenizes a list of conversations using a custom template for chat control tokens. It returns a dictionary containing the tokenized conversations, attention mask, control mask, and assistant masks.
+
+    Args:
+        convs (list[list[dict[str, str]]]): A list of conversations, where each conversation is a list of dictionaries containing 'role' and 'content'.
+        tokenizer: The tokenizer to use for tokenization.
+        **tokenizer_kwargs: Additional keyword arguments to pass to the tokenizer.
+
+    Returns:
+        dict: A dictionary containing the tokenized conversations, attention_mask, ctrl_mask, and assistant_masks
     """
+    # Update tokenizer_kwargs with default settings for control mask and attention mask
     kwargs = tokenizer_kwargs.copy()
     kwargs.update(
         dict(
@@ -140,7 +152,7 @@ def custom_chat_template(
     if ctrl_tokens:
         original_template = ctrl_template
     else:
-        original_template = chat_template
+        original_template = gemma_chat_template
     if enforce_length:
         tokenized = tokenizer.apply_chat_template(
             sample_batch,
