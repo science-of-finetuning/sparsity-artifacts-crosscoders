@@ -10,7 +10,7 @@ import gc
 import sqlite3
 import json
 import sys
-
+import os
 import torch as th
 from torch.utils.data import DataLoader
 from dictionary_learning import CrossCoder
@@ -18,17 +18,20 @@ from datasets import load_dataset
 from nnterp.nnsight_utils import get_layer_output, get_layer
 from nnterp import load_model
 from tqdm import tqdm
+from huggingface_hub import hf_api, hf_hub_download
+from huggingface_hub.errors import EntryNotFoundError
 import wandb
-from huggingface_hub import hf_api
 
 sys.path.append(".")
 
 from tools.utils import load_crosscoder, load_latent_df, df_hf_repo
 
 
-def max_act_exs_to_db(max_activating_examples, db_path: Path):
+def max_act_exs_to_db(max_activating_examples, db_path: Path, overwrite=False):
     """Convert max activating examples to a database."""
-    if not db_path.exists():
+    if not db_path.exists() or overwrite:
+        if db_path.exists():
+            os.remove(db_path)
         with sqlite3.connect(db_path) as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -75,15 +78,17 @@ def cleanup_max_act_exs(max_activating, tokenizer, max_seq_len):
     return max_activating
 
 
-def merge_max_examples(*max_dicts):
+def merge_max_examples(*max_dicts, n=None):
     """Merge max activating examples from multiple dictionaries."""
     merged_dict = {}
+    if n is None:
+        raise ValueError("n must be provided")
     for d in max_dicts:
         for k, v in d.items():
             merged_dict[k] = merged_dict.get(k, []) + v
     # sort each list
     for k in merged_dict:
-        merged_dict[k] = sorted(merged_dict[k], key=lambda x: x[0], reverse=True)
+        merged_dict[k] = sorted(merged_dict[k], key=lambda x: x[0], reverse=True)[:n]
     return merged_dict
 
 
@@ -193,9 +198,6 @@ def compute_max_activating_examples(
             max_activating_examples, tokenizer, max_seq_len
         )
         th.save(max_activating_examples, save_path / f"{name}_final.pt")
-        # convert to db
-        db_path = save_path / f"{name}_final.db"
-        max_act_exs_to_db(max_activating_examples, db_path)
 
     # Setup multiprocessing with bounded queue
     queue = Queue(maxsize=10)
@@ -289,6 +291,7 @@ def compute_max_activating_examples(
     return
 
 
+# python scripts/collect_max_activating_examples.py l13_crosscoder --base-device "cuda:0" --chat-device "cuda:1" --crosscoder-batch-size 512 --model-batch-size 16 --latent-file "notebooks/results/shared_not_shared_indices.json"  --no-upload
 # python scripts/collect_max_activating_examples.py connor --base-device "cuda:0" --chat-device "cuda:1" --lmsys-format base  --crosscoder-batch-size 512 --model-batch-size 16
 def main():
     parser = argparse.ArgumentParser()
@@ -306,15 +309,20 @@ def main():
     parser.add_argument("--seq-len", type=int, default=1024)
     parser.add_argument("--n", type=int, default=100)
     parser.add_argument("--only-upload", action="store_true")
+    parser.add_argument("--no-upload", action="store_false", dest="upload")
+    parser.add_argument("--latent-file", type=Path, default=None)
     parser.add_argument(
         "--save-path",
         type=Path,
         default=Path("results/max_activating_examples"),
     )
+    parser.add_argument("--testing", action="store_true")
     parser.add_argument("--lmsys-format", default="chat", choices=["chat", "base"])
     args = parser.parse_args()
-    save_path = args.save_path / args.crosscoder
-
+    save_path = args.save_path
+    if args.testing:
+        save_path = save_path / "testing"
+    save_path = save_path / args.crosscoder
     if not args.only_upload:
         if args.workers is None:
             args.workers = cpu_count()
@@ -323,9 +331,14 @@ def main():
         wandb.init(project="max-activating-examples", config=vars(args))
 
         crosscoder = load_crosscoder(args.crosscoder)
-        df = load_latent_df(args.crosscoder)
-        selected_features = df[(df["tag"].isin(["IT only", "Base only", "Chat only"]))]
-        selected_indices = selected_features.index.tolist()
+        if args.latent_file is not None:
+            selected_indices = json.load(args.latent_file.open("r"))
+        else:
+            df = load_latent_df(args.crosscoder)
+            selected_latents = df[
+                (df["tag"].isin(["IT only", "Base only", "Chat only"]))
+            ]
+            selected_indices = selected_latents.index.tolist()
 
         # Load datasets
         test_set_base = load_dataset(
@@ -338,6 +351,9 @@ def main():
         )[lmsys_column]
         test_set_base = test_set_base[: len(test_set_base) // 2]
         test_set_chat = test_set_chat[: len(test_set_chat) // 2]
+        if args.testing:
+            test_set_base = test_set_base[:100]
+            test_set_chat = test_set_chat[:100]
 
         # Load models
         base_model = load_model(
@@ -416,29 +432,42 @@ def main():
 
         wandb.finish()
     repo = df_hf_repo[args.crosscoder]
-    # push to hub all the files in save_path but mini-chat
+
+    # Load new examples
     chat_examples = th.load(save_path / "chat/chat_final.pt")
     base_examples = th.load(save_path / "base/base_final.pt")
-    chat_base_examples = merge_max_examples(chat_examples, base_examples)
-    th.save(chat_base_examples, save_path / "chat_base_examples.pt")
-    max_act_exs_to_db(chat_base_examples, save_path / "chat_base_examples.db")
-    for file, file_name in [
-        ("base/base_final", "base_examples"),
-        ("chat/chat_final", "chat_examples"),
-        ("chat_base_examples", "chat_base_examples"),
+    chat_base_examples = merge_max_examples(chat_examples, base_examples, n=args.n)
+    # Upload files to HF
+    for file, file_name, examples in [
+        ("base/base_final", "base_examples", base_examples),
+        ("chat/chat_final", "chat_examples", chat_examples),
+        ("chat_base_examples", "chat_base_examples", chat_base_examples),
     ]:
-        for ftype in ["pt", "db"]:
-            hf_api.upload_file(
-                repo_id=repo,
-                repo_type="dataset",
-                path_or_fileobj=save_path / f"{file}.{ftype}",
-                path_in_repo=f"{file_name}.{ftype}",
+        # Try to merge with existing examples from HF
+        try:
+            dl_path = hf_hub_download(
+                repo_id=repo, filename=f"{file_name}.pt", repo_type="dataset"
             )
-    # create the chat_base_examples files
+            existing_examples = th.load(dl_path)
+            examples = merge_max_examples(examples, existing_examples, n=args.n)
+        except EntryNotFoundError:
+            print(f"No existing file for {file_name}")
+
+        # Save updated results
+        th.save(examples, save_path / f"{file}.pt")
+        max_act_exs_to_db(examples, save_path / f"{file}.db", overwrite=True)
+        if args.upload and not args.testing:
+            # Upload to HF
+            for ftype in ["pt", "db"]:
+                file_path = save_path / f"{file}.{ftype}"
+                hf_api.upload_file(
+                    repo_id=repo,
+                    repo_type="dataset",
+                    path_or_fileobj=file_path,
+                    path_in_repo=f"{file_name}.{ftype}",
+                )
 
 
 if __name__ == "__main__":
-    import os
-
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
     main()
