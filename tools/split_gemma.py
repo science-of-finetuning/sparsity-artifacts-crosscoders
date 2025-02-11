@@ -265,6 +265,10 @@ def causal_lm_second_half_forward(
 
 
 def compute_loss(self, logits, labels, already_shifted=False):
+    """
+    Compute the loss for a given logits and labels.
+    If already_shifted is True, it is assumed that at an index i the target index is at index i in the labels.
+    """
     if not already_shifted:
         # Shift so that tokens < n predict n
         shift_logits = logits[..., :-1, :].contiguous()
@@ -273,10 +277,9 @@ def compute_loss(self, logits, labels, already_shifted=False):
         shift_logits = logits
         shift_labels = labels
     # Flatten the tokens
-    loss_fct = CrossEntropyLoss()
+    loss_fct = CrossEntropyLoss(reduction="none")
     shift_logits = shift_logits.view(-1, self.config.vocab_size)
     shift_labels = shift_labels.view(-1)
-    # Enable model parallelism
     shift_labels = shift_labels.to(shift_logits.device)
     return loss_fct(shift_logits, shift_labels)
 
