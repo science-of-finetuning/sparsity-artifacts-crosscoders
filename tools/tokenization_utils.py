@@ -71,6 +71,11 @@ def tokenize_with_ctrl_mask(
     ctrl_mask = th.tensor(ctrl_tok_dict["assistant_masks"], dtype=th.bool)
     tokenizer_kwargs["return_dict"] = True
     tokenizer_kwargs["return_assistant_tokens_mask"] = True
+    tokenizer_kwargs["return_tensors"] = "pt"
+    if tokenizer.chat_template is None and "chat_template" not in tokenizer_kwargs:
+        raise ValueError(
+            "Tokenizer has no chat template, please provide one in the tokenizer_kwargs"
+        )
     tok_dict = tokenizer.apply_chat_template(convs, **tokenizer_kwargs)
     if tok_dict["attention_mask"].shape != ctrl_tok_dict["attention_mask"].shape:
         raise ValueError(

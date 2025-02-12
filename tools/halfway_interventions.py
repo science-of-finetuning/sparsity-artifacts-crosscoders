@@ -14,7 +14,7 @@ def ensure_model(arg: str):
 class HalfStepPreprocessFn(ABC):
     @abstractmethod
     def preprocess(
-        self, base_activations, instruct_activations, **kwargs
+        self, base_activations, chat_activations, **kwargs
     ) -> (
         tuple[th.Tensor, None]
         | tuple[None, th.Tensor]
@@ -32,8 +32,19 @@ class HalfStepPreprocessFn(ABC):
         """
         raise NotImplementedError
 
-    def __call__(self, base_activations, instruct_activations, **kwargs):
-        res = self.preprocess(base_activations, instruct_activations, **kwargs)
+    def __call__(
+        self,
+        base_activations,
+        chat_activations,
+        **kwargs,
+    ) -> (
+        tuple[th.Tensor, None]
+        | tuple[None, th.Tensor]
+        | tuple[None, th.Tensor, th.Tensor | None]
+        | tuple[th.Tensor, None, th.Tensor | None]
+        | tuple[None, None, None]
+    ):
+        res = self.preprocess(base_activations, chat_activations, **kwargs)
         if len(res) == 2:  # no mask provided
             return res[0], res[1], None
         elif len(res) == 3:  # mask
@@ -57,11 +68,11 @@ class IdentityPreprocessFn(HalfStepPreprocessFn):
     def continue_with_model(self, result):
         return (result, None) if self.continue_with == "base" else (None, result)
 
-    def preprocess(self, base_activations, instruct_activations, **kwargs):
+    def preprocess(self, base_activations, chat_activations, **kwargs):
         return (
             (base_activations, None)
             if self.continue_with == "base"
-            else (None, instruct_activations)
+            else (None, chat_activations)
         )
 
 
@@ -69,16 +80,16 @@ class SwitchPreprocessFn(HalfStepPreprocessFn):
     def __init__(self, continue_with: Literal["base", "chat"]):
         self.continue_with = ensure_model(continue_with)
 
-    def preprocess(self, base_activations, instruct_activations, **kwargs):
+    def preprocess(self, base_activations, chat_activations, **kwargs):
         return (
-            (instruct_activations, None)
+            (chat_activations, None)
             if self.continue_with == "base"
             else (None, base_activations)
         )
 
 
 class TestMaskPreprocessFn(IdentityPreprocessFn):
-    def preprocess(self, base_activations, instruct_activations, **kwargs):
+    def preprocess(self, base_activations, chat_activations, **kwargs):
         mask = th.randint(
             0, 2, (base_activations.shape[0],), device=base_activations.device
         ).bool()
@@ -86,7 +97,7 @@ class TestMaskPreprocessFn(IdentityPreprocessFn):
             return None, None, None
         return (
             *super().preprocess(
-                base_activations[mask], instruct_activations[mask], **kwargs
+                base_activations[mask], chat_activations[mask], **kwargs
             ),
             mask,
         )
@@ -103,9 +114,9 @@ class CrossCoderReconstruction(IdentityPreprocessFn):
         self.crosscoder = crosscoder
         self.reconstruct_with = ensure_model(reconstruct_with)
 
-    def preprocess(self, base_activations, instruct_activations, **kwargs):
+    def preprocess(self, base_activations, chat_activations, **kwargs):
         cc_input = th.stack(
-            [base_activations, instruct_activations], dim=2
+            [base_activations, chat_activations], dim=2
         ).float()  # b, s, 2, d
         cc_input = einops.rearrange(cc_input, "b s m d -> (b s) m d")
         f = self.crosscoder.encode(cc_input)  # (b s) D
@@ -159,11 +170,11 @@ class CrossCoderSteeringFeature(IdentityPreprocessFn):
             )
         self.monitored_features = monitored_features
 
-    def preprocess(self, base_activations, instruct_activations, **kwargs):
+    def preprocess(self, base_activations, chat_activations, **kwargs):
         act = (
             base_activations
             if self.steer_activations_of == "base"
-            else instruct_activations
+            else chat_activations
         )
         if self.ignore_encoder:
             steering = (self.decoder_weight[1] - self.decoder_weight[0]).sum(
@@ -173,7 +184,7 @@ class CrossCoderSteeringFeature(IdentityPreprocessFn):
                 steering = -steering
             return self.continue_with_model((act + steering).bfloat16())
         cc_input = th.stack(
-            [base_activations, instruct_activations], dim=2
+            [base_activations, chat_activations], dim=2
         ).float()  # b, seq, 2, d
         cc_input = einops.rearrange(cc_input, "b s m d -> (b s) m d")
 
@@ -248,11 +259,11 @@ class CrossCoderOutProjection(IdentityPreprocessFn):
         out = einops.rearrange(act, "(b s) d -> b s d", b=batch_size).to(original_dtype)
         return out
 
-    def preprocess(self, base_activations, instruct_activations, **kwargs):
+    def preprocess(self, base_activations, chat_activations, **kwargs):
         act = (
             base_activations
             if self.steer_activations_of == "base"
-            else instruct_activations
+            else chat_activations
         )
 
         return self.continue_with_model(self.project_out(act))
@@ -276,9 +287,11 @@ class BasePatchIntervention(IdentityPreprocessFn):
         self,
         continue_with: Literal["base", "chat"],
         patch_source: Literal["base", "chat"],
+        activation_processor: IdentityPreprocessFn | None = None,
     ):
         super().__init__(continue_with)
         self.patch_source = ensure_model(patch_source)
+        self.activation_processor = activation_processor
 
     def _validate_mask(self, mask: th.Tensor, activations: th.Tensor) -> None:
         """Validates that a mask has correct shape and type if provided."""
@@ -296,7 +309,7 @@ class BasePatchIntervention(IdentityPreprocessFn):
         raise NotImplementedError
 
     def preprocess(
-        self, base_activations: th.Tensor, instruct_activations: th.Tensor, **kwargs
+        self, base_activations: th.Tensor, chat_activations: th.Tensor, **kwargs
     ):
         mask = self.get_patch_mask(**kwargs)
         self._validate_mask(mask, base_activations)
@@ -305,15 +318,20 @@ class BasePatchIntervention(IdentityPreprocessFn):
         source, destination = (
             (
                 base_activations,
-                instruct_activations,
+                chat_activations,
             )
             if self.patch_source == "base"
             else (
-                instruct_activations,
+                chat_activations,
                 base_activations,
             )
         )
-
+        if self.activation_processor is not None:
+            modified_base, modified_chat, mask = self.activation_processor(
+                base_activations, chat_activations, **kwargs
+            )
+        else:
+            modified = destination.clone()
         # Apply patch
         modified = destination.clone()
         modified[mask] = source[mask]
@@ -339,7 +357,7 @@ class ControlTokenPatchIntervention(BasePatchIntervention):
         return kwargs.get("ctrl_mask")
 
 
-class KFirstPatchIntervention(BasePatchIntervention):
+class PatchKFirstPredictions(BasePatchIntervention):
     """Patches the first k assistant tokens from one model to another.
 
     This intervention copies the first k assistant token activations
@@ -355,7 +373,11 @@ class KFirstPatchIntervention(BasePatchIntervention):
     """
 
     def get_patch_mask(self, **kwargs) -> th.Tensor:
-        return kwargs.get("k_first_ass_toks_mask")
+        k_first_ass_toks_mask = kwargs["k_first_ass_toks_mask"]
+        mask = th.zeros_like(k_first_ass_toks_mask)
+        # shift left by 1 to have the token at which you make the prediction rather than the token you need to predict
+        mask[:, :-1] = k_first_ass_toks_mask[:, 1:]
+        return mask
 
 
 class CombinedPatchIntervention(BasePatchIntervention):

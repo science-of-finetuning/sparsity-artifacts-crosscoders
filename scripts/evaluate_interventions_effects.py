@@ -2,15 +2,14 @@ import sys
 
 sys.path.append(".")
 from datasets import load_from_disk
-from setup_to_eval import *
-from dlabutils import model_path
+from tools.setup_to_eval import *
 from pathlib import Path
 from argparse import ArgumentParser
 import json
 import pandas as pd
 import torch as th
 import wandb
-from evaluate import evaluate_interventions
+from tools.evaluate import evaluate_interventions
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 if __name__ == "__main__":
@@ -35,16 +34,16 @@ if __name__ == "__main__":
     parser.add_argument("--save-path", type=Path, default=Path("results-runai"))
     args = parser.parse_args()
     instruct_model = AutoModelForCausalLM.from_pretrained(
-        model_path("google/gemma-2-2b-it"),
+        "google/gemma-2-2b-it",
         torch_dtype=th.bfloat16,
         device_map="cuda",
         attn_implementation="eager",
     )
 
-    tokenizer = AutoTokenizer.from_pretrained(model_path("google/gemma-2-2b-it"))
+    tokenizer = AutoTokenizer.from_pretrained("google/gemma-2-2b-it")
     instruct_model.tokenizer = tokenizer
     base_model = AutoModelForCausalLM.from_pretrained(
-        model_path("google/gemma-2-2b"),
+        "google/gemma-2-2b",
         device_map="cuda",
         torch_dtype=th.bfloat16,
         attn_implementation="eager",

@@ -409,3 +409,36 @@ def create_tresholded_baseline_random_steering_half_fns(
             )
         )
     return half_fns
+
+
+def create_acl_half_fns(
+    crosscoder: CrossCoder,
+    seeds: list[int],
+):
+    """
+    datasets:
+    - Lmsys
+    - Generated
+
+    Creates the half functions used in the ACL paper:
+    # Vanilla
+    - Base
+    - Base -> Chat
+    - Chat -> Base
+    - Chat
+
+    # Patching
+    - Base -> Chat, Chat -> Base
+        - Patch the control tokens
+        - Patch the 5 first predicted tokens
+        - Patch the control tokens and the 5 first predicted tokens
+
+    # CrossCoder
+    - Continue with Chat, Base:
+        - Patch all, patch control tokens, patch 5 first predicted tokens, patch control tokens and 5 first predicted tokens:
+            - Base reconstruction + Chat Error
+            - 5%, 10%, all:
+                - Add x% chat only at the pareto frontier
+                - Add x% random chat only * 5
+                - Add x% chat only Anti-Pareto
+    """
