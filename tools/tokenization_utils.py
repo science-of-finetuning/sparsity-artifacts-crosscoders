@@ -76,6 +76,10 @@ def tokenize_with_ctrl_mask(
         raise ValueError(
             "Tokenizer has no chat template, please provide one in the tokenizer_kwargs"
         )
+    else:
+        chat_template = tokenizer_kwargs.get("chat_template", tokenizer.chat_template)
+        if "generation" not in chat_template:
+            raise ValueError("Chat template does not contain {% generation %} keyword")
     tok_dict = tokenizer.apply_chat_template(convs, **tokenizer_kwargs)
     if tok_dict["attention_mask"].shape != ctrl_tok_dict["attention_mask"].shape:
         raise ValueError(
