@@ -1,14 +1,14 @@
 import torch as th
 import argparse
 from pathlib import Path
-from dictionary_learning.cache import PairedActivationCache
-
-
 from nnsight import LanguageModel
+from dictionary_learning.cache import PairedActivationCache
 from dictionary_learning import ActivationBuffer, CrossCoder
 from dictionary_learning.trainers import CrossCoderTrainer
 from dictionary_learning.training import trainSAE
 import os
+
+from tools.utils import load_activation_dataset
 
 th.set_float32_matmul_precision("high")
 
@@ -35,11 +35,21 @@ if __name__ == "__main__":
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--pretrained", type=str, default=None)
     parser.add_argument("--encoder-layers", type=int, default=None, nargs="+")
+    parser.add_argument("--num-samples", type=int, default=200_000_000)
+    parser.add_argument("--num-validation-samples", type=int, default=2_000_000)
+    parser.add_argument("--text-column", type=str, default="text")
     args = parser.parse_args()
 
     print(f"Training args: {args}")
     th.manual_seed(args.seed)
     th.cuda.manual_seed_all(args.seed)
+
+    if args.text_column == "text":
+        lmsys_split_suffix = ""
+        fineweb_split_suffix = ""
+    else:
+        lmsys_split_suffix = f"-col{args.text_column}"
+        fineweb_split_suffix = f"-col{args.text_column}"
 
     activation_store_dir = Path(args.activation_store_dir)
 
@@ -53,19 +63,46 @@ if __name__ == "__main__":
 
     submodule_name = f"layer_{args.layer}_out"
 
-    fineweb_cache = PairedActivationCache(
-        base_model_fineweb / submodule_name, instruct_model_fineweb / submodule_name
+    # Setup paths
+    # Load validation dataset
+    activation_store_dir = Path(args.activation_store_dir)
+
+    base_model_stub = args.base_model.split("/")[-1]
+    chat_model_stub = args.chat_model.split("/")[-1]
+    fineweb_cache, lmsys_cache = load_activation_dataset(
+        activation_store_dir,
+        base_model=base_model_stub,
+        instruct_model=chat_model_stub,
+        layer=args.layer,
+        lmsys_split="train" + lmsys_split_suffix,
+        fineweb_split="train" + fineweb_split_suffix,
     )
-    lmsys_chat_cache = PairedActivationCache(
-        base_model_lmsys_chat / submodule_name,
-        instruct_model_lmsys_chat / submodule_name,
+    num_samples_per_dataset = args.num_samples // 2
+    train_dataset = th.utils.data.ConcatDataset(
+        [
+            th.utils.data.Subset(fineweb_cache, th.arange(0, num_samples_per_dataset)),
+            th.utils.data.Subset(lmsys_cache, th.arange(0, num_samples_per_dataset)),
+        ]
     )
 
-    dataset = th.utils.data.ConcatDataset([fineweb_cache, lmsys_chat_cache])
-
-    activation_dim = dataset[0].shape[1]
+    activation_dim = train_dataset[0].shape[1]
     dictionary_size = args.expansion_factor * activation_dim
 
+
+    fineweb_cache_val, lmsys_cache_val = load_activation_dataset(
+        activation_store_dir,
+        base_model=base_model_stub,
+        instruct_model=chat_model_stub,
+        layer=args.layer,
+        lmsys_split="validation" + lmsys_split_suffix,
+        fineweb_split="validation" + fineweb_split_suffix,
+    )
+    num_validation_samples = args.num_validation_samples // 2
+    validation_dataset = th.utils.data.ConcatDataset([
+        th.utils.data.Subset(fineweb_cache_val, th.arange(0, num_validation_samples)),
+        th.utils.data.Subset(lmsys_cache_val, th.arange(0, num_validation_samples)),
+    ])
+    
     device = "cuda" if th.cuda.is_available() else "cpu"
     print(f"Training on device={device}.")
     trainer_cfg = {
@@ -96,10 +133,7 @@ if __name__ == "__main__":
         ),
     }
 
-    validation_size = 10**6
-    train_dataset, validation_dataset = th.utils.data.random_split(
-        dataset, [len(dataset) - validation_size, validation_size]
-    )
+   
     print(f"Training on {len(train_dataset)} token activations.")
     dataloader = th.utils.data.DataLoader(
         train_dataset,
