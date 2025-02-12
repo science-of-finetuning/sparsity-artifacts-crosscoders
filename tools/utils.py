@@ -18,6 +18,8 @@ def load_activation_dataset(
     split="validation",
     lmsys_split: str = None,
     fineweb_split: str = None,
+    lmsys_name: str = "lmsys-chat-1m-gemma-formatted",
+    fineweb_name: str = "fineweb-1m-sample",
 ):
     """
     Load the saved activations of the base and instruct models for a given layer
@@ -57,11 +59,11 @@ def load_activation_dataset(
     submodule_name = f"layer_{layer}_out"
 
     # Load validation caches
-    base_model_fineweb = base_model_dir_fineweb / "fineweb-1m-sample" / fineweb_split
-    instruct_model_fineweb = instruct_model_dir_fineweb / "fineweb-1m-sample" / fineweb_split
+    base_model_fineweb = base_model_dir_fineweb / fineweb_name / fineweb_split
+    instruct_model_fineweb = instruct_model_dir_fineweb / fineweb_name / fineweb_split
     
-    base_model_lmsys = base_model_dir_lmsys / "lmsys-chat-1m-gemma-formatted" / lmsys_split
-    instruct_model_lmsys = instruct_model_dir_lmsys / "lmsys-chat-1m-gemma-formatted" / lmsys_split
+    base_model_lmsys = base_model_dir_lmsys / lmsys_name / lmsys_split
+    instruct_model_lmsys = instruct_model_dir_lmsys / lmsys_name / lmsys_split
     
     print(f"Loading fineweb cache from {base_model_fineweb / submodule_name} and {instruct_model_fineweb / submodule_name}")
     fineweb_cache = PairedActivationCache(

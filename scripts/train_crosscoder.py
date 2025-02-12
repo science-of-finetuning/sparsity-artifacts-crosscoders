@@ -1,5 +1,8 @@
+import sys
+sys.path.append(".")
 import torch as th
 import argparse
+from tqdm import trange, tqdm
 from pathlib import Path
 from nnsight import LanguageModel
 from dictionary_learning.cache import PairedActivationCache
@@ -8,6 +11,9 @@ from dictionary_learning.trainers import CrossCoderTrainer
 from dictionary_learning.training import trainSAE
 import os
 
+import wandb
+wandb.require("legacy-service")
+
 from tools.utils import load_activation_dataset
 
 th.set_float32_matmul_precision("high")
@@ -15,8 +21,8 @@ th.set_float32_matmul_precision("high")
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--activation-store-dir", type=str, default="activations")
-    parser.add_argument("--base-model", type=str, default="gemma-2-2b")
-    parser.add_argument("--instruct-model", type=str, default="gemma-2-2b-it")
+    parser.add_argument("--base-model", type=str, default="google/gemma-2-2b")
+    parser.add_argument("--chat-model", type=str, default="google/gemma-2-2b-it")
     parser.add_argument("--layer", type=int, default=13)
     parser.add_argument("--wandb-entity", type=str, default="jkminder")
     parser.add_argument("--disable-wandb", action="store_true")
@@ -38,6 +44,9 @@ if __name__ == "__main__":
     parser.add_argument("--num-samples", type=int, default=200_000_000)
     parser.add_argument("--num-validation-samples", type=int, default=2_000_000)
     parser.add_argument("--text-column", type=str, default="text")
+    parser.add_argument("--no-train-shuffle", action="store_true")
+    parser.add_argument("--local-shuffling", action="store_true")
+
     args = parser.parse_args()
 
     print(f"Training args: {args}")
@@ -49,17 +58,9 @@ if __name__ == "__main__":
         fineweb_split_suffix = ""
     else:
         lmsys_split_suffix = f"-col{args.text_column}"
-        fineweb_split_suffix = f"-col{args.text_column}"
+        fineweb_split_suffix = ""
 
     activation_store_dir = Path(args.activation_store_dir)
-
-    base_model_dir = activation_store_dir / args.base_model
-    instruct_model_dir = activation_store_dir / args.instruct_model
-
-    base_model_fineweb = base_model_dir / "fineweb"
-    base_model_lmsys_chat = base_model_dir / "lmsys_chat"
-    instruct_model_fineweb = instruct_model_dir / "fineweb"
-    instruct_model_lmsys_chat = instruct_model_dir / "lmsys_chat"
 
     submodule_name = f"layer_{args.layer}_out"
 
@@ -76,6 +77,7 @@ if __name__ == "__main__":
         layer=args.layer,
         lmsys_split="train" + lmsys_split_suffix,
         fineweb_split="train" + fineweb_split_suffix,
+        lmsys_name="lmsys-chat-1m-chat-formatted",
     )
     num_samples_per_dataset = args.num_samples // 2
     train_dataset = th.utils.data.ConcatDataset(
@@ -84,6 +86,24 @@ if __name__ == "__main__":
             th.utils.data.Subset(lmsys_cache, th.arange(0, num_samples_per_dataset)),
         ]
     )
+
+    if args.local_shuffling:
+        print("Using local shuffling to optimize for cache locality while allowing randomization", flush=True)
+        # Shuffle dataset within 1M sample shards to maintain locality while allowing randomization
+        shard_size = lmsys_cache.activation_cache_1.config["shard_size"]
+        num_shards = len(train_dataset) // shard_size + (1 if len(train_dataset) % shard_size != 0 else 0)
+        print(f"Number of shards: {num_shards}", flush=True)
+        shuffled_indices = []
+        for i in trange(num_shards):
+            start_idx = i * shard_size
+            end_idx = min((i + 1) * shard_size, len(train_dataset))
+            indices = th.randperm(end_idx - start_idx) + start_idx
+            shuffled_indices.append(indices)
+        shuffled_indices = th.cat(shuffled_indices)
+        print(f"Shuffled indices: {shuffled_indices.shape}", flush=True)
+        train_dataset = th.utils.data.Subset(train_dataset, shuffled_indices)
+        print(f"Shuffled train dataset with {len(train_dataset)} samples.", flush=True)
+        args.no_train_shuffle = True
 
     activation_dim = train_dataset[0].shape[1]
     dictionary_size = args.expansion_factor * activation_dim
@@ -96,6 +116,7 @@ if __name__ == "__main__":
         layer=args.layer,
         lmsys_split="validation" + lmsys_split_suffix,
         fineweb_split="validation" + fineweb_split_suffix,
+        lmsys_name="lmsys-chat-1m-chat-formatted",
     )
     num_validation_samples = args.num_validation_samples // 2
     validation_dataset = th.utils.data.ConcatDataset([
@@ -103,6 +124,9 @@ if __name__ == "__main__":
         th.utils.data.Subset(lmsys_cache_val, th.arange(0, num_validation_samples)),
     ])
     
+    name = f"{args.base_model.split('/')[-1]}-L{args.layer}-mu{args.mu:.1e}-lr{args.lr:.0e}" + \
+        (f"-{args.run_name}" if args.run_name is not None else "") + \
+        (f"-local-shuffling" if args.local_shuffling else "")
     device = "cuda" if th.cuda.is_available() else "cpu"
     print(f"Training on device={device}.")
     trainer_cfg = {
@@ -115,10 +139,9 @@ if __name__ == "__main__":
         "device": device,
         "warmup_steps": 1000,
         "layer": args.layer,
-        "lm_name": f"{args.instruct_model}-{args.base_model}",
+        "lm_name": f"{args.chat_model}-{args.base_model}",
         "compile": True,
-        "wandb_name": f"L{args.layer}-mu{args.mu:.1e}-lr{args.lr:.0e}"
-        + (f"-{args.run_name}" if args.run_name is not None else ""),
+        "wandb_name": name,
         "l1_penalty": args.mu,
         "dict_class_kwargs": {
             "same_init_for_all_layers": args.same_init_for_all_layers,
@@ -134,11 +157,13 @@ if __name__ == "__main__":
     }
 
    
+
     print(f"Training on {len(train_dataset)} token activations.")
     dataloader = th.utils.data.DataLoader(
         train_dataset,
         batch_size=args.batch_size,
-        shuffle=True,
+        # Nora said shuffling doesn't matter
+        shuffle=not args.no_train_shuffle,
         num_workers=args.workers,
         pin_memory=True,
     )
@@ -160,7 +185,7 @@ if __name__ == "__main__":
         wandb_entity=args.wandb_entity,
         wandb_project="crosscoder",
         log_steps=50,
-        save_dir="checkpoints",
+        save_dir=f"checkpoints/{name}",
         steps=args.max_steps,
         save_steps=args.validate_every_n_steps,
     )

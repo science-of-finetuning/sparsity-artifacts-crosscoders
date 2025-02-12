@@ -16,18 +16,17 @@ MU=0.041
 
 # Build flags string
 FLAGS="--activation-store-dir $ACTIVATION_DIR \
---dataset-split $SPLIT \
 --batch-size $BATCH_SIZE \
 --layer $LAYER \
 --base-model $BASE_MODEL \
---instruct-model $INSTRUCT_MODEL \
---device $DEVICE \
---num-workers $WORKERS \
+--chat-model $INSTRUCT_MODEL \
 --same-init-for-all-layers \
 --lr $LR \
 --mu $MU \
 --init-with-transpose \
---validate-every-n-steps 100_000"
+--validate-every-n-steps 10_000 \
+--text-column text_qwen2_5"
+
 additional_flags=$@
 
 python scripts/train_crosscoder.py $FLAGS $additional_flags 
