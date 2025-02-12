@@ -28,7 +28,7 @@ class HalfStepPreprocessFn(ABC):
         Returns None, activations if the instruct model should finish the forward pass.
         Can also return a third element which is the batch mask of activations that were selected.
 
-        Accepts additional keyword arguments to support extra inputs (e.g. ctrl_mask, assistant_mask, k_first_ass_toks_mask, next_ass_toks_mask).
+        Accepts additional keyword arguments to support extra inputs (e.g. ctrl_mask, assistant_mask, k_first_pred_toks_mask, next_ass_toks_mask).
         """
         raise NotImplementedError
 
@@ -65,7 +65,7 @@ class HalfStepPreprocessFn(ABC):
         Returns the result of the preprocess function. Use this if you don't care about which model should continue the forward pass.
         """
         res = self(base_activations, chat_activations, **kwargs)
-        return res[0] | res[1]
+        return res[0] if res[0] is not None else res[1]
 
 
 class IdentityPreprocessFn(HalfStepPreprocessFn):
@@ -191,14 +191,16 @@ class CrossCoderSteeringLatent(IdentityPreprocessFn):
                 steering = -steering
             return self.continue_with_model((act + steering).bfloat16())
         cc_input = th.stack(
-            [base_activations, chat_activations], dim=2
+            [base_activations, chat_activations], dim=-2
         ).float()  # b, seq, 2, d
-        cc_input = einops.rearrange(cc_input, "b s m d -> (b s) m d")
+        if base_activations.dim() == 3:
+            cc_input = einops.rearrange(cc_input, "b s m d -> (b s) m d")
 
         f = self.crosscoder.encode(
-            cc_input, select_latents=self.monitored_latents
+            cc_input, select_features=self.monitored_latents
         )  # (b s) f
-        f = einops.rearrange(f, "(b s) f -> b s f", b=base_activations.shape[0])
+        if base_activations.dim() == 3:
+            f = einops.rearrange(f, "(b s) f -> b s f", b=base_activations.shape[0])
         mask = None
         if self.filter_treshold is not None:
             mask = f.sum(dim=-1).max(dim=-1).values > self.filter_treshold
@@ -207,8 +209,12 @@ class CrossCoderSteeringLatent(IdentityPreprocessFn):
             f = f[mask]
         f = f * self.scale_steering_latent
         self.last_f = f
-        decoded = th.einsum("Bsf, lfd -> Bsld", f, self.decoder_weight)
-        steering_latent = decoded[:, :, 1, :] - decoded[:, :, 0, :]
+        if base_activations.dim() == 3:
+            decoded = th.einsum("bsf, lfd -> bsld", f, self.decoder_weight)
+            steering_latent = decoded[:, :, 1, :] - decoded[:, :, 0, :]
+        else:
+            decoded = th.einsum("Bf, lfd -> Bld", f, self.decoder_weight)
+            steering_latent = decoded[:, 1, :] - decoded[:, 0, :]
         if self.steer_with_latents_from == "base":
             steering_latent = -steering_latent
         if self.filter_treshold is not None:
@@ -356,37 +362,35 @@ class PatchCtrl(BasePatchIntervention):
         ctrl_mask: Boolean tensor of shape [batch_size, seq_len] indicating control tokens
     """
 
-    def get_patch_mask(self, **kwargs) -> th.Tensor:
-        return kwargs.get("ctrl_mask")
+    def get_patch_mask(self, *, ctrl_mask: th.Tensor, **kwargs) -> th.Tensor:
+        return ctrl_mask
 
 
 class PatchKFirstPredictions(BasePatchIntervention):
     """Patches the first k assistant tokens from one model to another.
 
     This intervention copies the first k assistant token activations
-    (specified by k_first_ass_toks_mask) from the source model to the target model.
+    (specified by k_first_pred_toks_mask) from the source model to the target model.
 
     Args:
         continue_with: Which model should complete generation ("base" or "chat")
         patch_target: Which model activations to patch ("base" or "chat")
         activation_processor: Optional preprocess function to apply to the source activations before patching. If not provided, the other model (not patch_target) will be used as the source.
     Kwargs for preprocess:
-        k_first_ass_toks_mask: Boolean tensor of shape [batch_size, seq_len]
+        k_first_pred_toks_mask: Boolean tensor of shape [batch_size, seq_len]
                               indicating first k assistant tokens
     """
 
-    def get_patch_mask(self, **kwargs) -> th.Tensor:
-        k_first_ass_toks_mask = kwargs["k_first_ass_toks_mask"]
-        mask = th.zeros_like(k_first_ass_toks_mask)
-        # shift left by 1 to have the token at which you make the prediction rather than the token you need to predict
-        mask[:, :-1] = k_first_ass_toks_mask[:, 1:]
-        return mask
+    def get_patch_mask(
+        self, *, k_first_pred_toks_mask: th.Tensor, **kwargs
+    ) -> th.Tensor:
+        return k_first_pred_toks_mask
 
 
 class PatchKFirstAndCtrl(BasePatchIntervention):
     """Patches tokens specified by combining control and first k assistant token masks.
 
-    This intervention combines ctrl_mask and k_first_ass_toks_mask using OR operation
+    This intervention combines ctrl_mask and k_first_pred_toks_mask using OR operation
     to patch tokens from the source model to the target model.
 
     Args:
@@ -395,11 +399,11 @@ class PatchKFirstAndCtrl(BasePatchIntervention):
         activation_processor: Optional preprocess function to apply to the source activations before patching. If not provided, the other model (not patch_target) will be used as the source.
     Kwargs for preprocess:
         ctrl_mask: Boolean tensor of shape [batch_size, seq_len] indicating control tokens
-        k_first_ass_toks_mask: Boolean tensor of shape [batch_size, seq_len]
+        k_first_pred_toks_mask: Boolean tensor of shape [batch_size, seq_len]
                               indicating first k assistant tokens
     """
 
-    def get_patch_mask(self, **kwargs) -> th.Tensor:
-        ctrl_mask = kwargs.get("ctrl_mask")
-        k_first_mask = kwargs.get("k_first_ass_toks_mask")
-        return ctrl_mask | k_first_mask
+    def get_patch_mask(
+        self, *, ctrl_mask: th.Tensor, k_first_pred_toks_mask: th.Tensor, **kwargs
+    ) -> th.Tensor:
+        return ctrl_mask | k_first_pred_toks_mask
