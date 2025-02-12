@@ -163,6 +163,7 @@ def evaluate_interventions(
         attn_mask = batch_tokens["attention_mask"].to(device)
         assistant_mask = batch_tokens["assistant_masks"].to(device)
         if not assistant_mask.any():
+            print("Got an empty batch, skipping...")
             continue
         ctrl_mask = batch_tokens["ctrl_mask"].to(device)
         _k_first_ass_toks_mask = mask_k_first_ones_vec(assistant_mask, k_first).to(
@@ -287,6 +288,8 @@ def evaluate_interventions(
                         )
                         update_metrics(metrics_dict, metrics, fn_name, prefix)
                         log_metrics(metrics, fn_name, i, prefix)
+                    else:
+                        print(f"Skipping {fn_name} and {prefix} because mask is empty")
 
             if i % log_every == 0:
                 # Log running metrics
@@ -332,12 +335,6 @@ def evaluate_interventions(
                         step=i,
                     )
 
-                if save_path is not None:
-                    with open(
-                        save_path / f"{wandb.run.name}_latest_result.json", "w"
-                    ) as f:
-                        json.dump(compute_result(), f)
-
             if i % checkpoint_every == 0 and save_path is not None and i != 0:
                 with open(save_path / f"{wandb.run.name}_{i}_result.json", "w") as f:
                     json.dump(compute_result(), f)
@@ -345,6 +342,7 @@ def evaluate_interventions(
     return compute_result()
 
 
+TESTING = True
 if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("--layer-to-stop", type=int, default=13)
@@ -367,6 +365,7 @@ if __name__ == "__main__":
     parser.add_argument("--log-every", type=int, default=10)
     parser.add_argument("--save-path", type=Path, default=Path("results"))
     args = parser.parse_args()
+    args.test = TESTING or args.test
     chat_model = AutoModelForCausalLM.from_pretrained(
         "google/gemma-2-2b-it",
         torch_dtype=th.bfloat16,
@@ -393,7 +392,7 @@ if __name__ == "__main__":
         if args.device != "auto"
         else "cuda" if th.cuda.is_available() else "cpu"
     )
-    crosscoder = load_crosscoder(args.crosscoder)
+    crosscoder = load_crosscoder(args.crosscoder).to(device)
     if args.name is None and args.test:
         args.name = "test"
     project = "perplexity-comparison"
