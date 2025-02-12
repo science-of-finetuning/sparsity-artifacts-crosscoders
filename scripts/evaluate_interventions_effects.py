@@ -342,7 +342,6 @@ def evaluate_interventions(
     return compute_result()
 
 
-TESTING = True
 if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("--layer-to-stop", type=int, default=13)
@@ -365,7 +364,6 @@ if __name__ == "__main__":
     parser.add_argument("--log-every", type=int, default=10)
     parser.add_argument("--save-path", type=Path, default=Path("results"))
     args = parser.parse_args()
-    args.test = TESTING or args.test
     chat_model = AutoModelForCausalLM.from_pretrained(
         "google/gemma-2-2b-it",
         torch_dtype=th.bfloat16,
