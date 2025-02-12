@@ -60,6 +60,13 @@ class HalfStepPreprocessFn(ABC):
         else:
             raise ValueError(f"Expected 2 or 3 elements, got {len(res)}")
 
+    def result(self, base_activations, chat_activations, **kwargs):
+        """
+        Returns the result of the preprocess function. Use this if you don't care about which model should continue the forward pass.
+        """
+        res = self(base_activations, chat_activations, **kwargs)
+        return res[0] | res[1]
+
 
 class IdentityPreprocessFn(HalfStepPreprocessFn):
     def __init__(self, continue_with: Literal["base", "chat"]):
@@ -134,41 +141,41 @@ class CrossCoderReconstruction(IdentityPreprocessFn):
         return self.continue_with_model(reconstruction.bfloat16())
 
 
-class CrossCoderSteeringFeature(IdentityPreprocessFn):
+class CrossCoderSteeringLatent(IdentityPreprocessFn):
     def __init__(
         self,
         crosscoder: CrossCoder,
         steer_activations_of: Literal["base", "chat"],
-        steer_with_features_from: Literal["base", "chat"],
-        features_to_steer: list[int] | None,
+        steer_with_latents_from: Literal["base", "chat"],
+        latents_to_steer: list[int] | None,
         continue_with: Literal["base", "chat"],
-        monitored_features: list[int] | None = None,
+        monitored_latents: list[int] | None = None,
         filter_treshold: float | None = None,
-        scale_steering_feature: float = 1.0,
+        scale_steering_latent: float = 1.0,
         ignore_encoder: bool = False,
     ):
         if filter_treshold is not None and ignore_encoder:
             raise ValueError(
-                "Cannot filter features and ignore encoder at the same time"
+                "Cannot filter latents and ignore encoder at the same time"
             )
         super().__init__(continue_with)
-        if features_to_steer is None:
-            features_to_steer = list(range(crosscoder.decoder.weight.shape[1]))
-        self.decoder_weight = crosscoder.decoder.weight[:, features_to_steer]  # lfd
+        if latents_to_steer is None:
+            latents_to_steer = list(range(crosscoder.decoder.weight.shape[1]))
+        self.decoder_weight = crosscoder.decoder.weight[:, latents_to_steer]  # lfd
         self.crosscoder = crosscoder
-        self.steer_with_features_from = ensure_model(steer_with_features_from)
+        self.steer_with_latents_from = ensure_model(steer_with_latents_from)
         self.steer_activations_of = ensure_model(steer_activations_of)
         self.filter_treshold = filter_treshold
-        self.features_to_steer = features_to_steer
-        self.scale_steering_feature = scale_steering_feature
+        self.latents_to_steer = latents_to_steer
+        self.scale_steering_latent = scale_steering_latent
         self.ignore_encoder = ignore_encoder
-        if monitored_features is None:
-            monitored_features = features_to_steer
-        elif len(monitored_features) != len(features_to_steer):
+        if monitored_latents is None:
+            monitored_latents = latents_to_steer
+        elif len(monitored_latents) != len(latents_to_steer):
             raise ValueError(
-                "Monitored features and features to steer must have the same length"
+                "Monitored latents and latents to steer must have the same length"
             )
-        self.monitored_features = monitored_features
+        self.monitored_latents = monitored_latents
 
     def preprocess(self, base_activations, chat_activations, **kwargs):
         act = (
@@ -179,8 +186,8 @@ class CrossCoderSteeringFeature(IdentityPreprocessFn):
         if self.ignore_encoder:
             steering = (self.decoder_weight[1] - self.decoder_weight[0]).sum(
                 dim=0
-            ) * self.scale_steering_feature
-            if self.steer_with_features_from == "base":
+            ) * self.scale_steering_latent
+            if self.steer_with_latents_from == "base":
                 steering = -steering
             return self.continue_with_model((act + steering).bfloat16())
         cc_input = th.stack(
@@ -189,7 +196,7 @@ class CrossCoderSteeringFeature(IdentityPreprocessFn):
         cc_input = einops.rearrange(cc_input, "b s m d -> (b s) m d")
 
         f = self.crosscoder.encode(
-            cc_input, select_features=self.monitored_features
+            cc_input, select_latents=self.monitored_latents
         )  # (b s) f
         f = einops.rearrange(f, "(b s) f -> b s f", b=base_activations.shape[0])
         mask = None
@@ -198,24 +205,24 @@ class CrossCoderSteeringFeature(IdentityPreprocessFn):
             if not mask.any():
                 return None, None, None
             f = f[mask]
-        f = f * self.scale_steering_feature
+        f = f * self.scale_steering_latent
         self.last_f = f
         decoded = th.einsum("Bsf, lfd -> Bsld", f, self.decoder_weight)
-        steering_feature = decoded[:, :, 1, :] - decoded[:, :, 0, :]
-        if self.steer_with_features_from == "base":
-            steering_feature = -steering_feature
+        steering_latent = decoded[:, :, 1, :] - decoded[:, :, 0, :]
+        if self.steer_with_latents_from == "base":
+            steering_latent = -steering_latent
         if self.filter_treshold is not None:
             act = act[mask]
-        res = act + steering_feature
-        # TODO: Improve this, this is a hack to get the steering feature for all layers
-        self.last_steering_feature = steering_feature
+        res = act + steering_latent
+        # TODO: Improve this, this is a hack to get the steering latent for all layers
+        self.last_steering_latent = steering_latent
         return *self.continue_with_model(res.bfloat16()), mask
 
     def all_layers(self, act):
         assert (
-            self.last_steering_feature is not None
-        ), "last_steering_feature is not set, call preprocess first"
-        return act + self.last_steering_feature
+            self.last_steering_latent is not None
+        ), "last_steering_latent is not set, call preprocess first"
+        return act + self.last_steering_latent
 
 
 class CrossCoderOutProjection(IdentityPreprocessFn):
@@ -223,19 +230,19 @@ class CrossCoderOutProjection(IdentityPreprocessFn):
         self,
         crosscoder: CrossCoder,
         steer_activations_of: Literal["base", "chat"],
-        steer_with_features_from: Literal["base", "chat"],
-        features_to_steer: list[int] | None,
+        steer_with_latents_from: Literal["base", "chat"],
+        latents_to_steer: list[int] | None,
         continue_with: Literal["base", "chat"],
-        scale_steering_feature: float = 1.0,
+        scale_steering_latent: float = 1.0,
     ):
         super().__init__(continue_with)
         self.crosscoder = crosscoder
-        if features_to_steer is None:
-            features_to_steer = list(range(crosscoder.decoder.weight.shape[1]))
-        self.steer_with_features_from = ensure_model(steer_with_features_from)
+        if latents_to_steer is None:
+            latents_to_steer = list(range(crosscoder.decoder.weight.shape[1]))
+        self.steer_with_latents_from = ensure_model(steer_with_latents_from)
         self.projection_matrices = []
-        self.layer_idx = int(self.steer_with_features_from == "chat")
-        for i in features_to_steer:
+        self.layer_idx = int(self.steer_with_latents_from == "chat")
+        for i in latents_to_steer:
             normalized_decoder_vector = (
                 crosscoder.decoder.weight[self.layer_idx, i]
                 / crosscoder.decoder.weight[self.layer_idx, i].norm()
@@ -244,8 +251,8 @@ class CrossCoderOutProjection(IdentityPreprocessFn):
                 th.outer(normalized_decoder_vector, normalized_decoder_vector)
             )
         self.steer_activations_of = ensure_model(steer_activations_of)
-        self.features_to_steer = features_to_steer
-        self.scale_steering_feature = scale_steering_feature
+        self.latents_to_steer = latents_to_steer
+        self.scale_steering_latent = scale_steering_latent
 
     def project_out(self, act):
         # act: bd
@@ -255,7 +262,7 @@ class CrossCoderOutProjection(IdentityPreprocessFn):
             self.crosscoder.decoder.weight.dtype
         )
         for projection_matrix in self.projection_matrices:
-            act = act - act @ projection_matrix * self.scale_steering_feature
+            act = act - act @ projection_matrix * self.scale_steering_latent
         out = einops.rearrange(act, "(b s) d -> b s d", b=batch_size).to(original_dtype)
         return out
 
@@ -280,18 +287,24 @@ class BasePatchIntervention(IdentityPreprocessFn):
 
     Args:
         continue_with: Which model should complete generation ("base" or "chat")
-        source: Which model to copy activations from ("base" or "chat")
+        patch_target: Which model activations to patch ("base" or "chat")
+        activation_processor: Optional preprocess function to apply to the source activations before patching. If not provided, the other model (not patch_target) will be used as the source.
     """
 
     def __init__(
         self,
         continue_with: Literal["base", "chat"],
-        patch_source: Literal["base", "chat"],
+        patch_target: Literal["base", "chat"],
         activation_processor: IdentityPreprocessFn | None = None,
     ):
         super().__init__(continue_with)
-        self.patch_source = ensure_model(patch_source)
-        self.activation_processor = activation_processor
+        self.patch_target = ensure_model(patch_target)
+        if activation_processor is None:
+            self.activation_processor = IdentityPreprocessFn(
+                "base" if self.patch_target == "chat" else "chat"
+            )
+        else:
+            self.activation_processor = activation_processor
 
     def _validate_mask(self, mask: th.Tensor, activations: th.Tensor) -> None:
         """Validates that a mask has correct shape and type if provided."""
@@ -315,31 +328,21 @@ class BasePatchIntervention(IdentityPreprocessFn):
         self._validate_mask(mask, base_activations)
 
         # Get source and target based on configuration
-        source, destination = (
-            (
-                base_activations,
-                chat_activations,
-            )
-            if self.patch_source == "base"
-            else (
-                chat_activations,
-                base_activations,
-            )
+        destination = (
+            base_activations if self.patch_target == "base" else chat_activations
         )
-        if self.activation_processor is not None:
-            modified_base, modified_chat, mask = self.activation_processor(
-                base_activations, chat_activations, **kwargs
-            )
-        else:
-            modified = destination.clone()
+
+        patch = self.activation_processor.result(
+            base_activations[mask], chat_activations[mask], **kwargs
+        )
         # Apply patch
         modified = destination.clone()
-        modified[mask] = source[mask]
+        modified[mask] = patch
 
         return self.continue_with_model(modified)
 
 
-class ControlTokenPatchIntervention(BasePatchIntervention):
+class PatchCtrl(BasePatchIntervention):
     """Patches control tokens from one model to another.
 
     This intervention copies control token activations (specified by ctrl_mask)
@@ -347,8 +350,8 @@ class ControlTokenPatchIntervention(BasePatchIntervention):
 
     Args:
         continue_with: Which model should complete generation ("base" or "chat")
-        patch_source: Which model to copy activations from ("base" or "chat")
-
+        patch_target: Which model activations to patch ("base" or "chat")
+        activation_processor: Optional preprocess function to apply to the source activations before patching. If not provided, the other model (not patch_target) will be used as the source.
     Kwargs for preprocess:
         ctrl_mask: Boolean tensor of shape [batch_size, seq_len] indicating control tokens
     """
@@ -365,8 +368,8 @@ class PatchKFirstPredictions(BasePatchIntervention):
 
     Args:
         continue_with: Which model should complete generation ("base" or "chat")
-        patch_source: Which model to copy activations from ("base" or "chat")
-
+        patch_target: Which model activations to patch ("base" or "chat")
+        activation_processor: Optional preprocess function to apply to the source activations before patching. If not provided, the other model (not patch_target) will be used as the source.
     Kwargs for preprocess:
         k_first_ass_toks_mask: Boolean tensor of shape [batch_size, seq_len]
                               indicating first k assistant tokens
@@ -380,7 +383,7 @@ class PatchKFirstPredictions(BasePatchIntervention):
         return mask
 
 
-class CombinedPatchIntervention(BasePatchIntervention):
+class PatchKFirstAndCtrl(BasePatchIntervention):
     """Patches tokens specified by combining control and first k assistant token masks.
 
     This intervention combines ctrl_mask and k_first_ass_toks_mask using OR operation
@@ -388,8 +391,8 @@ class CombinedPatchIntervention(BasePatchIntervention):
 
     Args:
         continue_with: Which model should complete generation ("base" or "chat")
-        patch_source: Which model to copy activations from ("base" or "chat")
-
+        patch_target: Which model activations to patch ("base" or "chat")
+        activation_processor: Optional preprocess function to apply to the source activations before patching. If not provided, the other model (not patch_target) will be used as the source.
     Kwargs for preprocess:
         ctrl_mask: Boolean tensor of shape [batch_size, seq_len] indicating control tokens
         k_first_ass_toks_mask: Boolean tensor of shape [batch_size, seq_len]

@@ -164,10 +164,13 @@ def evaluate_interventions(
         attn_mask = batch_tokens["attention_mask"].to(device)
         assistant_mask = th.tensor(batch_tokens["assistant_masks"]).bool().to(device)
         ctrl_mask = batch_tokens["ctrl_mask"].to(device)
-        k_first_ass_toks_mask = mask_k_first_ones_vec(assistant_mask, k_first).to(
+        _k_first_ass_toks_mask = mask_k_first_ones_vec(assistant_mask, k_first).to(
             device
         )
-        next_ass_toks_mask = assistant_mask & ~k_first_ass_toks_mask
+        # shift left by 1 to have the token at which you make the prediction rather than the token you need to predict
+        k_first_pred_toks_mask = th.zeros_like(_k_first_ass_toks_mask)
+        k_first_pred_toks_mask[:, :-1] = _k_first_ass_toks_mask[:, 1:]
+        next_ass_toks_mask = assistant_mask & ~k_first_pred_toks_mask
 
         base_activations, base_causal_mask_raw, base_position_ids = (
             base_model.first_half_forward(
@@ -205,8 +208,8 @@ def evaluate_interventions(
                 instruct_activations,
                 ctrl_mask=ctrl_mask,
                 assistant_mask=assistant_mask,
-                k_first_ass_toks_mask=k_first_ass_toks_mask,
                 next_ass_toks_mask=next_ass_toks_mask,
+                k_first_pred_toks_mask=k_first_pred_toks_mask,
             )
 
             if mask is not None:
@@ -215,7 +218,7 @@ def evaluate_interventions(
                 base_causal_mask = base_causal_mask_raw[mask]
                 instruct_causal_mask = instruct_causal_mask_raw[mask]
                 effective_assistant_mask = assistant_mask[mask]
-                effective_k_first = k_first_ass_toks_mask[mask]
+                effective_k_first = k_first_pred_toks_mask[mask]
                 effective_post_k_first = next_ass_toks_mask[mask]
                 labels = input_ids[mask]
             else:
@@ -224,7 +227,7 @@ def evaluate_interventions(
                 base_causal_mask = base_causal_mask_raw
                 instruct_causal_mask = instruct_causal_mask_raw
                 effective_assistant_mask = assistant_mask
-                effective_k_first = k_first_ass_toks_mask
+                effective_k_first = k_first_pred_toks_mask
                 effective_post_k_first = next_ass_toks_mask
                 labels = input_ids
 
