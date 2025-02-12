@@ -6,19 +6,18 @@ from pathlib import Path
 from tqdm.auto import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import wandb
-from datasets import load_from_disk
+from datasets import load_dataset
 from torch.nn.functional import kl_div
-import pandas as pd
 import torch as th
-from dictionary_learning import CrossCoder
 
 sys.path.append(str(Path(__file__).parent.parent))
 from tools.compute_utils import RunningMeanStd
 from tools.setup_to_eval import HalfStepPreprocessFn
 from tools.split_gemma import split_gemma
-from tools.tokenization_utils import tokenize_with_ctrl_mask
+from tools.tokenization_utils import tokenize_with_ctrl_mask, gemma_chat_template
 from tools.utils import mask_k_first_ones_vec
-from tools.setup_to_eval import *
+from tools.setup_to_eval import create_acl_half_fns
+from tools.cc_utils import load_crosscoder
 
 
 def compute_metrics_for_subset(
@@ -162,7 +161,9 @@ def evaluate_interventions(
         )
         input_ids = batch_tokens["input_ids"].to(device)
         attn_mask = batch_tokens["attention_mask"].to(device)
-        assistant_mask = th.tensor(batch_tokens["assistant_masks"]).bool().to(device)
+        assistant_mask = batch_tokens["assistant_masks"].to(device)
+        if not assistant_mask.any():
+            continue
         ctrl_mask = batch_tokens["ctrl_mask"].to(device)
         _k_first_ass_toks_mask = mask_k_first_ones_vec(assistant_mask, k_first).to(
             device
@@ -172,20 +173,35 @@ def evaluate_interventions(
         k_first_pred_toks_mask[:, :-1] = _k_first_ass_toks_mask[:, 1:]
         next_ass_toks_mask = assistant_mask & ~k_first_pred_toks_mask
 
-        base_activations, base_causal_mask_raw, base_position_ids = (
-            base_model.first_half_forward(
-                input_ids=input_ids,
-                attention_mask=attn_mask,
-                layer_idx=layer_to_stop,
-            )
+        (
+            base_activations,
+            base_causal_mask_raw,
+            base_position_ids,
+            base_cache_position,
+        ) = base_model.first_half_forward(
+            input_ids=input_ids,
+            attention_mask=attn_mask,
+            layer_idx=layer_to_stop,
         )
-        instruct_activations, instruct_causal_mask_raw, instruct_position_ids = (
-            chat_model.first_half_forward(
-                input_ids=input_ids,
-                attention_mask=attn_mask,
-                layer_idx=layer_to_stop,
+        if base_cache_position is None:
+            base_cache_position = th.arange(
+                base_activations.shape[1], device=base_activations.device
             )
+
+        (
+            instruct_activations,
+            instruct_causal_mask_raw,
+            instruct_position_ids,
+            instruct_cache_position,
+        ) = chat_model.first_half_forward(
+            input_ids=input_ids,
+            attention_mask=attn_mask,
+            layer_idx=layer_to_stop,
         )
+        if instruct_cache_position is None:
+            instruct_cache_position = th.arange(
+                instruct_activations.shape[1], device=instruct_activations.device
+            )
 
         base_logits_raw = base_model.second_half_forward(
             base_activations,
@@ -193,6 +209,7 @@ def evaluate_interventions(
             base_position_ids,
             layer_idx=layer_to_stop,
             return_dict=True,
+            cache_position=base_cache_position,
         ).logits
         instruct_logits_raw = chat_model.second_half_forward(
             instruct_activations,
@@ -200,6 +217,7 @@ def evaluate_interventions(
             instruct_position_ids,
             layer_idx=layer_to_stop,
             return_dict=True,
+            cache_position=instruct_cache_position,
         ).logits
 
         for fn_name, preprocess_fn in preprocess_before_last_half_fns.items():
@@ -239,6 +257,7 @@ def evaluate_interventions(
                     base_position_ids,
                     layer_idx=layer_to_stop,
                     return_dict=True,
+                    cache_position=base_cache_position,
                 )
             elif instruct_activations_edited is not None:
                 final_out = chat_model.second_half_forward(
@@ -247,6 +266,7 @@ def evaluate_interventions(
                     instruct_position_ids,
                     layer_idx=layer_to_stop,
                     return_dict=True,
+                    cache_position=instruct_cache_position,
                 )
 
             if final_out is not None:
@@ -256,7 +276,7 @@ def evaluate_interventions(
                     (metrics_kfirst, "k_first_", effective_k_first),
                     (metrics_post_k_first, "post_k_first_", effective_post_k_first),
                 ]:
-                    if prefix == "" or mask.any():
+                    if mask.any():
                         metrics = compute_metrics_for_subset(
                             final_out.logits,
                             labels,
@@ -278,8 +298,8 @@ def evaluate_interventions(
                     wandb.log(
                         {
                             f"{prefix}perplexity_running/{fn_name}": th.exp(
-                                metrics_dict["nlls"][fn_name].compute()[0].item()
-                            ),
+                                metrics_dict["nlls"][fn_name].compute()[0]
+                            ).item(),
                             f"{prefix}loss_running/{fn_name}": metrics_dict["nlls"][
                                 fn_name
                             ]
@@ -303,10 +323,8 @@ def evaluate_interventions(
                             .compute()[0]
                             .item(),
                             f"{prefix}perplexity_wrt_instruct_pred_running/{fn_name}": th.exp(
-                                metrics_dict["nlls_wrt_instruct"][fn_name]
-                                .compute()[0]
-                                .item()
-                            ),
+                                metrics_dict["nlls_wrt_instruct"][fn_name].compute()[0]
+                            ).item(),
                             f"{prefix}num_samples/{fn_name}": metrics_dict[
                                 "num_samples"
                             ][fn_name],
@@ -335,100 +353,59 @@ if __name__ == "__main__":
     parser.add_argument("--max-seq-len", type=int, default=1024)
     parser.add_argument("--test", action="store_true")
     parser.add_argument(
-        "--dataset-path", type=str, default="./datasets/test/lmsys_chat"
+        "--dataset",
+        type=str,
+        default="science-of-finetuning/ultrachat_200k_gemma-2-2b-it-generated",
     )
-    parser.add_argument("--crosscoder-path", type=str, required=True)
-    parser.add_argument(
-        "--feature-df-path",
-        type=Path,
-        required=True,
-    )
-    parser.add_argument("--it-only-feature-list-path", type=Path, default=None)
+    parser.add_argument("--dataset-col", type=str, default="messages")
+    parser.add_argument("--split", type=str, default="train")
+    parser.add_argument("--base-device", type=str, default="cuda")
+    parser.add_argument("--chat-device", type=str, default="cuda")
+    parser.add_argument("--crosscoder", type=str, default="l13_crosscoder")
+    parser.add_argument("--num-seeds", type=int, default=5)
     parser.add_argument("--name", type=str, default=None)
     parser.add_argument("--log-every", type=int, default=10)
-    parser.add_argument("--save-path", type=Path, default=Path("results-runai"))
+    parser.add_argument("--save-path", type=Path, default=Path("results"))
     args = parser.parse_args()
     chat_model = AutoModelForCausalLM.from_pretrained(
         "google/gemma-2-2b-it",
         torch_dtype=th.bfloat16,
-        device_map="cuda",
+        device_map=args.chat_device,
         attn_implementation="eager",
     )
 
     tokenizer = AutoTokenizer.from_pretrained("google/gemma-2-2b-it")
+    tokenizer.chat_template = gemma_chat_template
     chat_model.tokenizer = tokenizer
     base_model = AutoModelForCausalLM.from_pretrained(
         "google/gemma-2-2b",
-        device_map="cuda",
+        device_map=args.base_device,
         torch_dtype=th.bfloat16,
         attn_implementation="eager",
     )
-    dataset = load_from_disk(args.dataset_path)
+    dataset = load_dataset(args.dataset, split=args.split)
     if args.test:
-        dataset = dataset.select(range(300))
+        dataset = dataset.select(range(20))
     else:
-        dataset = dataset.select(range(30_000))
+        dataset = dataset.select(range(min(30_000, len(dataset))))
     device = (
         args.device
         if args.device != "auto"
         else "cuda" if th.cuda.is_available() else "cpu"
     )
-    crosscoder = CrossCoder.from_pretrained(args.crosscoder_path, device=device)
-    df = pd.read_csv(args.feature_df_path)
-    it_only_features = df[df["tag"] == "IT only"].index.tolist()
-    base_only_features = df[df["tag"] == "Base only"].index.tolist()
-    if args.it_only_feature_list_path is not None:
-        it_only_features = pd.read_json(args.it_only_feature_list_path).index.tolist()
-        print(f"Using IT only features: {it_only_features}")
+    crosscoder = load_crosscoder(args.crosscoder)
     if args.name is None and args.test:
         args.name = "test"
     project = "perplexity-comparison"
     if args.test:
         project += "-test"
     wandb.init(project=project, name=args.name)
-    seeds = list(range(10))
-    fn_dict = {}
-    # fn_dict = create_half_fn_dict_main(crosscoder, it_only_features, base_only_features)
-    # fn_dict.update(create_half_fn_dict_no_cross())
-    # fn_dict.update(create_half_fn_dict_steer_seeds(crosscoder, seeds, len(it_only_features)))
-    # fn_dict.update(create_half_fn_dict_remove_seeds(crosscoder, seeds, len(it_only_features)))
-    # fn_dict.update(
-    #     create_half_fn_dict_secondary(crosscoder, it_only_features, base_only_features)
-    # )
-    ## fn_dict.update(
-    ##     create_it_only_ft_fn_dict(crosscoder, it_only_features, base_only_features)
-    ## )
-    # fn_dict.update(create_tresholded_baseline_half_fns(crosscoder, threshold=10))
-    # fn_dict.update(
-    #     create_tresholded_baseline_random_half_fns(
-    #         crosscoder, seeds, len(INTERESTING_FEATURES), threshold=10
-    #     )
-    # )
-    # fn_dict.update(
-    #     create_tresholded_baseline_random_half_fns(crosscoder, seeds, 1, threshold=10)
-    # )
-    fn_dict.update(
-        create_half_fn_thresholded_features(crosscoder, steering_factor=100.0)
-    )
-    fn_dict.update(create_tresholded_it_baseline_half_fns(crosscoder, threshold=10))
-    # fn_dict.update(
-    #     create_half_fn_dict_steer_seeds(
-    #         crosscoder, seeds, len(INTERESTING_FEATURES), threshold=10
-    #     )
-    # )
-    # fn_dict.update(
-    #     create_half_fn_dict_remove_seeds(
-    #         crosscoder, seeds, len(INTERESTING_FEATURES), threshold=10
-    #     )
-    # )
-    # fn_dict.update(create_half_fn_dict_steer_seeds(crosscoder, seeds, 1, threshold=10))
-    # fn_dict.update(create_half_fn_dict_remove_seeds(crosscoder, seeds, 1, threshold=10))
-    # fn_dict["test-mask"] = TestMaskPreprocessFn()
+    seeds = list(range(args.num_seeds))
+    fn_dict = create_acl_half_fns(crosscoder, seeds, args.crosscoder)
     result = evaluate_interventions(
         base_model,
         chat_model,
-        dataset["conversation"],
-        # create_half_fn_dict_main(crosscoder, it_only_features, base_only_features),
+        dataset[args.dataset_col],
         fn_dict,
         layer_to_stop=args.layer_to_stop,
         batch_size=args.batch_size,
