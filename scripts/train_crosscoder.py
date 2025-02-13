@@ -14,9 +14,31 @@ import os
 import wandb
 wandb.require("legacy-service")
 
+th.set_float32_matmul_precision("high")
+
 from tools.utils import load_activation_dataset
 
-th.set_float32_matmul_precision("high")
+def get_local_shuffled_indices(num_samples_per_dataset, shard_size):
+    num_shards_per_dataset = num_samples_per_dataset // shard_size + (1 if num_samples_per_dataset % shard_size != 0 else 0)
+    print(f"Number of shards per dataset: {num_shards_per_dataset}", flush=True)
+    
+    shuffled_indices = []
+    for i in trange(num_shards_per_dataset):
+        start_idx = i * shard_size
+        end_idx = min((i + 1) * shard_size, num_samples_per_dataset)
+        shard_size_curr = end_idx - start_idx
+        
+        fineweb_indices = th.randperm(shard_size_curr) + start_idx
+        lmsys_indices = th.randperm(shard_size_curr) + num_samples_per_dataset + start_idx
+        
+        shard_indices = th.zeros(2 * shard_size_curr, dtype=th.long)
+        shard_indices[0::2] = fineweb_indices
+        shard_indices[1::2] = lmsys_indices
+        shuffled_indices.append(shard_indices)
+        
+    shuffled_indices = th.cat(shuffled_indices)
+    return shuffled_indices
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -38,6 +60,7 @@ if __name__ == "__main__":
     parser.add_argument("--init-with-transpose", action="store_true")
     parser.add_argument("--run-name", type=str, default=None)
     parser.add_argument("--resample-steps", type=int, default=None)
+    parser.add_argument("--epochs", type=int, default=1)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--pretrained", type=str, default=None)
     parser.add_argument("--encoder-layers", type=int, default=None, nargs="+")
@@ -80,30 +103,41 @@ if __name__ == "__main__":
         lmsys_name="lmsys-chat-1m-chat-formatted",
     )
     num_samples_per_dataset = args.num_samples // 2
-    train_dataset = th.utils.data.ConcatDataset(
-        [
-            th.utils.data.Subset(fineweb_cache, th.arange(0, num_samples_per_dataset)),
-            th.utils.data.Subset(lmsys_cache, th.arange(0, num_samples_per_dataset)),
-        ]
-    )
+    
+    train_dataset = th.utils.data.ConcatDataset([
+        th.utils.data.Subset(fineweb_cache, th.arange(0, num_samples_per_dataset)),
+        th.utils.data.Subset(lmsys_cache, th.arange(0, num_samples_per_dataset)),
+    ])
 
     if args.local_shuffling:
         print("Using local shuffling to optimize for cache locality while allowing randomization", flush=True)
-        # Shuffle dataset within 1M sample shards to maintain locality while allowing randomization
-        shard_size = lmsys_cache.activation_cache_1.config["shard_size"]
-        num_shards = len(train_dataset) // shard_size + (1 if len(train_dataset) % shard_size != 0 else 0)
-        print(f"Number of shards: {num_shards}", flush=True)
+        # Create interleaved dataset of fineweb and lmsys samples
+
+        # Shuffle within 1M sample shards while maintaining interleaving
+        shard_size = lmsys_cache.activation_cache_1.config["shard_size"] 
+        num_shards_per_dataset = num_samples_per_dataset // shard_size + (1 if num_samples_per_dataset % shard_size != 0 else 0)
+        print(f"Number of shards per dataset: {num_shards_per_dataset}", flush=True)
+
         shuffled_indices = []
-        for i in trange(num_shards):
-            start_idx = i * shard_size
-            end_idx = min((i + 1) * shard_size, len(train_dataset))
-            indices = th.randperm(end_idx - start_idx) + start_idx
-            shuffled_indices.append(indices)
-        shuffled_indices = th.cat(shuffled_indices)
+        if args.epochs > 1:
+            print(f"Using {args.epochs} epochs of local shuffling.", flush=True)
+            for i in range(args.epochs):
+                shuffled_indices.append(get_local_shuffled_indices(num_samples_per_dataset, shard_size))
+            shuffled_indices = th.cat(shuffled_indices)
+        else:
+            shuffled_indices = get_local_shuffled_indices(num_samples_per_dataset, shard_size)
         print(f"Shuffled indices: {shuffled_indices.shape}", flush=True)
         train_dataset = th.utils.data.Subset(train_dataset, shuffled_indices)
         print(f"Shuffled train dataset with {len(train_dataset)} samples.", flush=True)
         args.no_train_shuffle = True
+    else:
+        assert args.epochs == 1, "Only one epoch of shuffling is supported if local shuffling is disabled."
+        train_dataset = th.utils.data.ConcatDataset(
+            [
+                th.utils.data.Subset(fineweb_cache, th.arange(0, num_samples_per_dataset)),
+                th.utils.data.Subset(lmsys_cache, th.arange(0, num_samples_per_dataset)),
+            ]
+        )
 
     activation_dim = train_dataset[0].shape[1]
     dictionary_size = args.expansion_factor * activation_dim
@@ -127,6 +161,8 @@ if __name__ == "__main__":
     name = f"{args.base_model.split('/')[-1]}-L{args.layer}-mu{args.mu:.1e}-lr{args.lr:.0e}" + \
         (f"-{args.run_name}" if args.run_name is not None else "") + \
         (f"-local-shuffling" if args.local_shuffling else "")
+    if args.pretrained is not None:
+        name += f"-pt"
     device = "cuda" if th.cuda.is_available() else "cpu"
     print(f"Training on device={device}.")
     trainer_cfg = {
