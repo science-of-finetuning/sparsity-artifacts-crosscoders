@@ -12,6 +12,8 @@ def ensure_model(arg: str):
 
 
 class HalfStepPreprocessFn(ABC):
+    """Base class for preprocessing functions that modify activations during model execution."""
+
     @abstractmethod
     def preprocess(
         self, base_activations, chat_activations, **kwargs
@@ -69,6 +71,8 @@ class HalfStepPreprocessFn(ABC):
 
 
 class IdentityPreprocessFn(HalfStepPreprocessFn):
+    """Simple preprocessing function that returns activations unchanged."""
+
     def __init__(self, continue_with: Literal["base", "chat"]):
         self.continue_with = ensure_model(continue_with)
 
@@ -84,6 +88,8 @@ class IdentityPreprocessFn(HalfStepPreprocessFn):
 
 
 class SwitchPreprocessFn(HalfStepPreprocessFn):
+    """Preprocessing function that swaps activations between base and chat models."""
+
     def __init__(self, continue_with: Literal["base", "chat"]):
         self.continue_with = ensure_model(continue_with)
 
@@ -96,6 +102,8 @@ class SwitchPreprocessFn(HalfStepPreprocessFn):
 
 
 class TestMaskPreprocessFn(IdentityPreprocessFn):
+    """Test preprocessing function that randomly masks some batch elements."""
+
     def preprocess(self, base_activations, chat_activations, **kwargs):
         mask = th.randint(
             0, 2, (base_activations.shape[0],), device=base_activations.device
@@ -111,6 +119,8 @@ class TestMaskPreprocessFn(IdentityPreprocessFn):
 
 
 class CrossCoderReconstruction(IdentityPreprocessFn):
+    """Preprocessing function that reconstructs activations using a CrossCoder model."""
+
     def __init__(
         self,
         crosscoder: CrossCoder,
@@ -142,6 +152,25 @@ class CrossCoderReconstruction(IdentityPreprocessFn):
 
 
 class CrossCoderSteeringLatent(IdentityPreprocessFn):
+    """Preprocessing function that steers activations using CrossCoder latent space.
+
+    This class implements activation steering by:
+    1. Encoding activations into the CrossCoder latent space
+    2. Computing steering based on differences in decoded latents
+    3. Applying the steering to the original activations
+
+    Args:
+        crosscoder: The CrossCoder model to use for encoding/decoding
+        steer_activations_of: Which model's activations to steer ("base" or "chat")
+        steer_with_latents_from: Which model's latents to use for steering ("base" or "chat")
+        latents_to_steer: List of latent dimensions to use for steering, or None for all
+        continue_with: Which model should continue generation after steering
+        monitored_latents: List of latent dimensions to monitor, defaults to latents_to_steer
+        filter_treshold: Optional threshold for filtering based on latent magnitudes
+        scale_steering_latent: Scale factor for steering magnitude
+        ignore_encoder: If True, uses only decoder weights for steering without encoding
+    """
+
     def __init__(
         self,
         crosscoder: CrossCoder,
@@ -195,7 +224,20 @@ class CrossCoderSteeringLatent(IdentityPreprocessFn):
         ).float()  # b, seq, 2, d
         if base_activations.dim() == 3:
             cc_input = einops.rearrange(cc_input, "b s m d -> (b s) m d")
-
+            assert cc_input.shape == (
+                base_activations.shape[0] * base_activations.shape[1],
+                2,
+                base_activations.shape[2],
+            ), f"cc_input.shape: {cc_input.shape}, base_activations.shape: {base_activations.shape}"
+        else:
+            assert cc_input.shape == (
+                base_activations.shape[0],
+                2,
+                base_activations.shape[1],
+            ), f"cc_input.shape: {cc_input.shape}, base_activations.shape: {base_activations.shape}"
+            assert (
+                base_activations.dim() == 2
+            ), f"base_activations.dim(): {base_activations.dim()}"
         f = self.crosscoder.encode(
             cc_input, select_features=self.monitored_latents
         )  # (b s) f
@@ -232,6 +274,19 @@ class CrossCoderSteeringLatent(IdentityPreprocessFn):
 
 
 class CrossCoderOutProjection(IdentityPreprocessFn):
+    """Preprocessing function that projects out certain directions from activations using CrossCoder.
+
+    This class removes components of the activations that align with specified CrossCoder latent dimensions.
+
+    Args:
+        crosscoder: The CrossCoder model to use
+        steer_activations_of: Which model's activations to modify ("base" or "chat")
+        steer_with_latents_from: Which model's latents to use ("base" or "chat")
+        latents_to_steer: List of latent dimensions to project out, or None for all
+        continue_with: Which model should continue generation after modification
+        scale_steering_latent: Scale factor for the projection strength
+    """
+
     def __init__(
         self,
         crosscoder: CrossCoder,
