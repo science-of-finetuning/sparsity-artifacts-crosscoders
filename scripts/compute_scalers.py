@@ -118,8 +118,8 @@ def main():
     parser.add_argument("--dataset-split", type=str, default="train")
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("-N", "--num-samples", type=int, default=20_000_000)
-    parser.add_argument("--base-model", type=str, default="gemma-2-2b")
-    parser.add_argument("--instruct-model", type=str, default="gemma-2-2b-it")
+    parser.add_argument("--base-model", type=str, default="google/gemma-2-2b")
+    parser.add_argument("--chat-model", type=str, default="google/gemma-2-2b-it")
     parser.add_argument(
         "--chat-only-indices-path",
         type=Path,
@@ -209,10 +209,12 @@ def main():
     # Load validation dataset
     activation_store_dir = Path(args.activation_store_dir)
 
+    base_model_stub = args.base_model.split("/")[-1]
+    chat_model_stub = args.chat_model.split("/")[-1]
     fineweb_cache, lmsys_cache = load_activation_dataset(
         activation_store_dir,
-        base_model=args.base_model,
-        instruct_model=args.instruct_model,
+        base_model=base_model_stub,
+        instruct_model=chat_model_stub,
         layer=args.layer,
         split=args.dataset_split,
         lmsys_subfolder=args.lmsys_subfolder,
