@@ -1,11 +1,23 @@
 from pathlib import Path
-
+from typing import List
 from dictionary_learning.cache import PairedActivationCache
 
 from tools.compute_utils import *  # pylint: disable=unused-wildcard-import,wildcard-import
 from tools.cc_utils import *  # pylint: disable=unused-wildcard-import,wildcard-import
 from tools.plotting_utils import *  # pylint: disable=unused-wildcard-import,wildcard-import
 from tools.tokenization_utils import *  # pylint: disable=unused-wildcard-import,wildcard-import
+
+def apply_masks(values: th.Tensor, masks: List[th.Tensor]) -> th.Tensor:
+    """
+    Apply the masks to the indices.
+    """
+    if isinstance(masks, th.Tensor):
+        masks = [masks]
+    for mask in masks:
+        values = values[mask]
+    return values
+
+
 
 
 def load_activation_dataset(
@@ -16,6 +28,8 @@ def load_activation_dataset(
     fineweb_subfolder: str = None,
     layer: int = 13,
     split="validation",
+    lmsys_split: str = None,
+    fineweb_split: str = None,
 ):
     """
     Load the saved activations of the base and instruct models for a given layer
@@ -28,7 +42,17 @@ def load_activation_dataset(
         fineweb_subfolder: The subfolder to find the fineweb dataset in (activation_store_dir/fineweb_subfolder/model/split)
         layer: The layer to load
         split: The split to load
+        lmsys_split: The split to load for the lmsys dataset (overwrites split)
+        fineweb_split: The split to load for the fineweb dataset (overwrites split)
     """
+    if lmsys_split is None:
+        lmsys_split = split
+    else:
+        print(f"Using lmsys split {lmsys_split} for lmsys dataset")
+    if fineweb_split is None:
+        fineweb_split = split
+    else:
+        print(f"Using fineweb split {fineweb_split} for fineweb dataset")
     # Load validation dataset
     activation_store_dir = Path(activation_store_dir)
     if lmsys_subfolder is None:
@@ -48,11 +72,11 @@ def load_activation_dataset(
     submodule_name = f"layer_{layer}_out"
 
     # Load validation caches
-    base_model_fineweb = base_model_dir_fineweb / "fineweb-1m-sample" / split
-    instruct_model_fineweb = instruct_model_dir_fineweb / "fineweb-1m-sample" / split
+    base_model_fineweb = base_model_dir_fineweb / "fineweb-1m-sample" / fineweb_split
+    instruct_model_fineweb = instruct_model_dir_fineweb / "fineweb-1m-sample" / fineweb_split
     
-    base_model_lmsys = base_model_dir_lmsys / "lmsys-chat-1m-gemma-formatted" / split
-    instruct_model_lmsys = instruct_model_dir_lmsys / "lmsys-chat-1m-gemma-formatted" / split
+    base_model_lmsys = base_model_dir_lmsys / "lmsys-chat-1m-gemma-formatted" / lmsys_split
+    instruct_model_lmsys = instruct_model_dir_lmsys / "lmsys-chat-1m-gemma-formatted" / lmsys_split
     
     print(f"Loading fineweb cache from {base_model_fineweb / submodule_name} and {instruct_model_fineweb / submodule_name}")
     fineweb_cache = PairedActivationCache(

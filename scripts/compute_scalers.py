@@ -215,7 +215,8 @@ def main():
         instruct_model=args.instruct_model,
         layer=args.layer,
         split=args.dataset_split,
-        lmsys_subfolder=args.lmsys_subfolder
+        lmsys_subfolder=args.lmsys_subfolder,
+        lmsys_split=lmsys_split,
     )
 
     num_samples_per_dataset = args.num_samples // 2
