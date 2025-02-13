@@ -64,6 +64,13 @@ def load_state():
             except (TypeError, ValueError):
                 state["expanded_metrics"] = set()
 
+        # Convert hidden_setups to set if it exists
+        if "hidden_setups" in state:
+            try:
+                state["hidden_setups"] = set(state["hidden_setups"])
+            except (TypeError, ValueError):
+                state["hidden_setups"] = set()
+
         return state
     except (json.JSONDecodeError, OSError):
         # If there's any error reading or parsing the file, return default state
@@ -87,6 +94,7 @@ def save_state(state):
             "expanded_metrics": list(state.get("expanded_metrics", set())),
             "current_file": state.get("current_file"),
             "selected_categories": list(state.get("selected_categories", [])),
+            "hidden_setups": list(state.get("hidden_setups", set())),
         }
 
         with open(STATE_FILE, "w") as f:
@@ -160,8 +168,41 @@ def format_setup_name(setup: str) -> str:
     return setup
 
 
+def get_available_options(data):
+    """Extract available percentages and seeds from the loaded data"""
+    available_options = {
+        'percentages': set(),
+        'seeds': set()
+    }
+    
+    # Look through all setups in the data
+    for category in data.values():
+        for metric in category.values():
+            for setup_key in metric.keys():
+                # Extract percentage from patch_all keys
+                pct_match = re.search(r'-(\d+)pct-', setup_key)
+                if pct_match:
+                    available_options['percentages'].add(pct_match.group(1))
+                
+                # Extract seed from random keys
+                if 'random' in setup_key:
+                    seed_match = re.search(r'random(\d+)', setup_key)
+                    if seed_match:
+                        available_options['seeds'].add(seed_match.group(1))
+    
+    print(f"found: {available_options}")
+    return {
+        'percentages': sorted(list(available_options['percentages']), key=int),
+        'seeds': sorted(list(available_options['seeds']), key=int)
+    }
+
+
 def setup_selector():
     """Create the hierarchical setup selector"""
+    # Get the current data from session state
+    data = st.session_state.get('current_data', {})
+    options = get_available_options(data) if data else {}
+    
     setup_type = st.selectbox("Setup Type", ["Vanilla", "Patching", "CrossCoder"])
 
     if setup_type == "Vanilla":
@@ -181,7 +222,10 @@ def setup_selector():
         return f"patch_{patch_target}-{patch_type}_c{continue_with}"
 
     elif setup_type == "CrossCoder":
-        percentage = st.selectbox("Percentage", ["5", "10", "100"])
+        # Use dynamic percentages if available, fallback to default if none found
+        percentages = options.get('percentages', ["5", "10", "50", "100"])
+        percentage = st.selectbox("Percentage", percentages)
+        
         latent_type = st.selectbox("Latent Type", ["pareto", "random", "antipareto"])
         patch_option = st.selectbox(
             "What to patch",
@@ -197,9 +241,11 @@ def setup_selector():
             else st.selectbox("Target model", ["base", "chat"])
         )
 
-        # Add seed selector if random is selected
+        # Add seed selector if random is selected, using dynamic seeds
         if latent_type == "random":
-            seed = st.selectbox("Random Seed", ["all", "0", "1", "2", "3", "4"])
+            available_seeds = options.get('seeds', ["0", "1", "2", "3", "4"])
+            seed_options = ["all"] + available_seeds
+            seed = st.selectbox("Random Seed", seed_options)
             if seed != "all":
                 latent_type = f"random{seed}"
 
@@ -278,6 +324,9 @@ def create_metric_plot(df, metric_name, categories):
 
 def display_metrics(data, current_file=None):
     """Main display logic for the metrics data."""
+    # Store the current data in session state for use in setup_selector
+    st.session_state['current_data'] = data
+    
     # Display current file if provided
     if current_file:
         st.markdown(f"**Current file:** `{current_file}`")
@@ -361,7 +410,7 @@ def display_metrics(data, current_file=None):
                 if "hidden_setups" not in st.session_state.state:
                     st.session_state.state["hidden_setups"] = set()
                 is_hidden = setup in st.session_state.state["hidden_setups"]
-                
+
                 # Place buttons side by side with minimal spacing
                 c1, c2 = st.columns([1, 1])
                 with c1:
@@ -398,11 +447,13 @@ def display_metrics(data, current_file=None):
     # Replace the category selection code with:
     st.markdown("Select categories to display:")
     categories = list(data.keys())
-    
+
     # Initialize selected categories in state
     if "selected_categories" not in st.session_state.state:
-        st.session_state.state["selected_categories"] = categories  # Default all selected
-    
+        st.session_state.state["selected_categories"] = (
+            categories  # Default all selected
+        )
+
     # Create checkboxes and update state
     cols = st.columns(3)
     selected_categories = []
@@ -413,7 +464,7 @@ def display_metrics(data, current_file=None):
             checkbox = st.checkbox(category, value=is_checked, key=f"cat_{category}")
             if checkbox:
                 selected_categories.append(category)
-    
+
     # Update state with new selections
     st.session_state.state["selected_categories"] = selected_categories
     save_state(st.session_state.state)
@@ -454,16 +505,22 @@ def display_metrics(data, current_file=None):
                     continue
 
                 category_data = data[category][metric_type]
-                visible_setups = [s for s in st.session_state.state["selected_setups"] if s not in st.session_state.state.get("hidden_setups", set())]
+                visible_setups = [
+                    s
+                    for s in st.session_state.state["selected_setups"]
+                    if s not in st.session_state.state.get("hidden_setups", set())
+                ]
                 rows = []
                 for setup in visible_setups:
                     if setup in category_data:
                         stats = category_data[setup]
-                        rows.append({
-                            "mean": stats.get("mean", None),
-                            "variance": stats.get("var", None),
-                            "n": stats.get("count", None),
-                        })
+                        rows.append(
+                            {
+                                "mean": stats.get("mean", None),
+                                "variance": stats.get("var", None),
+                                "n": stats.get("count", None),
+                            }
+                        )
                 if rows:
                     all_data[category] = pd.DataFrame(rows, index=visible_setups)
 
@@ -481,8 +538,8 @@ def get_available_result_files():
     result_files = []
     for root, _, files in os.walk(RESULTS_DIR):
         for file in files:
-            if file.endswith('_result.json') or file.endswith('_result_fixed.json'):
-                rel_path = os.path.relpath(os.path.join(root, file), start='.')
+            if file.endswith("_result.json") or file.endswith("_result_fixed.json"):
+                rel_path = os.path.relpath(os.path.join(root, file), start=".")
                 result_files.append(rel_path)
     return sorted(result_files)
 
@@ -491,7 +548,7 @@ def filter_files(files, search_pattern):
     """Filter files based on search pattern with implicit wildcards."""
     if not search_pattern:
         return files
-    
+
     # Escape special regex characters in the search pattern
     escaped_pattern = re.escape(search_pattern)
     # Add .* before and after the pattern
@@ -520,13 +577,13 @@ def main():
     st.title("Evaluation Metrics Display")
 
     # Initialize session state
-    if 'state' not in st.session_state:
+    if "state" not in st.session_state:
         st.session_state.state = load_state()
         # Only use args.path if there's no saved current_file
         if st.session_state.state["current_file"] is None:
             st.session_state.state["current_file"] = args.path
             save_state(st.session_state.state)
-    if 'should_load_file' not in st.session_state:
+    if "should_load_file" not in st.session_state:
         st.session_state.should_load_file = None
 
     def load_and_display_file(file_path):
@@ -551,7 +608,7 @@ def main():
 
     # Get available result files
     result_files = get_available_result_files()
-    
+
     # If we have a current file, try to load and display it
     current_file = st.session_state.state.get("current_file")
     if current_file:
@@ -560,16 +617,18 @@ def main():
     # Add file selector with search at the bottom
     st.markdown("---")
     st.markdown("### Change Result File")
-    
+
     if result_files:
-        search_pattern = st.text_input("Search files (wildcards added automatically)", "", key="bottom_search")
+        search_pattern = st.text_input(
+            "Search files (wildcards added automatically)", "", key="bottom_search"
+        )
         filtered_files = filter_files(result_files, search_pattern)
         if filtered_files:
             selected_file = st.selectbox(
                 "Choose a result file",
                 filtered_files,
-                format_func=lambda x: x.replace('results/interv_effects/', ''),
-                key="bottom_select"
+                format_func=lambda x: x.replace("results/interv_effects/", ""),
+                key="bottom_select",
             )
             if selected_file and selected_file != current_file:
                 if st.button("Load Selected File"):
@@ -579,11 +638,13 @@ def main():
             st.info("No files match your search pattern")
     else:
         st.info("No result files found in results/interv_effects directory")
-    
+
     # Keep the upload option as fallback
     st.markdown("### Or upload a file")
     uploaded_file = st.file_uploader("Choose a JSON file", type=["json"])
-    if uploaded_file is not None and (not current_file or not current_file.endswith(uploaded_file.name)):
+    if uploaded_file is not None and (
+        not current_file or not current_file.endswith(uploaded_file.name)
+    ):
         st.session_state.should_load_file = uploaded_file
         st.rerun()
 
