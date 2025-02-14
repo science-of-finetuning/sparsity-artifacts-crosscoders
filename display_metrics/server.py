@@ -496,7 +496,7 @@ def display_metrics(data, current_file=None):
         for metric_type in metrics:
             # Check if this metric should be expanded
             is_expanded = metric_type in st.session_state.state["expanded_metrics"]
-            
+
             with st.expander(metric_type, expanded=is_expanded) as exp:
                 # Update expanded state
                 if exp:
