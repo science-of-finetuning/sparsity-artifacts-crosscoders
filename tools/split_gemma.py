@@ -17,7 +17,7 @@ def model_first_half_forward(
     input_ids: torch.LongTensor = None,
     attention_mask: Optional[torch.Tensor] = None,
     position_ids: Optional[torch.LongTensor] = None,
-    past_key_values = None,
+    past_key_values=None,
     inputs_embeds: Optional[torch.FloatTensor] = None,
     use_cache: Optional[bool] = None,
     output_attentions: Optional[bool] = None,
@@ -52,7 +52,11 @@ def model_first_half_forward(
         position_ids = cache_position.unsqueeze(0)
 
     causal_mask = self._update_causal_mask(
-        attention_mask, inputs_embeds, cache_position, past_key_values, output_attentions
+        attention_mask,
+        inputs_embeds,
+        cache_position,
+        past_key_values,
+        output_attentions,
     )
 
     # embed positions
