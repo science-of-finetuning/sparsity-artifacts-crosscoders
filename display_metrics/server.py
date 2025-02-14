@@ -18,6 +18,13 @@ PATCH_TYPE_NAMES = {
     "ctrlfirst5": "Template & first 5 tokens",
 }
 
+COLUMN_NAMES = {
+    "beta ratio reconstruction": "Reconstruction ratio",
+    "beta ratio error": "Error ratio",
+    "rank sum": "Both ratios",
+    "base uselessness score": "Joint scalars",
+}
+
 VANILLA_NAMES = {
     "base": "Base model only",
     "chat": "Chat model only",
@@ -67,9 +74,13 @@ def load_state():
         # Convert hidden_setups to set if it exists
         if "hidden_setups" in state:
             try:
-                state["hidden_setups"] = set(state["hidden_setups"])
+                state["hidden_setups"] = set(normalize_key(s) for s in state["hidden_setups"])
             except (TypeError, ValueError):
                 state["hidden_setups"] = set()
+
+        # Normalize selected setups
+        if "selected_setups" in state:
+            state["selected_setups"] = [normalize_key(s) for s in state["selected_setups"]]
 
         return state
     except (json.JSONDecodeError, OSError):
@@ -109,18 +120,23 @@ def save_state(state):
                 pass
 
 
+def normalize_key(key: str) -> str:
+    """Normalize a key by replacing underscores and dashes with spaces"""
+    return key.replace("_", " ").replace("-", " ")
+
+
 def parse_key(key: str) -> dict:
     """Parses an intervention key to extract intuitive components."""
     # Try matching patch keys with detailed pattern
-    pattern1 = r"^patch_(?P<latents_type>[^-]+)-(?P<perc>[0-9.]+)pct->(?P<patch_name>[^-]+)-(?P<patch_target>[^_]+)_c(?P<continue_with>.+)$"
+    pattern1 = r"^patch (?P<column>[^ ]+) (?P<latents_type>[^ ]+) (?P<perc>[0-9.]+)pct (?P<patch_name>[^ ]+) (?P<patch_target>[^ ]+) c(?P<continue_with>.+)$"
     m = re.match(pattern1, key)
     if m:
         d = m.groupdict()
         d["kind"] = "patch"
         return d
 
-    # Match patch_all keys
-    pattern2 = r"^patch_all-(?P<latents_type>[^-]+)-(?P<perc>[0-9.]+)pct-c(?P<continue_with>.+)$"
+    # Match patch_all keys - now with spaces
+    pattern2 = r"^patch all (?P<column>[^ ]+) (?P<latents_type>[^ ]+) (?P<perc>[0-9.]+)pct c(?P<continue_with>.+)$"
     m = re.match(pattern2, key)
     if m:
         d = m.groupdict()
@@ -130,8 +146,8 @@ def parse_key(key: str) -> dict:
         return d
 
     # For vanilla interventions
-    if key.startswith("vanilla_"):
-        variant = key[len("vanilla_") :]
+    if key.startswith("vanilla "):
+        variant = key[len("vanilla "):]
         # Attempt to derive continue_with from known variants
         continue_with = None
         if variant in ["base", "chat"]:
@@ -158,13 +174,15 @@ def format_setup_name(setup: str) -> str:
         latent_type = parsed["latents_type"]
         # Handle the case where we want to show mean across all random seeds
         if latent_type.startswith("random") and latent_type != "random":
-            seed = latent_type[len("random") :]
+            seed = latent_type[len("random"):]
             latent_type = f"Random (seed {seed})"
         elif latent_type == "random":
             latent_type = "Random (mean across seeds)"
         else:
             latent_type = latent_type.capitalize()
-        return f"CrossCoder: Steer {latent_type} latents ({parsed['perc']}%), continue with {parsed['continue_with']}"
+        
+        column_desc = COLUMN_NAMES.get(parsed["column"], parsed["column"])
+        return f"CrossCoder: Steer {latent_type} latents ({parsed['perc']}%) using {column_desc}, continue with {parsed['continue_with']}"
     return setup
 
 
@@ -179,8 +197,8 @@ def get_available_options(data):
     for category in data.values():
         for metric in category.values():
             for setup_key in metric.keys():
-                # Extract percentage from patch_all keys
-                pct_match = re.search(r'-(\d+)pct-', setup_key)
+                # Extract percentage from patch_all keys - now with spaces
+                pct_match = re.search(r' (\d+)pct ', setup_key)
                 if pct_match:
                     available_options['percentages'].add(pct_match.group(1))
                 
@@ -209,22 +227,52 @@ def setup_selector():
         model = st.selectbox(
             "Model", list(VANILLA_NAMES.keys()), format_func=lambda x: VANILLA_NAMES[x]
         )
-        return f"vanilla_{model}"
+        return f"vanilla {model}"
 
     elif setup_type == "Patching":
-        patch_type = st.selectbox(
-            "What to patch",
-            list(PATCH_TYPE_NAMES.keys()),
-            format_func=lambda x: PATCH_TYPE_NAMES[x],
+        patch_source = st.selectbox(
+            "Patch Source",
+            ["Full Activations", "Error Only"]
         )
         patch_target = st.selectbox("Target model", ["base", "chat"])
         continue_with = st.selectbox("Continue generation with", ["base", "chat"])
-        return f"patch_{patch_target}-{patch_type}_c{continue_with}"
+        
+        if patch_source == "Error Only":
+            use_patch_type = st.checkbox("Apply additional token patching", value=False)
+            patch_type = None
+            if use_patch_type:
+                patch_type = st.selectbox(
+                    "What to patch",
+                    list(PATCH_TYPE_NAMES.keys()),
+                    format_func=lambda x: PATCH_TYPE_NAMES[x],
+                )
+        else:  # Full Activations
+            patch_type = st.selectbox(
+                "What to patch",
+                list(PATCH_TYPE_NAMES.keys()),
+                format_func=lambda x: PATCH_TYPE_NAMES[x],
+            )
+        
+        if patch_source == "Full Activations":
+            return f"patch {patch_target} {patch_type} c{continue_with}"
+        else:  # Error Only
+            if patch_type:
+                return f"patch error {patch_target} {patch_type} c{continue_with}"
+            else:
+                return f"patch {patch_target} error c{continue_with}"
 
     elif setup_type == "CrossCoder":
         # Use dynamic percentages if available, fallback to default if none found
         percentages = options.get('percentages', ["5", "10", "50", "100"])
         percentage = st.selectbox("Percentage", percentages)
+        
+        # Add column selector with normalized keys
+        normalized_columns = {normalize_key(k): k for k in COLUMN_NAMES.keys()}
+        column = st.selectbox(
+            "Column to use",
+            list(normalized_columns.keys()),
+            format_func=lambda x: COLUMN_NAMES[x]
+        )
         
         latent_type = st.selectbox("Latent Type", ["pareto", "random", "antipareto"])
         patch_option = st.selectbox(
@@ -250,17 +298,29 @@ def setup_selector():
                 latent_type = f"random{seed}"
 
         if patch_option == "all":
-            return f"patch_all-{latent_type}-{percentage}pct-c{continue_with}"
+            return f"patch all {column} {latent_type} {percentage}pct c{continue_with}"
         else:
-            return f"patch_{latent_type}-{percentage}pct->{patch_option}-{patch_target}_c{continue_with}"
+            return f"patch {column} {latent_type} {percentage}pct {patch_option} {patch_target} c{continue_with}"
 
 
 def load_metrics(json_file) -> dict:
-    """Loads JSON metrics from a file-like object or path."""
+    """Loads JSON metrics from a file-like object or path and normalizes all keys."""
     if isinstance(json_file, (str, Path)):
         with open(json_file, "r") as f:
-            return json.load(f)
-    return json.load(json_file)
+            data = json.load(f)
+    else:
+        data = json.load(json_file)
+    
+    # Normalize all setup keys in the nested structure
+    normalized_data = {}
+    for category, metrics in data.items():
+        normalized_data[category] = {}
+        for metric, setups in metrics.items():
+            normalized_data[category][metric] = {
+                normalize_key(k): v for k, v in setups.items()
+            }
+    
+    return normalized_data
 
 
 def create_metric_plot(df, metric_name, categories):
