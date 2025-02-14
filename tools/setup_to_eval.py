@@ -465,6 +465,9 @@ def create_acl_half_fns(
         "beta_ratio_error",
         "base uselessness score",
     ],
+    skip_target_patch=False,
+    skip_vanilla=False,
+    skip_patching=False,
 ) -> dict[str, HalfStepPreprocessFn]:
     """
     datasets:
@@ -484,16 +487,24 @@ def create_acl_half_fns(
         - Patch the 5 first predicted tokens
         - Patch the control tokens and the 5 first predicted tokens
     """
+    half_fns = {}
     # --- Vanilla configurations ---
-    half_fns = create_acl_vanilla_half_fns()
+    if not skip_vanilla:
+        half_fns.update(create_acl_vanilla_half_fns())
 
     # --- Patching interventions ---
     # Create configurations for different patching strategies
-    half_fns.update(create_acl_patching_half_fns())
+    if not skip_patching:
+        half_fns.update(create_acl_patching_half_fns())
 
     # --- Crosscoder interventions ---
     half_fns_crosscoder, infos = create_acl_crosscoder_half_fns(
-        crosscoder, seeds, crosscoder_name, percentages, columns
+        crosscoder,
+        seeds,
+        crosscoder_name,
+        percentages,
+        columns,
+        skip_target_patch,
     )
     half_fns.update(half_fns_crosscoder)
 
@@ -550,15 +561,24 @@ def create_acl_crosscoder_half_fns(
                         patch_target=patch_target,
                         activation_processor=preprocess_fn,
                     )
-
-    latents_types = ["pareto", *[f"random{i}" for i in range(len(seeds))], "antipareto"]
+    full_df = load_latent_df(crosscoder_name).query("lmsys_dead == False")
     df = (
-        load_latent_df(crosscoder_name)[
+        full_df[
             [
                 "beta_ratio_reconstruction",
                 "beta_ratio_error",
                 "tag",
                 "base uselessness score",
+                "dec_norm_diff",
+                "lmsys_freq",
+                "lmsys_ctrl_%",
+                "lmsys_ctrl_freq",
+                "lmsys_avg_act",
+                "beta_activation_ratio",
+                "beta_activation_chat",
+                "beta_activation_base",
+                "beta_error_chat",
+                "beta_error_base",
             ]
         ]
         .dropna()
@@ -566,37 +586,86 @@ def create_acl_crosscoder_half_fns(
         .query("-0.1 <= beta_ratio_reconstruction <= 2")
         .query("-0.1 <= beta_ratio_error <= 2")
     )
+    assert (
+        df.iloc[0]["dec_norm_diff"] < 0.2
+    ), "Dec norm diff is reverted for this one so pareto and antipareto would be inverted, check code"
+    # big is better for these columns
+    bigger_is_better_cols = [
+        "base uselessness score",
+        "lmsys_freq",
+        "lmsys_ctrl_%",
+        "lmsys_ctrl_freq",
+        "lmsys_avg_act",
+        "beta_activation_chat",
+        "beta_error_chat",
+    ]
     rank_sum = df["beta_ratio_reconstruction"].rank() + df["beta_ratio_error"].rank()
     df["rank_sum"] = rank_sum
     rnd_latents_dict = {}
+    infos = {"rnd latents": rnd_latents_dict}
     for perc in percentages:
         random_latents_list = []
+        random_latents_types = []
+        infos[f"{perc}%"] = {}
+        num_latents = int(len(df) * (perc / 100) + 0.5)
+        print(f"{perc}%: {num_latents}")
         for seed in seeds:
             np.random.seed(seed)
-            random_latents = np.random.permutation(df.index.values)[
-                : int(len(df) * (perc / 100) + 0.5)
-            ]
+            random_chat_latents = np.random.permutation(df.index.values)[:num_latents]
+            random_latents_list.append(random_chat_latents)
+            random_latents_types.append(f"random-chat{seed}")
+        for seed in seeds:
+            np.random.seed(seed)
+            perm = np.random.permutation(full_df.index.values)
+            random_latents = perm[:num_latents]
             random_latents_list.append(random_latents)
-            print(f"len random: {len(random_latents)}")
-        rnd_latents_dict[perc] = [rl.tolist() for rl in random_latents_list]
+            random_latents_types.append(f"random{seed}")
+        rnd_latents_dict[perc] = {
+            rnd_type: rl.tolist()
+            for rl, rnd_type in zip(random_latents_list, random_latents_types)
+        }
         for column in columns:
             print(f"===== {perc} =====")
-            values = df[column].values
-            threshold_low = np.percentile(values, perc)
-            threshold_high = np.percentile(values, 100 - perc)
-            pareto_latents = df[(values <= threshold_low)].index.tolist()
-            antipareto_latents = df[(values >= threshold_high)].index.tolist()
+            bigger_is_better = column in bigger_is_better_cols
+            sorted_index = df.sort_values(
+                by=column, ascending=not bigger_is_better
+            ).index.values
+            pareto_latents = sorted_index[:num_latents]
+            antipareto_latents = sorted_index[len(df) - num_latents :]
+            threshold_low = sorted_index[num_latents - 1]
+            threshold_high = sorted_index[len(df) - num_latents]
+            infos[f"{perc}%"][column] = {
+                "bigger_is_better": bigger_is_better,
+                "threshold_pareto": float(threshold_low),
+                "threshold_antipareto": float(threshold_high),
+                "pareto_latents": pareto_latents.tolist(),
+                "antipareto_latents": antipareto_latents.tolist(),
+                "pareto_values": df.loc[pareto_latents][column].values.tolist(),
+                "antipareto_values": df.loc[antipareto_latents][column].values.tolist(),
+            }
             latents_setups = [
                 pareto_latents,
-                *random_latents_list,
                 antipareto_latents,
             ]
+            latents_types = ["pareto", "antipareto"]
+
+            if column == columns[0]:
+                latents_setups.extend(random_latents_list)
+                latents_types.extend(random_latents_types)
+                for random_latents, random_latents_type in zip(
+                    random_latents_list, random_latents_types
+                ):
+                    infos[f"{perc}%"][column][random_latents_type] = {
+                        "values": full_df.loc[random_latents][column].values.tolist(),
+                    }
             print(f"len pareto: {len(pareto_latents)}")
             print(f"len antipareto: {len(antipareto_latents)}")
             print("================\n")
             for latents, latents_type in zip(latents_setups, latents_types):
                 if latents_type != "pareto" and perc == 100:
-                    continue
+                    if not ("random" in latents_type and "chat" not in latents_type):
+                        continue
+
                 preprocess_fn = CrossCoderSteeringLatent(
                     crosscoder,
                     steer_activations_of="base",
@@ -630,4 +699,4 @@ def create_acl_crosscoder_half_fns(
                                 activation_processor=preprocess_fn,
                             )
 
-    return half_fns, {"rnd latents": rnd_latents_dict}
+    return half_fns, infos
