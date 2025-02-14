@@ -9,45 +9,75 @@ import wandb
 from datasets import load_dataset
 from torch.nn.functional import kl_div
 import torch as th
+import re
 
 sys.path.append(str(Path(__file__).parent.parent))
-from tools.compute_utils import RunningMeanStd
+from tools.compute_utils import RunningMeanStd, chunked_kl
 from tools.setup_to_eval import HalfStepPreprocessFn
 from tools.split_gemma import split_gemma
 from tools.tokenization_utils import tokenize_with_ctrl_mask, gemma_chat_template
 from tools.utils import mask_k_first_ones_vec
-from tools.setup_to_eval import create_acl_half_fns
+from tools.setup_to_eval import (
+    create_acl_half_fns,
+    create_acl_vanilla_half_fns,
+    create_acl_patching_half_fns,
+    create_acl_crosscoder_half_fns,
+)
 from tools.cc_utils import load_crosscoder
+from coolname import generate_slug
 
 
 def compute_metrics_for_subset(
     logits, labels, base_logits, instruct_logits, subset_mask, chat_model
 ):
-    """Compute all metrics for a subset of tokens."""
-    base_log_probs = th.log_softmax(base_logits[subset_mask].float(), dim=-1)
-    instruct_preds = th.argmax(instruct_logits, dim=-1)[subset_mask]
-    instruct_log_probs = th.log_softmax(instruct_logits[subset_mask].float(), dim=-1)
-    logits = logits[:, :-1][subset_mask[:, 1:]].float()
-    labels = labels[:, 1:][subset_mask[:, 1:]]
-    log_probs = th.log_softmax(logits, dim=-1)
+    """Compute all metrics for a subset of tokens.
+    Args:
+        logits: Logits of the model
+        labels: Labels of the model
+        base_logits: Logits of the base model
+        instruct_logits: Logits of the instruct model
+        subset_mask: Mask of the subset of tokens at which the model is making predictions
+        chat_model: Chat model
+    """
+    # Verify shapes match
+    assert (
+        base_logits.shape == instruct_logits.shape
+    ), f"Base and instruct logits must have same shape, got {base_logits.shape} and {instruct_logits.shape}"
+    assert (
+        labels.shape == subset_mask.shape
+    ), f"Labels and subset mask must have same shape, got {labels.shape} and {subset_mask.shape}"
+    assert (
+        logits.shape[:2] == labels.shape
+    ), f"Logits and labels batch/sequence dims must match, got {logits.shape} and {labels.shape}"
+    assert (
+        base_logits.shape == logits.shape
+    ), f"Base and logits must have same shape, got {base_logits.shape} and {logits.shape}"
+    base_logits = base_logits[:, :-1][subset_mask[:, :-1]]
+    instruct_logits = instruct_logits[:, :-1][subset_mask[:, :-1]]
+    logits = logits[:, :-1][subset_mask[:, :-1]].float()
+    labels = labels[:, 1:][subset_mask[:, :-1]]
+    instruct_preds = th.argmax(instruct_logits, dim=-1)
+    num_samples = logits.shape[0]
 
     loss = chat_model.compute_loss(logits, labels, already_shifted=True)
     loss_wrt_instruct = chat_model.compute_loss(
         logits, instruct_preds, already_shifted=True
     )
-    kl_instruct = kl_div(
-        log_probs, instruct_log_probs, log_target=True, reduction="none"
-    ).sum(dim=-1)
-    kl_base = kl_div(log_probs, base_log_probs, log_target=True, reduction="none").sum(
-        dim=-1
-    )
-
+    assert (
+        logits.shape == instruct_logits.shape
+    ), "Log probs and instruct logits must have same shape"
+    assert (
+        logits.shape == base_logits.shape
+    ), "Log probs and base logits must have same shape"
+    kl_instruct = chunked_kl(logits, instruct_logits)
+    kl_base = chunked_kl(logits, base_logits)
+    th.cuda.empty_cache()
     return {
         "loss": loss,
         "kl_instruct": kl_instruct,
         "kl_base": kl_base,
         "loss_wrt_instruct": loss_wrt_instruct,
-        "num_samples": logits.shape[0],
+        "num_samples": num_samples,
     }
 
 
@@ -129,6 +159,8 @@ def evaluate_interventions(
     k_first: int = 10,
     save_path: Path | None = None,
 ):
+    if save_path is not None:
+        save_path.mkdir(parents=True, exist_ok=True)
     # Initialize metric trackers for each subset
     metrics_all = create_metrics_dict()
     metrics_kfirst = create_metrics_dict()
@@ -161,18 +193,19 @@ def evaluate_interventions(
         )
         input_ids = batch_tokens["input_ids"].to(device)
         attn_mask = batch_tokens["attention_mask"].to(device)
-        assistant_mask = batch_tokens["assistant_masks"].to(device)
-        if not assistant_mask.any():
+        assistant_mask = batch_tokens["assistant_masks"]
+        ctrl_mask = batch_tokens["ctrl_mask"].to(device)
+        # shift the assistant mask to the left by 1 to have the token at which you make the prediction rather than the token you need to predict
+        assistant_pred_mask = th.zeros_like(assistant_mask)
+        assistant_pred_mask[:, :-1] = assistant_mask[:, 1:]
+        assistant_pred_mask = assistant_pred_mask.to(device)
+        k_first_pred_toks_mask = (
+            mask_k_first_ones_vec(assistant_pred_mask, k_first).to(device) & ~ctrl_mask
+        )
+        next_ass_toks_mask = assistant_pred_mask & ~k_first_pred_toks_mask
+        if not assistant_pred_mask.any():
             print("Got an empty batch, skipping...")
             continue
-        ctrl_mask = batch_tokens["ctrl_mask"].to(device)
-        _k_first_ass_toks_mask = mask_k_first_ones_vec(assistant_mask, k_first).to(
-            device
-        )
-        # shift left by 1 to have the token at which you make the prediction rather than the token you need to predict
-        k_first_pred_toks_mask = th.zeros_like(_k_first_ass_toks_mask)
-        k_first_pred_toks_mask[:, :-1] = _k_first_ass_toks_mask[:, 1:]
-        next_ass_toks_mask = assistant_mask & ~k_first_pred_toks_mask
 
         (
             base_activations,
@@ -226,7 +259,7 @@ def evaluate_interventions(
                 base_activations,
                 instruct_activations,
                 ctrl_mask=ctrl_mask,
-                assistant_mask=assistant_mask,
+                assistant_pred_mask=assistant_pred_mask,
                 next_ass_toks_mask=next_ass_toks_mask,
                 k_first_pred_toks_mask=k_first_pred_toks_mask,
             )
@@ -236,7 +269,7 @@ def evaluate_interventions(
                 instruct_logits = instruct_logits_raw[mask]
                 base_causal_mask = base_causal_mask_raw[mask]
                 instruct_causal_mask = instruct_causal_mask_raw[mask]
-                effective_assistant_mask = assistant_mask[mask]
+                effective_assistant_mask = assistant_pred_mask[mask]
                 effective_k_first = k_first_pred_toks_mask[mask]
                 effective_post_k_first = next_ass_toks_mask[mask]
                 labels = input_ids[mask]
@@ -245,7 +278,7 @@ def evaluate_interventions(
                 instruct_logits = instruct_logits_raw
                 base_causal_mask = base_causal_mask_raw
                 instruct_causal_mask = instruct_causal_mask_raw
-                effective_assistant_mask = assistant_mask
+                effective_assistant_mask = assistant_pred_mask
                 effective_k_first = k_first_pred_toks_mask
                 effective_post_k_first = next_ass_toks_mask
                 labels = input_ids
@@ -288,6 +321,11 @@ def evaluate_interventions(
                         )
                         update_metrics(metrics_dict, metrics, fn_name, prefix)
                         log_metrics(metrics, fn_name, i, prefix)
+                        # cleanup
+                        for tensor in metrics.values():
+                            del tensor
+                        del metrics
+                        th.cuda.empty_cache()
                     else:
                         print(f"Skipping {fn_name} and {prefix} because mask is empty")
 
@@ -342,6 +380,12 @@ def evaluate_interventions(
     return compute_result()
 
 
+# python scripts/evaluate_interventions_effects.py --dataset science-of-finetuning/lmsys-chat-1m-chat-formatted --dataset-col conversation --split validation --name lmsys-chat-1m-validation-beta-cols --columns beta_ratio_reconstruction beta_ratio_error
+
+# python scripts/evaluate_interventions_effects.py --dataset science-of-finetuning/lmsys-chat-1m-chat-formatted --dataset-col conversation --split validation --name lmsys-chat-1m-validation-others-cols --columns rank_sum "base uselessness score"
+
+
+# python scripts/evaluate_interventions_effects.py --name ultrachat-gemma-all-columns
 if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("--layer-to-stop", type=int, default=13)
@@ -362,7 +406,24 @@ if __name__ == "__main__":
     parser.add_argument("--num-seeds", type=int, default=5)
     parser.add_argument("--name", type=str, default=None)
     parser.add_argument("--log-every", type=int, default=10)
-    parser.add_argument("--save-path", type=Path, default=Path("results"))
+    parser.add_argument(
+        "--save-path", type=Path, default=Path("results/interv_effects")
+    )
+    parser.add_argument("--k-first", type=int, default=10)
+    parser.add_argument("--checkpoint", type=int, default=10)
+    parser.add_argument(
+        "--percentage", type=int, nargs="+", default=[5, 10, 30, 50, 100]
+    )
+    parser.add_argument(
+        "--columns",
+        nargs="+",
+        default=[
+            "rank_sum",
+            "beta_ratio_reconstruction",
+            "beta_ratio_error",
+            "base uselessness score",
+        ],
+    )
     args = parser.parse_args()
     chat_model = AutoModelForCausalLM.from_pretrained(
         "google/gemma-2-2b-it",
@@ -381,24 +442,48 @@ if __name__ == "__main__":
         attn_implementation="eager",
     )
     dataset = load_dataset(args.dataset, split=args.split)
-    if args.test:
-        dataset = dataset.select(range(20))
-    else:
-        dataset = dataset.select(range(min(30_000, len(dataset))))
     device = (
         args.device
         if args.device != "auto"
         else "cuda" if th.cuda.is_available() else "cpu"
     )
     crosscoder = load_crosscoder(args.crosscoder).to(device)
+    seeds = list(range(args.num_seeds))
+    percentages = args.percentage
+    fn_dict, infos = create_acl_half_fns(
+        crosscoder, seeds, args.crosscoder, percentages, args.columns
+    )
+    if args.test:
+        fn_dict = create_acl_vanilla_half_fns()
+        fn_dict.update(create_acl_patching_half_fns())
+        dataset = dataset.select(range(120))
+    else:
+        dataset = dataset.select(range(min(30_000, len(dataset))))
+    print(f"running {len(fn_dict)} interventions")
     if args.name is None and args.test:
         args.name = "test"
+        print(f"Testing using {args.name}")
+    args.name = args.name + "_" + generate_slug(2)
     project = "perplexity-comparison"
     if args.test:
         project += "-test"
     wandb.init(project=project, name=args.name)
-    seeds = list(range(args.num_seeds))
-    fn_dict = create_acl_half_fns(crosscoder, seeds, args.crosscoder)
+    wdb_name = wandb.run.name
+    (args.save_path / wdb_name).mkdir(parents=True, exist_ok=True)
+    with open(args.save_path / wdb_name / "metadata.json", "w") as f:
+        json.dump(
+            {
+                "infos": infos,
+                "args": {
+                    "named_args": {
+                        k: str(v)
+                        for k, v in args.__dict__.items()
+                        if not k.startswith("_")
+                    }
+                },
+            },
+            f,
+        )
     result = evaluate_interventions(
         base_model,
         chat_model,
@@ -409,9 +494,54 @@ if __name__ == "__main__":
         device=device,
         max_seq_len=args.max_seq_len,
         log_every=args.log_every,
-        save_path=args.save_path,
+        save_path=args.save_path / wandb.run.name,
+        checkpoint_every=args.checkpoint,
     )
+
+    # Add mean across random seeds for each metric type
+    for metric_type, metrics in result.items():
+        # For each metric (e.g. 'loss', 'kl-instruct', etc.)
+        for metric_name, setups in metrics.items():
+            # Group random setups by their base pattern
+            random_groups = {}
+            for setup_name, setup_data in setups.items():
+                # Check if this is a random setup
+                if "random" in setup_name and setup_name != "random":
+                    # Extract the base pattern by replacing randomX with random
+                    base_pattern = re.sub(r"random\d+", "random", setup_name)
+                    if base_pattern not in random_groups:
+                        random_groups[base_pattern] = []
+                    random_groups[base_pattern].append((setup_name, setup_data))
+
+            # Compute means for each group
+            for base_pattern, random_setups in random_groups.items():
+                if len(random_setups) > 0:  # Only process if we found random setups
+                    means = []
+                    vars = []
+                    ns = []
+                    for _, setup_data in random_setups:
+                        means.append(setup_data["mean"])
+                        vars.append(setup_data["var"])
+                        ns.append(setup_data["count"])
+
+                    # Compute pooled statistics
+                    total_n = sum(ns)
+                    # Weighted mean
+                    mean = sum(m * n for m, n in zip(means, ns)) / total_n
+                    # Pooled variance (considering both within-group and between-group variance)
+                    within_var = sum((v * n) for v, n in zip(vars, ns)) / total_n
+                    between_var = (
+                        sum(n * (m - mean) ** 2 for m, n in zip(means, ns)) / total_n
+                    )
+                    pooled_var = within_var + between_var
+
+                    # Add the mean entry to the data
+                    setups[base_pattern] = {
+                        "mean": mean,
+                        "variance": pooled_var,
+                        "count": total_n,
+                    }
+
     args.save_path.mkdir(parents=True, exist_ok=True)
-    wdb_name = wandb.run.name
     with open(args.save_path / f"{wdb_name}_result.json", "w") as f:
         json.dump(result, f)
