@@ -8,30 +8,19 @@ import plotly.graph_objects as go
 import numpy as np
 import os
 import traceback  # Add traceback for better error reporting
+from shared import (
+    load_metrics,
+    normalize_key,
+    format_setup_name,
+    parse_key,
+    VANILLA_NAMES,
+    PATCH_TYPE_NAMES,
+    COLUMN_NAMES,
+)
 
 # Constants for state management
 CACHE_DIR = Path("display_metrics/cache")
 STATE_FILE = CACHE_DIR / "state.json"
-
-PATCH_TYPE_NAMES = {
-    "ctrl": "Chat template tokens",
-    "first5": "First 5 predicted tokens",
-    "ctrlfirst5": "Template & first 5 tokens",
-}
-
-COLUMN_NAMES = {
-    "beta ratio reconstruction": "Reconstruction ratio",
-    "beta ratio error": "Error ratio",
-    "rank sum": "Both ratios",
-    "base uselessness score": "Joint scalars",
-}
-
-VANILLA_NAMES = {
-    "base": "Base model only",
-    "chat": "Chat model only",
-    "base2chat": "Base → Chat switch",
-    "chat2base": "Chat → Base switch",
-}
 
 DEFAULT_METRIC_ORDER = ["kl-instruct", "loss", "kl-base", "low_wrt_instruct_pred"]
 
@@ -125,72 +114,6 @@ def save_state(state):
                 pass
 
 
-def normalize_key(key: str) -> str:
-    """Normalize a key by replacing underscores and dashes with spaces"""
-    return key.replace("_", " ").replace("-", " ")
-
-
-def parse_key(key: str) -> dict:
-    """Parses an intervention key to extract intuitive components."""
-    # Try matching patch keys with detailed pattern
-    pattern1 = r"^patch (?P<column>[^ ]+) (?P<latents_type>[^ ]+) (?P<perc>[0-9.]+)pct (?P<patch_name>[^ ]+) (?P<patch_target>[^ ]+) c(?P<continue_with>.+)$"
-    m = re.match(pattern1, key)
-    if m:
-        d = m.groupdict()
-        d["kind"] = "patch"
-        return d
-
-    # Match patch_all keys - now with spaces
-    pattern2 = r"^patch all (?P<column>[^ ]+) (?P<latents_type>[^ ]+) (?P<perc>[0-9.]+)pct c(?P<continue_with>.+)$"
-    m = re.match(pattern2, key)
-    if m:
-        d = m.groupdict()
-        d["kind"] = "patch_all"
-        d["patch_name"] = None
-        d["patch_target"] = None
-        return d
-
-    # For vanilla interventions
-    if key.startswith("vanilla "):
-        variant = key[len("vanilla ") :]
-        # Attempt to derive continue_with from known variants
-        continue_with = None
-        if variant in ["base", "chat"]:
-            continue_with = variant
-        elif "base2chat" in variant:
-            continue_with = "base2chat"
-        elif "chat2base" in variant:
-            continue_with = "chat2base"
-        return {"kind": "vanilla", "variant": variant, "continue_with": continue_with}
-
-    # If not matched, return raw key
-    return {"kind": "unknown", "raw": key}
-
-
-def format_setup_name(setup: str) -> str:
-    """Convert internal setup name to readable format"""
-    parsed = parse_key(setup)
-    if parsed["kind"] == "vanilla":
-        return f"Vanilla: {VANILLA_NAMES[parsed['variant']]}"
-    elif parsed["kind"] == "patch":
-        patch_desc = PATCH_TYPE_NAMES[parsed["patch_name"]]
-        return f"Patch {patch_desc} from {parsed['patch_target']} model, continue with {parsed['continue_with']}"
-    elif parsed["kind"] == "patch_all":
-        latent_type = parsed["latents_type"]
-        # Handle the case where we want to show mean across all random seeds
-        if latent_type.startswith("random") and latent_type != "random":
-            seed = latent_type[len("random") :]
-            latent_type = f"Random (seed {seed})"
-        elif latent_type == "random":
-            latent_type = "Random (mean across seeds)"
-        else:
-            latent_type = latent_type.capitalize()
-
-        column_desc = COLUMN_NAMES.get(parsed["column"], parsed["column"])
-        return f"CrossCoder: Steer {latent_type} latents ({parsed['perc']}%) using {column_desc}, continue with {parsed['continue_with']}"
-    return setup
-
-
 def get_available_options(data):
     """Extract available percentages and seeds from the loaded data"""
     available_options = {"percentages": set(), "seeds": set()}
@@ -210,7 +133,6 @@ def get_available_options(data):
                     if seed_match:
                         available_options["seeds"].add(seed_match.group(1))
 
-    print(f"found: {available_options}")
     return {
         "percentages": sorted(list(available_options["percentages"]), key=int),
         "seeds": sorted(list(available_options["seeds"]), key=int),
@@ -302,31 +224,6 @@ def setup_selector():
             return f"patch {column} {latent_type} {percentage}pct {patch_option} {patch_target} c{continue_with}"
 
 
-def load_metrics(json_file) -> dict:
-    """Loads JSON metrics from a file-like object or path and normalizes all keys."""
-    try:
-        if isinstance(json_file, (str, Path)):
-            with open(json_file, "r") as f:
-                data = json.load(f)
-        else:
-            data = json.load(json_file)
-
-        # Normalize all setup keys in the nested structure
-        normalized_data = {}
-        for category, metrics in data.items():
-            normalized_data[category] = {}
-            for metric, setups in metrics.items():
-                normalized_data[category][metric] = {
-                    normalize_key(k): v for k, v in setups.items()
-                }
-
-        return normalized_data
-    except Exception as e:
-        print(f"Error in load_metrics: {str(e)}")
-        print(f"Traceback:\n{traceback.format_exc()}")
-        raise
-
-
 def create_metric_plot(df, metric_name, categories):
     """Create a plotly histogram with error bars for multiple categories"""
     fig = go.Figure()
@@ -393,14 +290,15 @@ def create_metric_plot(df, metric_name, categories):
                 error_values.append(1.96 * (var / n) ** 0.5)
 
         if y_values:  # Only add trace if we have data
+            setup_name = format_setup_name(setup)
             fig.add_trace(
                 go.Bar(
-                    name=format_setup_name(setup),
+                    name=setup_name,
                     x=x_positions,
                     y=y_values,
                     width=bar_width,
                     error_y=dict(type="data", array=error_values, visible=True),
-                    hovertemplate=f"Internal name: {setup}<br>Value: %{{y:.3f}}<br>Error: %{{error_y.array:.3f}}<extra></extra>",
+                    hovertemplate=f"Setup: {setup_name}<br>Internal name: {setup}<br>Value: %{{y:.3f}}<br>Error: %{{error_y.array:.3f}}<extra></extra>",
                 )
             )
 
@@ -598,6 +496,7 @@ def display_metrics(data, current_file=None):
         for metric_type in metrics:
             # Check if this metric should be expanded
             is_expanded = metric_type in st.session_state.state["expanded_metrics"]
+            
             with st.expander(metric_type, expanded=is_expanded) as exp:
                 # Update expanded state
                 if exp:
@@ -663,6 +562,37 @@ def display_metrics(data, current_file=None):
                         ):  # Only create plot if we have valid categories
                             fig = create_metric_plot(df, metric_type, valid_categories)
                             st.plotly_chart(fig, use_container_width=True)
+
+                            # Add Generate Code button below the plot
+                            if st.button(
+                                "Generate Code", key=f"gen_code_{metric_type}"
+                            ):
+                                # Read template file
+                                with open("display_metrics/template.py", "r") as f:
+                                    template = f.read()
+
+                                # Get visible setups
+                                visible_setups = [
+                                    s
+                                    for s in st.session_state.state["selected_setups"]
+                                    if s
+                                    not in st.session_state.state.get(
+                                        "hidden_setups", set()
+                                    )
+                                ]
+
+                                # Fill template with current values
+                                code = template
+                                code = code.replace("{file_path}", repr(current_file))
+                                code = code.replace("{metric_type}", repr(metric_type))
+                                code = code.replace(
+                                    "{categories}", repr(categories)
+                                )  # Use all categories
+                                code = code.replace(
+                                    "{selected_setups}", repr(visible_setups)
+                                )
+
+                                st.code(code, language="python")
                         else:
                             st.info("No valid data available for this metric")
                     except Exception as e:
