@@ -7,7 +7,6 @@ from tqdm.auto import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import wandb
 from datasets import load_dataset
-from torch.nn.functional import kl_div
 import torch as th
 import re
 
@@ -386,6 +385,9 @@ def evaluate_interventions(
 
 
 # python scripts/evaluate_interventions_effects.py --name ultrachat-gemma-all-columns
+
+
+# python scripts/evaluate_interventions_effects.py --name ultrachat-gemma-all-new-columns --skip-target-patch --skip-vanilla --skip-patching --columns "dec_norm_diff" "lmsys_freq" "lmsys_ctrl_%" "lmsys_ctrl_freq" "lmsys_avg_act" "beta_activation_ratio" "beta_activation_chat" "beta_activation_base" "beta_error_chat" "beta_error_base"
 if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("--layer-to-stop", type=int, default=13)
@@ -424,7 +426,11 @@ if __name__ == "__main__":
             "base uselessness score",
         ],
     )
+    parser.add_argument("--skip-target-patch", action="store_true")
+    parser.add_argument("--skip-vanilla", action="store_true")
+    parser.add_argument("--skip-patching", action="store_true")
     args = parser.parse_args()
+    print(f"using args: {args}")
     chat_model = AutoModelForCausalLM.from_pretrained(
         "google/gemma-2-2b-it",
         torch_dtype=th.bfloat16,
@@ -451,7 +457,14 @@ if __name__ == "__main__":
     seeds = list(range(args.num_seeds))
     percentages = args.percentage
     fn_dict, infos = create_acl_half_fns(
-        crosscoder, seeds, args.crosscoder, percentages, args.columns
+        crosscoder,
+        seeds,
+        args.crosscoder,
+        percentages,
+        args.columns,
+        skip_target_patch=args.skip_target_patch,
+        skip_vanilla=args.skip_vanilla,
+        skip_patching=args.skip_patching,
     )
     if args.test:
         fn_dict = create_acl_vanilla_half_fns()
@@ -484,6 +497,7 @@ if __name__ == "__main__":
             },
             f,
         )
+    # input("breakpoint")
     result = evaluate_interventions(
         base_model,
         chat_model,
