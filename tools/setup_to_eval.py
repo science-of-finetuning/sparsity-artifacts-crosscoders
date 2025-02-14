@@ -407,43 +407,29 @@ def create_tresholded_baseline_random_steering_half_fns(
     return half_fns
 
 
-def create_acl_half_fns(
-    crosscoder: CrossCoder,
-    seeds: list[int],
-    crosscoder_name: str | None = None,
-) -> dict[str, HalfStepPreprocessFn]:
+def create_acl_vanilla_half_fns() -> dict[str, HalfStepPreprocessFn]:
     """
-    datasets:
-    - Lmsys
-    - Generated
-
-    Creates the half functions used in the ACL paper:
-    # Vanilla
     - Base
     - Base -> Chat
     - Chat -> Base
     - Chat
+    """
+    return {
+        "vanilla_base": IdentityPreprocessFn(continue_with="base"),
+        "vanilla_base2chat": SwitchPreprocessFn(continue_with="chat"),
+        "vanilla_chat2base": SwitchPreprocessFn(continue_with="base"),
+        "vanilla_chat": IdentityPreprocessFn(continue_with="chat"),
+    }
 
-    # Patching
+
+def create_acl_patching_half_fns() -> dict[str, HalfStepPreprocessFn]:
+    """
     - Base -> Chat, Chat -> Base
         - Patch the control tokens
         - Patch the 5 first predicted tokens
         - Patch the control tokens and the 5 first predicted tokens
     """
     half_fns = {}
-
-    # --- Vanilla configurations ---
-    half_fns.update(
-        {
-            "vanilla_base": IdentityPreprocessFn(continue_with="base"),
-            "vanilla_base2chat": SwitchPreprocessFn(continue_with="chat"),
-            "vanilla_chat2base": SwitchPreprocessFn(continue_with="base"),
-            "vanilla_chat": IdentityPreprocessFn(continue_with="chat"),
-        }
-    )
-
-    # --- Patching interventions ---
-    # Create configurations for different patching strategies
     for name, patch_class in zip(
         ["ctrl", "first5", "ctrlfirst5"],
         [PatchCtrl, PatchKFirstPredictions, PatchKFirstAndCtrl],
@@ -465,7 +451,69 @@ def create_acl_half_fns(
             patch_target="chat",
             activation_processor=IdentityPreprocessFn("chat"),
         )
+    return half_fns
 
+
+def create_acl_half_fns(
+    crosscoder: CrossCoder,
+    seeds: list[int],
+    crosscoder_name: str | None = None,
+    percentages: list[int] = [5, 10, 50, 100],
+    columns: list[str] = [
+        "rank_sum",
+        "beta_ratio_reconstruction",
+        "beta_ratio_error",
+        "base uselessness score",
+    ],
+) -> dict[str, HalfStepPreprocessFn]:
+    """
+    datasets:
+    - Lmsys
+    - Generated
+
+    Creates the half functions used in the ACL paper:
+    # Vanilla
+    - Base
+    - Base -> Chat
+    - Chat -> Base
+    - Chat
+
+    # Patching
+    - Base -> Chat, Chat -> Base
+        - Patch the control tokens
+        - Patch the 5 first predicted tokens
+        - Patch the control tokens and the 5 first predicted tokens
+    """
+    # --- Vanilla configurations ---
+    half_fns = create_acl_vanilla_half_fns()
+
+    # --- Patching interventions ---
+    # Create configurations for different patching strategies
+    half_fns.update(create_acl_patching_half_fns())
+
+    # --- Crosscoder interventions ---
+    half_fns_crosscoder, infos = create_acl_crosscoder_half_fns(
+        crosscoder, seeds, crosscoder_name, percentages, columns
+    )
+    half_fns.update(half_fns_crosscoder)
+
+    return half_fns, infos
+
+
+def create_acl_crosscoder_half_fns(
+    crosscoder: CrossCoder,
+    seeds: list[int],
+    crosscoder_name: str | None = None,
+    percentages: list[int] = [5, 10, 50, 100],
+    columns: list[str] = [
+        "rank_sum",
+        "beta_ratio_reconstruction",
+        "beta_ratio_error",
+        "base uselessness score",
+    ],
+    skip_target_patch=False,
+):
+    half_fns = {}
     # --- CrossCoder integrations ---
     """
     # CrossCoder
@@ -477,11 +525,41 @@ def create_acl_half_fns(
                 - Add x% random chat only * 5
                 - Add x% chat only Anti-Pareto
     """
-    percentages = [0.05, 0.10, 1.0]
+    for error_from in ["base", "chat"]:
+        add_reconstruction_of = "base" if error_from == "chat" else "chat"
+        for continue_with in ["base", "chat"]:
+            preprocess_fn = CrossCoderSteeringLatent(
+                crosscoder,
+                steer_activations_of=error_from,
+                steer_with_latents_from=add_reconstruction_of,
+                continue_with=continue_with,
+                latents_to_steer=None,  # all latents
+            )
+            half_fns[f"patch_{error_from}-error_c{continue_with}"] = preprocess_fn
+            if skip_target_patch:
+                continue
+            for patch_target in ["base", "chat"]:
+                for patch_name, patch_class in zip(
+                    ["ctrl", "first5", "ctrlfirst5"],
+                    [PatchCtrl, PatchKFirstPredictions, PatchKFirstAndCtrl],
+                ):
+                    half_fns[
+                        f"patch_error_{patch_target}-{patch_name}_c{continue_with}"
+                    ] = patch_class(
+                        continue_with=continue_with,
+                        patch_target=patch_target,
+                        activation_processor=preprocess_fn,
+                    )
+
     latents_types = ["pareto", *[f"random{i}" for i in range(len(seeds))], "antipareto"]
     df = (
         load_latent_df(crosscoder_name)[
-            ["beta_ratio_reconstruction", "beta_ratio_error", "tag"]
+            [
+                "beta_ratio_reconstruction",
+                "beta_ratio_error",
+                "tag",
+                "base uselessness score",
+            ]
         ]
         .dropna()
         .query("tag == 'IT only'")
@@ -489,42 +567,67 @@ def create_acl_half_fns(
         .query("-0.1 <= beta_ratio_error <= 2")
     )
     rank_sum = df["beta_ratio_reconstruction"].rank() + df["beta_ratio_error"].rank()
+    df["rank_sum"] = rank_sum
+    rnd_latents_dict = {}
     for perc in percentages:
-        threshold_low = np.percentile(rank_sum, perc)
-        threshold_high = np.percentile(rank_sum, 100 - perc)
-        pareto_latents = df[(rank_sum <= threshold_low)].index.tolist()
         random_latents_list = []
         for seed in seeds:
-            th.manual_seed(seed)
-            random_latents = th.randperm(crosscoder.decoder.weight.shape[1])[
-                : len(pareto_latents)
+            np.random.seed(seed)
+            random_latents = np.random.permutation(df.index.values)[
+                : int(len(df) * (perc / 100) + 0.5)
             ]
             random_latents_list.append(random_latents)
-        antipareto_latents = df[(rank_sum >= threshold_high)].index.tolist()
-        latents_setups = [
-            pareto_latents,
-            *random_latents_list,
-            antipareto_latents,
-        ]
-        for latents, latents_type in zip(latents_setups, latents_types):
-            preprocess_fn = CrossCoderSteeringLatent(
-                crosscoder,
-                steer_activations_of="base",
-                steer_with_latents_from="chat",
-                continue_with="chat",  # doesn't matter as we use .result in mask
-                latents_to_steer=latents,
-            )
-            for patch_target in ["base", "chat"]:
+            print(f"len random: {len(random_latents)}")
+        rnd_latents_dict[perc] = [rl.tolist() for rl in random_latents_list]
+        for column in columns:
+            print(f"===== {perc} =====")
+            values = df[column].values
+            threshold_low = np.percentile(values, perc)
+            threshold_high = np.percentile(values, 100 - perc)
+            pareto_latents = df[(values <= threshold_low)].index.tolist()
+            antipareto_latents = df[(values >= threshold_high)].index.tolist()
+            latents_setups = [
+                pareto_latents,
+                *random_latents_list,
+                antipareto_latents,
+            ]
+            print(f"len pareto: {len(pareto_latents)}")
+            print(f"len antipareto: {len(antipareto_latents)}")
+            print("================\n")
+            for latents, latents_type in zip(latents_setups, latents_types):
+                if latents_type != "pareto" and perc == 100:
+                    continue
+                preprocess_fn = CrossCoderSteeringLatent(
+                    crosscoder,
+                    steer_activations_of="base",
+                    steer_with_latents_from="chat",
+                    continue_with="chat",  # doesn't matter as we use .result in mask
+                    latents_to_steer=latents,
+                )
                 for continue_with in ["base", "chat"]:
-                    for patch_name, patch_class in zip(
-                        ["ctrl", "first5", "ctrlfirst5"],
-                        [PatchCtrl, PatchKFirstPredictions, PatchKFirstAndCtrl],
-                    ):
-                        half_fns[
-                            f"patch_{latents_type}->{patch_name}-{patch_target}_c{continue_with}"
-                        ] = patch_class(
-                            continue_with=continue_with,
-                            patch_target=patch_target,
-                            activation_processor=preprocess_fn,
-                        )
-    return half_fns
+                    half_fns[
+                        f"patch_all_{column}-{latents_type}-{perc}pct_c{continue_with}"
+                    ] = CrossCoderSteeringLatent(
+                        crosscoder,
+                        steer_activations_of="base",
+                        steer_with_latents_from="chat",
+                        continue_with=continue_with,
+                        latents_to_steer=latents,
+                    )
+                    if skip_target_patch:
+                        continue
+
+                    for patch_target in ["base", "chat"]:
+                        for patch_name, patch_class in zip(
+                            ["ctrl", "first5", "ctrlfirst5"],
+                            [PatchCtrl, PatchKFirstPredictions, PatchKFirstAndCtrl],
+                        ):
+                            half_fns[
+                                f"patch_{column}-{latents_type}-{perc}pct->{patch_name}-{patch_target}_c{continue_with}"
+                            ] = patch_class(
+                                continue_with=continue_with,
+                                patch_target=patch_target,
+                                activation_processor=preprocess_fn,
+                            )
+
+    return half_fns, {"rnd latents": rnd_latents_dict}
