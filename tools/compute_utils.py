@@ -11,6 +11,7 @@ __all__ = [
     "compute_cross_entropy",
     "compute_entropy",
     "RunningMeanStd",
+    "chunked_kl",
 ]
 
 
@@ -278,6 +279,23 @@ def compute_kl(
             dim=-1
         )
     return kl
+
+
+def chunked_kl(logits, logit_target, chunk_size=32):
+    pass
+    num_samples = logits.shape[0]
+    assert logits.dim() == 2, "logits should be (num_tokens, vocab_size)"
+    assert logit_target.dim() == 2, "logit_target should be (num_tokens, vocab_size)"
+    assert (
+        logits.shape == logit_target.shape
+    ), "logits and logit_target should have the same shape"
+    kl_chunks = []
+    for i in range(0, num_samples, chunk_size):
+        chunk_logits = logits[i : min(i + chunk_size, logits.shape[0])]
+        chunk_logit_target = logit_target[i : min(i + chunk_size, logits.shape[0])]
+        kl = compute_kl(chunk_logits, chunk_logit_target, average_over_tokens=False)
+        kl_chunks.append(kl)
+    return th.cat(kl_chunks, dim=0)
 
 
 def compute_cross_entropy(batch, model, pred_mask):
