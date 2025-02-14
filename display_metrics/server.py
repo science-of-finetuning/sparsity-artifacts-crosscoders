@@ -583,13 +583,15 @@ def display_metrics(data, current_file=None):
 
                                 # Fill template with current values
                                 code = template
-                                code = code.replace("{file_path}", repr(current_file))
-                                code = code.replace("{metric_type}", repr(metric_type))
+                                code = code.replace("{{file_path}}", repr(current_file))
                                 code = code.replace(
-                                    "{categories}", repr(categories)
+                                    "{{metric_type}}", repr(metric_type)
+                                )
+                                code = code.replace(
+                                    "{{categories}}", repr(categories)
                                 )  # Use all categories
                                 code = code.replace(
-                                    "{selected_setups}", repr(visible_setups)
+                                    "{{selected_setups}}", repr(visible_setups)
                                 )
 
                                 st.code(code, language="python")

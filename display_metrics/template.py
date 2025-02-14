@@ -4,12 +4,12 @@ import numpy as np
 import warnings
 from display_metrics.shared import load_metrics, format_setup_name
 
-data = load_metrics({file_path})
+data = load_metrics({{file_path}})
 
 # Extract data for selected metric and categories
-metric_type = {metric_type}
-categories = {categories}
-requested_setups = {selected_setups}
+metric_type = {{metric_type}}
+categories = {{categories}}
+requested_setups = {{selected_setups}}
 
 # Track which setups have data
 valid_setups = []
