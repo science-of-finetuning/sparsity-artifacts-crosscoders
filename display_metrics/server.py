@@ -16,6 +16,7 @@ from shared import (
     VANILLA_NAMES,
     PATCH_TYPE_NAMES,
     COLUMN_NAMES,
+    LATENT_TYPE_NAMES,
 )
 
 # Constants for state management
@@ -25,6 +26,8 @@ STATE_FILE = CACHE_DIR / "state.json"
 DEFAULT_METRIC_ORDER = ["kl-instruct", "loss", "kl-base", "low_wrt_instruct_pred"]
 
 RESULTS_DIR = "results/interv_effects"
+
+
 
 
 def load_state():
@@ -116,7 +119,7 @@ def save_state(state):
 
 def get_available_options(data):
     """Extract available percentages and seeds from the loaded data"""
-    available_options = {"percentages": set(), "seeds": set()}
+    available_options = {"percentages": set(), "seeds": set(), "chat_seeds": set()}
 
     # Look through all setups in the data
     for category in data.values():
@@ -128,7 +131,11 @@ def get_available_options(data):
                     available_options["percentages"].add(pct_match.group(1))
 
                 # Extract seed from random keys
-                if "random" in setup_key:
+                if "random-chat" in setup_key:
+                    seed_match = re.search(r"random-chat(\d+)", setup_key)
+                    if seed_match:
+                        available_options["chat_seeds"].add(seed_match.group(1))
+                elif "random" in setup_key:
                     seed_match = re.search(r"random(\d+)", setup_key)
                     if seed_match:
                         available_options["seeds"].add(seed_match.group(1))
@@ -136,6 +143,7 @@ def get_available_options(data):
     return {
         "percentages": sorted(list(available_options["percentages"]), key=int),
         "seeds": sorted(list(available_options["seeds"]), key=int),
+        "chat_seeds": sorted(list(available_options["chat_seeds"]), key=int),
     }
 
 
@@ -195,7 +203,14 @@ def setup_selector():
             format_func=lambda x: COLUMN_NAMES[x],
         )
 
-        latent_type = st.selectbox("Latent Type", ["pareto", "random", "antipareto"])
+        latent_type = st.selectbox(
+            "Latent Type",
+            list(LATENT_TYPE_NAMES.keys()),
+            format_func=lambda x: LATENT_TYPE_NAMES[x],
+        )
+
+        add_base_only = st.checkbox("Include base only latents", value=False)
+
         patch_option = st.selectbox(
             "What to patch",
             ["all"] + list(PATCH_TYPE_NAMES.keys()),
@@ -217,11 +232,22 @@ def setup_selector():
             seed = st.selectbox("Random Seed", seed_options)
             if seed != "all":
                 latent_type = f"random{seed}"
+        elif latent_type == "random-chat":
+            available_seeds = options.get("chat_seeds", ["0", "1", "2", "3", "4"])
+            seed_options = ["all"] + available_seeds
+            seed = st.selectbox("Random Chat Seed", seed_options)
+            if seed != "all":
+                latent_type = f"random-chat{seed}"
+
+        # Add base_only suffix to the name if selected
+        name = f"{column} {latent_type} {percentage}pct"
+        if add_base_only:
+            name += "+base_only"
 
         if patch_option == "all":
-            return f"patch all {column} {latent_type} {percentage}pct c{continue_with}"
+            return f"patch all {name} c{continue_with}"
         else:
-            return f"patch {column} {latent_type} {percentage}pct {patch_option} {patch_target} c{continue_with}"
+            return f"patch {name}->{patch_option} {patch_target} c{continue_with}"
 
 
 def create_metric_plot(df, metric_name, categories):
@@ -251,6 +277,9 @@ def create_metric_plot(df, metric_name, categories):
     )
 
     # For each setup with data, add bars for categories
+    annotations = []  # Store annotations for all bars
+    max_y = 0  # Track maximum y value including error bars and padding
+
     for setup_idx, setup in enumerate(valid_setups):
         x_positions = []
         y_values = []
@@ -285,9 +314,28 @@ def create_metric_plot(df, metric_name, categories):
                 and not pd.isna(var)
                 and not pd.isna(n)
             ):
-                x_positions.append(cat_idx + offsets[setup_idx])
+                x_pos = cat_idx + offsets[setup_idx]
+                x_positions.append(x_pos)
                 y_values.append(mean)
-                error_values.append(1.96 * (var / n) ** 0.5)
+                error = 1.96 * (var / n) ** 0.5
+                error_values.append(error)
+                
+                # Calculate position for annotation (above error bar)
+                y_with_error = mean + error
+                max_y = max(max_y, y_with_error)
+                
+                # Create annotation for this bar
+                annotations.append(
+                    dict(
+                        x=x_pos,
+                        y=y_with_error,
+                        text=f"{mean:.3f}",
+                        showarrow=False,
+                        yanchor='bottom',
+                        yshift=5,  # Small padding above error bar
+                        font=dict(size=10)
+                    )
+                )
 
         if y_values:  # Only add trace if we have data
             setup_name = format_setup_name(setup)
@@ -302,6 +350,7 @@ def create_metric_plot(df, metric_name, categories):
                 )
             )
 
+    # Add annotations to the layout
     fig.update_layout(
         title=metric_name,
         showlegend=True,
@@ -312,6 +361,12 @@ def create_metric_plot(df, metric_name, categories):
         yaxis_title="Value",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5),
         bargap=0,  # Remove gap between bar groups
+        annotations=annotations,
+        # Adjust margins and axis range to accommodate annotations
+        margin=dict(t=50, b=50),
+        yaxis=dict(
+            range=[None, max_y * 1.15]  # Extend y-axis range by 15% to fit annotations
+        )
     )
 
     if invalid_setups:

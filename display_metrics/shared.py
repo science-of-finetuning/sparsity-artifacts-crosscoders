@@ -2,6 +2,12 @@ import json
 from pathlib import Path
 import re
 
+LATENT_TYPE_NAMES = {
+    "pareto": "Best",
+    "antipareto": "Worst",
+    "random-chat": "Random chat only",
+    "random": "Random",
+}
 # Constants for setup name formatting
 VANILLA_NAMES = {
     "base": "Base model only",
@@ -108,7 +114,7 @@ def format_setup_name(setup: str) -> str:
         elif latent_type == "random":
             latent_type = "Random (mean across seeds)"
         else:
-            latent_type = latent_type.capitalize()
+            latent_type = LATENT_TYPE_NAMES.get(latent_type, latent_type)
 
         column_desc = COLUMN_NAMES.get(parsed["column"], parsed["column"])
         return f"CrossCoder: Steer {latent_type} latents ({parsed['perc']}%) using {column_desc}, continue with {parsed['continue_with']}"
