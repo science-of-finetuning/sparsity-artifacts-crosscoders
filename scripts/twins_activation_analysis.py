@@ -124,7 +124,7 @@ def main(n, batch_size, d_batch_size, twins_file, data_store):
             split="validation"
     )
 
-    dataset = th.utils.data.ConcatDataset([fineweb_cache, lmsys_cache])
+    dataset = th.utils.data.ConcatDataset([th.utils.data.Subset(fineweb_cache, th.arange(0, n)), th.utils.data.Subset(lmsys_cache, th.arange(0, n))])
 
     crosscoder.decoder.weight.shape
     it_decoder = crosscoder.decoder.weight[1, :, :].clone()
