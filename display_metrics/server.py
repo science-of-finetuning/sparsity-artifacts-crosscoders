@@ -17,6 +17,7 @@ from shared import (
     PATCH_TYPE_NAMES,
     COLUMN_NAMES,
     LATENT_TYPE_NAMES,
+    build_complete_dataframe,
 )
 
 # Constants for state management
@@ -26,8 +27,6 @@ STATE_FILE = CACHE_DIR / "state.json"
 DEFAULT_METRIC_ORDER = ["kl-instruct", "loss", "kl-base", "low_wrt_instruct_pred"]
 
 RESULTS_DIR = "results/interv_effects"
-
-
 
 
 def load_state():
@@ -126,7 +125,7 @@ def get_available_options(data):
         for metric in category.values():
             for setup_key in metric.keys():
                 # Extract percentage from patch_all keys - now with spaces
-                pct_match = re.search(r" (\d+)pct ", setup_key)
+                pct_match = re.search(r" (\d+)pct[+ ]", setup_key)
                 if pct_match:
                     available_options["percentages"].add(pct_match.group(1))
 
@@ -242,7 +241,7 @@ def setup_selector():
         # Add base_only suffix to the name if selected
         name = f"{column} {latent_type} {percentage}pct"
         if add_base_only:
-            name += "+base_only"
+            name += "+base only"
 
         if patch_option == "all":
             return f"patch all {name} c{continue_with}"
@@ -319,11 +318,11 @@ def create_metric_plot(df, metric_name, categories):
                 y_values.append(mean)
                 error = 1.96 * (var / n) ** 0.5
                 error_values.append(error)
-                
+
                 # Calculate position for annotation (above error bar)
                 y_with_error = mean + error
                 max_y = max(max_y, y_with_error)
-                
+
                 # Create annotation for this bar
                 annotations.append(
                     dict(
@@ -331,9 +330,9 @@ def create_metric_plot(df, metric_name, categories):
                         y=y_with_error,
                         text=f"{mean:.3f}",
                         showarrow=False,
-                        yanchor='bottom',
+                        yanchor="bottom",
                         yshift=5,  # Small padding above error bar
-                        font=dict(size=10)
+                        font=dict(size=10),
                     )
                 )
 
@@ -366,7 +365,7 @@ def create_metric_plot(df, metric_name, categories):
         margin=dict(t=50, b=50),
         yaxis=dict(
             range=[None, max_y * 1.15]  # Extend y-axis range by 15% to fit annotations
-        )
+        ),
     )
 
     if invalid_setups:
@@ -387,6 +386,19 @@ def display_metrics(data, current_file=None):
         # Display current file if provided
         if current_file:
             st.markdown(f"**Current file:** `{current_file}`")
+            
+            # Add Save DataFrame button right after file display
+            if st.button("Save All Data to CSV"):
+                # Create csv path from json path
+                csv_path = current_file.rsplit('.', 1)[0] + '_all_metrics.csv'
+                
+                complete_df = build_complete_dataframe(data)
+                if complete_df is not None:
+                    complete_df.to_csv(csv_path)
+                    st.success(f"Complete DataFrame saved to {csv_path}")
+                else:
+                    st.error("No data available to save")
+                    
             st.markdown("---")
 
         # Add CSS for tooltips and buttons
@@ -668,7 +680,7 @@ def get_available_result_files():
     result_files = []
     for root, _, files in os.walk(RESULTS_DIR):
         for file in files:
-            if file.endswith("_result.json") or file.endswith("_result_fixed.json"):
+            if "metadata" not in file:
                 rel_path = os.path.relpath(os.path.join(root, file), start=".")
                 result_files.append(rel_path)
     return sorted(result_files)

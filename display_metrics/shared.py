@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 import re
+import pandas as pd
 
 LATENT_TYPE_NAMES = {
     "pareto": "Best",
@@ -56,13 +57,14 @@ def parse_key(key: str) -> dict:
         return d
 
     # Match patch_all keys
-    pattern2 = r"^patch all (?P<column>.*?) (?P<latents_type>[^ ]+) (?P<perc>[0-9.]+)pct c(?P<continue_with>.+)$"
+    pattern2 = r"^patch all (?P<column>.*?) (?P<latents_type>[^ ]+) (?P<perc>[0-9.]+)pct(?:\+base only)? c(?P<continue_with>.+)$"
     m = re.match(pattern2, key)
     if m:
         d = m.groupdict()
         d["kind"] = "patch_all"
         d["patch_name"] = None
         d["patch_target"] = None
+        d["has_base_only"] = "+base only" in key
         return d
 
     # Match error patching keys
@@ -117,7 +119,8 @@ def format_setup_name(setup: str) -> str:
             latent_type = LATENT_TYPE_NAMES.get(latent_type, latent_type)
 
         column_desc = COLUMN_NAMES.get(parsed["column"], parsed["column"])
-        return f"CrossCoder: Steer {latent_type} latents ({parsed['perc']}%) using {column_desc}, continue with {parsed['continue_with']}"
+        base_only_suffix = " (with base only latents)" if parsed.get("has_base_only", False) else ""
+        return f"CrossCoder: Steer {latent_type} latents ({parsed['perc']}%) using {column_desc}{base_only_suffix}, continue with {parsed['continue_with']}"
     elif parsed["kind"] == "error":
         other_model = "chat" if parsed["model"] == "base" else "base"
         return f"{parsed['model'].capitalize()} error + {other_model} reconstruction, continue with {parsed['continue_with']}"
@@ -149,3 +152,34 @@ def load_metrics(json_input) -> dict:
                 normalize_key(k): v for k, v in setups.items()
             }
     return normalized_data
+
+
+def build_complete_dataframe(data: dict) -> pd.DataFrame:
+    """Build a complete DataFrame containing all metrics across all categories."""
+    all_data = {}
+    for category in data:
+        for metric_type in data[category]:
+            category_data = data[category][metric_type]
+            rows = []
+            setups = []  # Track setups for index
+            for setup in category_data:
+                stats = category_data[setup]
+                mean = stats.get("mean", None)
+                var = stats.get("var", None)
+                count = stats.get("count", None)
+                if mean is not None and var is not None and count is not None:
+                    rows.append({
+                        "mean": mean,
+                        "variance": var,
+                        "n": count,
+                    })
+                    setups.append(setup)  # Add setup to index only when we add a row
+            if rows:
+                df = pd.DataFrame(rows, index=setups)  # Use collected setups as index
+                # Add category and metric type to column names
+                df.columns = pd.MultiIndex.from_product([[category], [metric_type], df.columns])
+                all_data[f"{category}_{metric_type}"] = df
+    
+    if all_data:
+        return pd.concat(all_data.values(), axis=1)
+    return None
