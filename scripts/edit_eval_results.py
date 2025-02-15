@@ -72,21 +72,24 @@ def add_base_only_suffix(data: dict) -> dict:
             new_setups = {}
             for setup_name, setup_data in setups.items():
                 # Check if this is a CrossCoder setup (contains patch)
-                if "patch" in setup_name and "+base_only" not in setup_name:
-                    # Extract parts before 'c{base/chat}'
-                    parts = setup_name.split("_c")
-                    if len(parts) == 2:
-                        new_name = f"{parts[0]}+base_only_c{parts[1]}"
-                        new_setups[new_name] = setup_data
-                    else:
-                        new_setups[setup_name] = setup_data
-                else:
-                    new_setups[setup_name] = setup_data
+                if "+base_only" not in setup_name:
+                    if "patch_all" in setup_name:
+                        name = setup_name.replace("patch_all_", "").split("_c")[0]
+                        new_name = f"{name}+base_only"
+                        setup_name = setup_name.replace(name, new_name)
+                    elif "patch" in setup_name and "->" in setup_name:
+                        name = setup_name.split("->")[1].split("-")[0]
+                        new_name = f"{name}+base_only"
+                        setup_name = setup_name.replace(name, new_name)
+
+                new_setups[setup_name] = setup_data
             metrics[metric_name] = new_setups
     return data
 
 
-def process_file(file_path: Path, output_path: Path | None = None, command: str = "means"):
+def process_file(
+    file_path: Path, output_path: Path | None = None, command: str = "means"
+):
     """Process a single JSON file."""
     print(f"Processing {file_path}")
     with open(file_path, "r") as f:
@@ -102,9 +105,10 @@ def process_file(file_path: Path, output_path: Path | None = None, command: str 
     # If no output path specified, overwrite the input file
     output_path = output_path or file_path
     suffix = "_fixed" if command == "means" else "_base_only"
-    with open(str(output_path).split(".")[0] + f"{suffix}.json", "w") as f:
+    file = str(output_path).split(".")[0] + f"{suffix}.json"
+    with open(file, "w") as f:
         json.dump(data, f)
-    print(f"Saved results to {output_path}")
+    print(f"Saved results to {file}")
 
 
 def merge_json_files(files: List[Path], output_path: Path):
@@ -207,6 +211,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+# python scripts/edit_eval_results.py add_base_only results/interv_effects/1739551002_ultrachat-gemma-all-add-base-only-latents_quick-bison_result.json --output results/interv_effects/1739551002_ultrachat-gemma-all-add-base-only-latents_quick-bison_result_fixed.json
 
 # python scripts/edit_eval_results.py means results/interv_effects/ultrachat-gemma-50-ctrl-fixed_cerise-yak/ultrachat-gemma-50-ctrl-fixed_cerise-yak_510_result.json
 # python scripts/edit_eval_results.py merge results/interv_effects/ultrachat-gemma_beige-armadillo/ultrachat-gemma_beige-armadillo_330_result_fixed.json results/interv_effects/ultrachat-gemma-50-ctrl-fixed_cerise-yak/ultrachat-gemma-50-ctrl-fixed_cerise-yak_510_result_fixed.json  --output results/interv_effects/merged_gemma_results_fixed.json
