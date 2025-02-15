@@ -1,3 +1,4 @@
+import time
 import sys
 import json
 from argparse import ArgumentParser
@@ -9,6 +10,7 @@ import wandb
 from datasets import load_dataset
 import torch as th
 import re
+from scripts.edit_eval_results import add_random_means
 
 sys.path.append(str(Path(__file__).parent.parent))
 from tools.compute_utils import RunningMeanStd, chunked_kl
@@ -374,7 +376,9 @@ def evaluate_interventions(
 
             if i % checkpoint_every == 0 and save_path is not None and i != 0:
                 with open(save_path / f"{wandb.run.name}_{i}_result.json", "w") as f:
-                    json.dump(compute_result(), f)
+                    result = compute_result()
+                    result = add_random_means(result)
+                    json.dump(result, f)
 
     return compute_result()
 
@@ -429,32 +433,17 @@ if __name__ == "__main__":
     parser.add_argument("--skip-target-patch", action="store_true")
     parser.add_argument("--skip-vanilla", action="store_true")
     parser.add_argument("--skip-patching", action="store_true")
+    parser.add_argument("--add-base-only-latents", action="store_true")
     args = parser.parse_args()
     print(f"using args: {args}")
-    chat_model = AutoModelForCausalLM.from_pretrained(
-        "google/gemma-2-2b-it",
-        torch_dtype=th.bfloat16,
-        device_map=args.chat_device,
-        attn_implementation="eager",
-    )
-
-    tokenizer = AutoTokenizer.from_pretrained("google/gemma-2-2b-it")
-    tokenizer.chat_template = gemma_chat_template
-    chat_model.tokenizer = tokenizer
-    base_model = AutoModelForCausalLM.from_pretrained(
-        "google/gemma-2-2b",
-        device_map=args.base_device,
-        torch_dtype=th.bfloat16,
-        attn_implementation="eager",
-    )
     dataset = load_dataset(args.dataset, split=args.split)
     device = (
         args.device
         if args.device != "auto"
         else "cuda" if th.cuda.is_available() else "cpu"
     )
-    crosscoder = load_crosscoder(args.crosscoder).to(device)
     seeds = list(range(args.num_seeds))
+    crosscoder = load_crosscoder(args.crosscoder).to(device)
     percentages = args.percentage
     fn_dict, infos = create_acl_half_fns(
         crosscoder,
@@ -465,6 +454,7 @@ if __name__ == "__main__":
         skip_target_patch=args.skip_target_patch,
         skip_vanilla=args.skip_vanilla,
         skip_patching=args.skip_patching,
+        add_base_only_latents=args.add_base_only_latents,
     )
     if args.test:
         fn_dict = create_acl_vanilla_half_fns()
@@ -476,7 +466,7 @@ if __name__ == "__main__":
     if args.name is None and args.test:
         args.name = "test"
         print(f"Testing using {args.name}")
-    args.name = args.name + "_" + generate_slug(2)
+    args.name = str(int(time.time())) + "_" + args.name + "_" + generate_slug(2)
     project = "perplexity-comparison"
     if args.test:
         project += "-test"
@@ -498,6 +488,22 @@ if __name__ == "__main__":
             f,
         )
     # input("breakpoint")
+    chat_model = AutoModelForCausalLM.from_pretrained(
+        "google/gemma-2-2b-it",
+        torch_dtype=th.bfloat16,
+        device_map=args.chat_device,
+        attn_implementation="eager",
+    )
+
+    tokenizer = AutoTokenizer.from_pretrained("google/gemma-2-2b-it")
+    tokenizer.chat_template = gemma_chat_template
+    chat_model.tokenizer = tokenizer
+    base_model = AutoModelForCausalLM.from_pretrained(
+        "google/gemma-2-2b",
+        device_map=args.base_device,
+        torch_dtype=th.bfloat16,
+        attn_implementation="eager",
+    )
     result = evaluate_interventions(
         base_model,
         chat_model,
@@ -512,49 +518,8 @@ if __name__ == "__main__":
         checkpoint_every=args.checkpoint,
     )
 
-    # Add mean across random seeds for each metric type
-    for metric_type, metrics in result.items():
-        # For each metric (e.g. 'loss', 'kl-instruct', etc.)
-        for metric_name, setups in metrics.items():
-            # Group random setups by their base pattern
-            random_groups = {}
-            for setup_name, setup_data in setups.items():
-                # Check if this is a random setup
-                if "random" in setup_name and setup_name != "random":
-                    # Extract the base pattern by replacing randomX with random
-                    base_pattern = re.sub(r"random\d+", "random", setup_name)
-                    if base_pattern not in random_groups:
-                        random_groups[base_pattern] = []
-                    random_groups[base_pattern].append((setup_name, setup_data))
-
-            # Compute means for each group
-            for base_pattern, random_setups in random_groups.items():
-                if len(random_setups) > 0:  # Only process if we found random setups
-                    means = []
-                    vars = []
-                    ns = []
-                    for _, setup_data in random_setups:
-                        means.append(setup_data["mean"])
-                        vars.append(setup_data["var"])
-                        ns.append(setup_data["count"])
-
-                    # Compute pooled statistics
-                    total_n = sum(ns)
-                    # Weighted mean
-                    mean = sum(m * n for m, n in zip(means, ns)) / total_n
-                    # Pooled variance (considering both within-group and between-group variance)
-                    within_var = sum((v * n) for v, n in zip(vars, ns)) / total_n
-                    between_var = (
-                        sum(n * (m - mean) ** 2 for m, n in zip(means, ns)) / total_n
-                    )
-                    pooled_var = within_var + between_var
-
-                    # Add the mean entry to the data
-                    setups[base_pattern] = {
-                        "mean": mean,
-                        "variance": pooled_var,
-                        "count": total_n,
-                    }
+    # Add mean across random seeds
+    result = add_random_means(result)
 
     args.save_path.mkdir(parents=True, exist_ok=True)
     with open(args.save_path / f"{wdb_name}_result.json", "w") as f:

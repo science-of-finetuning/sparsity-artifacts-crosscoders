@@ -468,6 +468,7 @@ def create_acl_half_fns(
     skip_target_patch=False,
     skip_vanilla=False,
     skip_patching=False,
+    add_base_only_latents=False,
 ) -> dict[str, HalfStepPreprocessFn]:
     """
     datasets:
@@ -505,6 +506,7 @@ def create_acl_half_fns(
         percentages,
         columns,
         skip_target_patch,
+        add_base_only_latents,
     )
     half_fns.update(half_fns_crosscoder)
 
@@ -522,6 +524,7 @@ def create_acl_crosscoder_half_fns(
         "beta_ratio_error",
         "base uselessness score",
     ],
+    add_base_only_latents: bool = False,
     skip_target_patch=False,
 ):
     half_fns = {}
@@ -562,6 +565,8 @@ def create_acl_crosscoder_half_fns(
                         activation_processor=preprocess_fn,
                     )
     full_df = load_latent_df(crosscoder_name).query("lmsys_dead == False")
+    base_only_latents = full_df.query("tag == 'Base only'").index.values
+    assert len(base_only_latents) > 0, "No base only latents found"
     df = (
         full_df[
             [
@@ -601,6 +606,8 @@ def create_acl_crosscoder_half_fns(
     ]
     rank_sum = df["beta_ratio_reconstruction"].rank() + df["beta_ratio_error"].rank()
     df["rank_sum"] = rank_sum
+    full_df["rank_sum"] = np.nan
+    full_df.loc[df.index.values, "rank_sum"] = rank_sum
     rnd_latents_dict = {}
     infos = {"rnd latents": rnd_latents_dict}
     for perc in percentages:
@@ -665,7 +672,8 @@ def create_acl_crosscoder_half_fns(
                 if latents_type != "pareto" and perc == 100:
                     if not ("random" in latents_type and "chat" not in latents_type):
                         continue
-
+                if add_base_only_latents:
+                    latents = np.concatenate([latents, base_only_latents])
                 preprocess_fn = CrossCoderSteeringLatent(
                     crosscoder,
                     steer_activations_of="base",
@@ -673,15 +681,18 @@ def create_acl_crosscoder_half_fns(
                     continue_with="chat",  # doesn't matter as we use .result in mask
                     latents_to_steer=latents,
                 )
+                name = f"{column}-{latents_type}-{perc}pct"
+                if add_base_only_latents:
+                    name += "+base_only"
                 for continue_with in ["base", "chat"]:
-                    half_fns[
-                        f"patch_all_{column}-{latents_type}-{perc}pct_c{continue_with}"
-                    ] = CrossCoderSteeringLatent(
-                        crosscoder,
-                        steer_activations_of="base",
-                        steer_with_latents_from="chat",
-                        continue_with=continue_with,
-                        latents_to_steer=latents,
+                    half_fns[f"patch_all_{name}_c{continue_with}"] = (
+                        CrossCoderSteeringLatent(
+                            crosscoder,
+                            steer_activations_of="base",
+                            steer_with_latents_from="chat",
+                            continue_with=continue_with,
+                            latents_to_steer=latents,
+                        )
                     )
                     if skip_target_patch:
                         continue
@@ -692,7 +703,7 @@ def create_acl_crosscoder_half_fns(
                             [PatchCtrl, PatchKFirstPredictions, PatchKFirstAndCtrl],
                         ):
                             half_fns[
-                                f"patch_{column}-{latents_type}-{perc}pct->{patch_name}-{patch_target}_c{continue_with}"
+                                f"patch_{name}->{patch_name}-{patch_target}_c{continue_with}"
                             ] = patch_class(
                                 continue_with=continue_with,
                                 patch_target=patch_target,
