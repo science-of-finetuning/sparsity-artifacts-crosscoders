@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import torch as th
-
+from datasets import load_dataset
 from dictionary_learning.cache import PairedActivationCache
 
 from tools.compute_utils import *  # pylint: disable=unused-wildcard-import,wildcard-import
@@ -93,3 +93,11 @@ def mask_k_first_ones_vec(bool_tensor, k):
     # Keep only positions within the first k ones in each run.
     result_mask = bool_tensor & (rel_idx <= k)
     return result_mask
+
+
+def load_lmsys_formatted():
+    dataset = load_dataset(
+        "science-of-finetuning/lmsys-chat-1m-chat-formatted",
+        split="validation",
+    )
+    return dataset
