@@ -1,3 +1,6 @@
+import sys
+
+sys.path.append(".")
 from pathlib import Path
 from dictionary_learning.cache import PairedActivationCache
 import torch as th
@@ -8,6 +11,7 @@ import json
 import argparse
 
 from dictionary_learning import CrossCoder
+from tools.utils import load_activation_dataset
 
 
 def compute_feature_metrics(
@@ -112,42 +116,19 @@ def main(n, batch_size, d_batch_size, twins_file, data_store):
     DATA_STORE = Path(data_store)
     activation_store_dir = DATA_STORE / "activations"
 
-    base_model_dir = activation_store_dir / BASE_MODEL
-    instruct_model_dir = activation_store_dir / INSTRUCT_MODEL
-
-    base_model_fineweb = base_model_dir / "fineweb-1m-sample" / "validation"
-    base_model_lmsys_chat = (
-        base_model_dir / "lmsys-chat-1m-gemma-formatted" / "validation"
-    )
-    instruct_model_fineweb = instruct_model_dir / "fineweb-1m-sample" / "validation"
-    instruct_model_lmsys_chat = (
-        instruct_model_dir / "lmsys-chat-1m-gemma-formatted" / "validation"
+    fineweb_cache, lmsys_cache = load_activation_dataset(
+            activation_store_dir,
+            base_model=BASE_MODEL,
+            instruct_model=INSTRUCT_MODEL,
+            layer=13,
+            split="validation"
     )
 
-    submodule_name = f"layer_13_out"
-
-    fineweb_cache = PairedActivationCache(
-        base_model_fineweb / submodule_name, instruct_model_fineweb / submodule_name
-    )
-    lmsys_chat_cache = PairedActivationCache(
-        base_model_lmsys_chat / submodule_name,
-        instruct_model_lmsys_chat / submodule_name,
-    )
-
-    dataset = th.utils.data.ConcatDataset([fineweb_cache, lmsys_chat_cache])
-
-    validation_size = 10**6
-    train_dataset, validation_dataset = th.utils.data.random_split(
-        dataset, [len(dataset) - validation_size, validation_size]
-    )
+    dataset = th.utils.data.ConcatDataset([fineweb_cache, lmsys_cache])
 
     crosscoder.decoder.weight.shape
     it_decoder = crosscoder.decoder.weight[1, :, :].clone()
     base_decoder = crosscoder.decoder.weight[0, :, :].clone()
-
-    test_idx = th.randint(0, len(validation_dataset), (n,))
-    # Get the text indices from the validation dataset
-    dataset = th.utils.data.Subset(validation_dataset, test_idx)
 
     print("Number of activations: ", len(dataset))
 
