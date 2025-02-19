@@ -118,6 +118,71 @@ class TestMaskPreprocessFn(IdentityPreprocessFn):
         )
 
 
+class PatchProjectionFromDiff(IdentityPreprocessFn):
+    """Preprocessing function that projects the difference between two activations to another activation.
+
+    Args:
+        continue_with: Which model should complete generation ("base" or "chat")
+        patch_target: Which model activations to patch ("base" or "chat")
+        vectors_to_project: Tensor of shape (n,d) where n is the number of vectors to project the difference to.
+        scale_steering_latent: Scale factor for the projection strength
+    """
+
+    def __init__(
+        self,
+        continue_with: Literal["base", "chat"],
+        patch_target: Literal["base", "chat"],
+        vectors_to_project: th.Tensor,
+        scale_steering_latent: float = 1.0,
+    ):
+        super().__init__(continue_with)
+        if vectors_to_project.ndim == 1:
+            vectors_to_project = vectors_to_project.unsqueeze(0)
+        self.patch_target = ensure_model(patch_target)
+        self.vectors_to_project = vectors_to_project
+        self.scale_steering_latent = scale_steering_latent
+
+    def get_patch_steering_vector(self, base_activations, chat_activations):
+        diff = chat_activations - base_activations
+        scale = self.scale_steering_latent
+        if self.patch_target == "chat":
+            scale = -scale
+        return (
+            th.einsum("bsd, nd -> bsn", diff, self.vectors_to_project).unsqueeze(-1)
+            * self.vectors_to_project
+            * scale
+        ).sum(dim=-2)
+
+    def preprocess(self, base_activations, chat_activations, **kwargs):
+        steering_vector = self.get_patch_steering_vector(
+            base_activations, chat_activations
+        )
+        target_acts = (
+            base_activations if self.patch_target == "base" else chat_activations
+        )
+        return self.continue_with_model(target_acts + steering_vector)
+
+
+class SteeringVector(IdentityPreprocessFn):
+    """Preprocessing function that steers activations using a steering vector."""
+
+    def __init__(
+        self,
+        continue_with: Literal["base", "chat"],
+        patch_target: Literal["base", "chat"],
+        vector: th.Tensor,
+    ):
+        super().__init__(continue_with)
+        self.patch_target = ensure_model(patch_target)
+        self.vector = vector
+
+    def preprocess(self, base_activations, chat_activations, **kwargs):
+        target_acts = (
+            base_activations if self.patch_target == "base" else chat_activations
+        )
+        return self.continue_with_model(target_acts + self.vector)
+
+
 class CrossCoderReconstruction(IdentityPreprocessFn):
     """Preprocessing function that reconstructs activations using a CrossCoder model."""
 
