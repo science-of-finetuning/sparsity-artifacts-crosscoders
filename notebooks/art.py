@@ -17,7 +17,61 @@ mpl.rcParams['text.latex.preamble'] = r"\usepackage{amsmath}"
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+from tools.utils import load_json
+# %%
 
+
+
+def plot_twin_activation_divergence(buckets, title, stitle):
+    both_high = buckets[:, 3:, 3:].sum(axis=(1, 2))
+    only_A_high = buckets[:, 3:, :2].sum(axis=(1, 2))
+    only_B_high = buckets[:, :2, 3:].sum(axis=(1, 2))
+    A_high = buckets[:, 3:, :].sum(axis=(1, 2))
+    B_high = buckets[:, :, 3:].sum(axis=(1, 2))
+
+    exclusivity = (only_A_high + only_B_high) / (A_high + B_high - buckets[:, 3:, 3:].sum(axis=(1, 2)) + 1e-10)
+
+    # Create the histogram with improved styling
+    plt.figure(figsize=(8, 4))
+    plt.hist(exclusivity, bins=15, color='C3', alpha=0.8, edgecolor='black')
+
+    # Add grid for better readability
+    plt.grid(True, alpha=0.3, linestyle='--')
+
+    # Customize axis labels with LaTeX formatting
+    plt.xlabel(r"Twin Activation Divergence")#, fontsize=12)
+    plt.ylabel(r"Pair Count")#, fontsize=12)
+
+    # Add title if desired
+    # plt.title("Distribution of Twin Activation Divergence", pad=10)
+
+    # Customize ticks
+    plt.xticks(np.arange(0, 1.1, 0.2))
+    plt.yticks(np.arange(0, 30, 5))
+
+    # Optional: Add mean line
+    mean_exclusivity = np.mean(exclusivity)
+    plt.axvline(mean_exclusivity, color='darkred', linestyle='--', alpha=0.5, 
+                label=f'Mean: {mean_exclusivity:.2f}')
+    plt.legend()
+    if stitle:
+        plt.title(title)
+        
+
+    # Adjust layout
+    plt.tight_layout()
+    plt.savefig(Path("results") / f"twin_activation_divergence_{title}.pdf", bbox_inches="tight")
+    plt.show()
+val_results = load_json("../results/twin_stats/validation_twins-l13_crosscoder_stats_all.json")
+fw_buckets = val_results["fw_results"]["abs_max_act"]["buckets"]
+fw_buckets = np.array(fw_buckets)
+# plot_twin_activation_divergence(fw_buckets, "FineWeb", True)
+lmsys_buckets = val_results["lmsys_results"]["abs_max_act"]["buckets"]
+lmsys_buckets = np.array(lmsys_buckets)
+# plot_twin_activation_divergence(lmsys_buckets, "LMSYS", True)
+# merged buckets
+merged_buckets = fw_buckets + lmsys_buckets
+plot_twin_activation_divergence(merged_buckets, "merged", False)
 # %%
 green = "limegreen"
 dec_ratios = df["dec_norm_diff"][df["dead"] == False]
@@ -110,6 +164,7 @@ min(cosims)
 
 
 # %%
+from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -117,19 +172,20 @@ import matplotlib.pyplot as plt
 x = np.linspace(0, 100, 100)
 y = np.linspace(0, 100, 100)
 X, Y = np.meshgrid(x, y)
+arrow_factor = 4
 
 # Calculate the two functions
-f1 = np.sqrt(X) + np.sqrt(Y)  # sqrt(x) + sqrt(y)
-f2 = np.sqrt(X + Y)  # sqrt(x + y)
+f1 = np.sqrt(X**2) + np.sqrt(Y**2)  # sqrt(x^2) + sqrt(y^2)
+f2 = np.sqrt(X**2 + Y**2)  # sqrt(x^2 + y^2)
 
 
 # Calculate gradients for -f1 and -f2
 def gradient_f1(x, y):
-    return -1 / (2 * np.sqrt(x)), -1 / (2 * np.sqrt(y))
+    return -x/np.sqrt(x**2), -y/np.sqrt(y**2)
 
 
 def gradient_f2(x, y):
-    return -1 / (2 * np.sqrt(x + y)), -1 / (2 * np.sqrt(x + y))
+    return -x/np.sqrt(x**2 + y**2), -y/np.sqrt(x**2 + y**2)
 
 
 # Create figure with two subplots
@@ -154,7 +210,6 @@ im2 = ax2.imshow(
 plt.colorbar(im1, cax=ax3, label="Function value")
 
 # Add gradient arrows for first function
-arrow_factor = 50
 arrow_points = np.linspace(5, 95, 15)
 XX, YY = np.meshgrid(arrow_points, arrow_points)
 U1, V1 = gradient_f1(XX, YY)
@@ -171,7 +226,7 @@ ax1.quiver(
     scale_units="xy",
     scale=1,
 )
-ax1.set_title("$\sqrt{x} + \sqrt{y}$ with $-\\nabla f$ arrows")
+ax1.set_title("$\sqrt{x^2} + \sqrt{y^2}$ with $-\\nabla f$ arrows", pad=20)
 ax1.set_xlabel("X")
 ax1.set_ylabel("Y")
 
@@ -189,12 +244,12 @@ ax2.quiver(
     scale_units="xy",
     scale=1,
 )
-ax2.set_title("$\sqrt{x + y}$ with $-\\nabla f$ arrows")
+ax2.set_title("$\sqrt{x^2 + y^2}$ with $-\\nabla f$ arrows", pad=20)
 ax2.set_xlabel("X")
 ax2.set_ylabel("Y")
 
 plt.tight_layout()
-plt.savefig(Path("results") / "decoder_gradient.pdf", bbox_inches="tight")
+plt.savefig(Path("results") / "decoder_gradient_v2.pdf", bbox_inches="tight")
 plt.show()
 
 # %%
