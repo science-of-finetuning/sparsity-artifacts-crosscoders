@@ -1,10 +1,21 @@
 from pathlib import Path
 from argparse import ArgumentParser
+import sys
 
+from tqdm import tqdm
+import torch as th
+import numpy as np
 from dictionary_learning.cache import PairedActivationCache
 from dictionary_learning import CrossCoder
-import torch as th
-from tqdm import tqdm
+
+sys.path.append(str(Path(__file__).parent.parent))
+from tools.utils import (
+    save_json,
+    load_activation_dataset,
+    load_crosscoder,
+    load_latent_df,
+    push_latent_df,
+)
 
 # th.set_float32_matmul_precision("high")
 
@@ -30,36 +41,52 @@ if __name__ == "__main__":
         "--activation-cache-path", "-p", type=Path, default="./activations"
     )
     parser.add_argument("--dataset", default="lmsys-chat-1m-gemma-formatted")
-    parser.add_argument(
-        "--model",
-        type=str,
-        default="Butanium/gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04",
-    )
-    parser.add_argument("--local", action="store_false", dest="from_hub")
+    parser.add_argument("--crosscoder", type=str, default="l13_crosscoder")
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--layer", type=int, default=13)
     parser.add_argument("--batch-size", type=int, default=2048)
     args = parser.parse_args()
 
-    model = CrossCoder.from_pretrained(
-        args.model, from_hub=args.from_hub, device=args.device
-    )
+    crosscoder = load_crosscoder(args.crosscoder).to(args.device)
+    results = {}
+    for split in ["train", "validation"]:
+        fw_dataset, lmsys_dataset = load_activation_dataset(
+            args.activation_cache_path,
+            base_model="gemma-2-2b",
+            instruct_model="gemma-2-2b-it",
+            layer=args.layer,
+            split=split,
+        )
 
-    cache = PairedActivationCache(
-        args.activation_cache_path
-        / "gemma-2-2b"
-        / args.dataset
-        / "validation"
-        / f"layer_{args.layer}_out",
-        args.activation_cache_path
-        / "gemma-2-2b-it"
-        / args.dataset
-        / "validation"
-        / f"layer_{args.layer}_out",
-    )
-    max_activations = compute_max_activation(model, cache, args.device, args.batch_size)
-    path = (
-        Path("results") / f"max_activations_{args.model}_{args.dataset}_{args.layer}.pt"
-    )
+        max_activations_fw = compute_max_activation(
+            crosscoder, fw_dataset, args.device, args.batch_size
+        )
+        max_activations_lmsys = compute_max_activation(
+            crosscoder, lmsys_dataset, args.device, args.batch_size
+        )
+        results[split] = {
+            "max_activations_fw": max_activations_fw.tolist(),
+            "max_activations_lmsys": max_activations_lmsys.tolist(),
+        }
+    path = Path("results") / f"max_acts_{args.crosscoder}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    th.save(max_activations, path)
+    save_json(results, path)
+    df = load_latent_df()
+    # add max_act_train, max_act_val, max_act_train_lmsys, max_act_val_lmsys, max_act_train_fw, max_act_val_fw
+    df["max_act_train"] = np.maximum(
+        results["train"]["max_activations_fw"],
+        results["train"]["max_activations_lmsys"],
+    )
+    df["max_act_val"] = np.maximum(
+        results["validation"]["max_activations_fw"],
+        results["validation"]["max_activations_lmsys"],
+    )
+    df["max_act_lmsys_train"] = results["train"]["max_activations_lmsys"]
+    df["max_act_lmsys_val"] = results["validation"]["max_activations_lmsys"]
+    df["max_act_fw_train"] = results["train"]["max_activations_fw"]
+    df["max_act_fw_val"] = results["validation"]["max_activations_fw"]
+    push_latent_df(
+        df,
+        commit_message="Added max activations for all splits and datasets",
+        confirm=False,
+    )
