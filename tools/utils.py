@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import torch as th
@@ -95,9 +96,19 @@ def mask_k_first_ones_vec(bool_tensor, k):
     return result_mask
 
 
-def load_lmsys_formatted():
+def load_lmsys_formatted(split: str):
     dataset = load_dataset(
         "science-of-finetuning/lmsys-chat-1m-chat-formatted",
-        split="validation",
+        split=split,
     )
     return dataset
+
+
+def load_json(path: Path):
+    with open(path, "r") as f:
+        return json.load(f)
+
+
+def save_json(data, path: Path):
+    with open(path, "w") as f:
+        json.dump(data, f)

@@ -9,14 +9,13 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 import wandb
 from datasets import load_dataset
 import torch as th
-import re
 from scripts.edit_eval_results import add_random_means
 
 sys.path.append(str(Path(__file__).parent.parent))
 from tools.compute_utils import RunningMeanStd, chunked_kl
 from tools.setup_to_eval import HalfStepPreprocessFn
 from tools.split_gemma import split_gemma
-from tools.tokenization_utils import tokenize_with_ctrl_mask, gemma_chat_template
+from tools.tokenization_utils import tokenize_with_ctrl_mask, patch_tokenizer
 from tools.utils import mask_k_first_ones_vec
 from tools.setup_to_eval import (
     create_acl_half_fns,
@@ -169,6 +168,10 @@ def evaluate_interventions(
 
     base_model = split_gemma(base_model)
     chat_model = split_gemma(chat_model)
+    patch_tokenizer(
+        chat_model.tokenizer,
+        "google/gemma-2-2b-it",
+    )
 
     def compute_result():
         return {
@@ -496,7 +499,6 @@ if __name__ == "__main__":
     )
 
     tokenizer = AutoTokenizer.from_pretrained("google/gemma-2-2b-it")
-    tokenizer.chat_template = gemma_chat_template
     chat_model.tokenizer = tokenizer
     base_model = AutoModelForCausalLM.from_pretrained(
         "google/gemma-2-2b",

@@ -2,7 +2,11 @@ import pandas as pd
 import plotly.graph_objects as go
 import numpy as np
 import warnings
-from display_metrics.shared import load_metrics, format_setup_name, build_complete_dataframe
+from display_metrics.shared import (
+    load_metrics,
+    format_setup_name,
+    build_complete_dataframe,
+)
 
 data = load_metrics({{file_path}})
 
@@ -18,19 +22,19 @@ if df is None:
 else:
     # Filter for requested metric and categories
     df = df.loc[:, (categories, metric_type)]
-    
+
     # Find which setups are available in the data
     valid_setups = [s for s in requested_setups if s in df.index]
     missing_setups = [s for s in requested_setups if s not in df.index]
-    
+
     if missing_setups:
         print("Warning: Missing data for setups:", missing_setups)
-    
+
     if not valid_setups:
         print("No data available for any of the requested setups")
     else:
         df = df.loc[valid_setups]
-        df = df.dropna(axis=1, how='all')
+        df = df.dropna(axis=1, how="all")
 
         # Create plot
         fig = go.Figure()
@@ -82,10 +86,14 @@ else:
             showlegend=True,
             height=400,
             xaxis=dict(
-                ticktext=categories, tickvals=list(range(len(categories))), title="Category"
+                ticktext=categories,
+                tickvals=list(range(len(categories))),
+                title="Category",
             ),
             yaxis_title="Value",
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5),
+            legend=dict(
+                orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5
+            ),
             bargap=0,
         )
 

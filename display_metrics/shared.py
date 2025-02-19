@@ -119,7 +119,9 @@ def format_setup_name(setup: str) -> str:
             latent_type = LATENT_TYPE_NAMES.get(latent_type, latent_type)
 
         column_desc = COLUMN_NAMES.get(parsed["column"], parsed["column"])
-        base_only_suffix = " (with base only latents)" if parsed.get("has_base_only", False) else ""
+        base_only_suffix = (
+            " (with base only latents)" if parsed.get("has_base_only", False) else ""
+        )
         return f"CrossCoder: Steer {latent_type} latents ({parsed['perc']}%) using {column_desc}{base_only_suffix}, continue with {parsed['continue_with']}"
     elif parsed["kind"] == "error":
         other_model = "chat" if parsed["model"] == "base" else "base"
@@ -168,18 +170,22 @@ def build_complete_dataframe(data: dict) -> pd.DataFrame:
                 var = stats.get("var", None)
                 count = stats.get("count", None)
                 if mean is not None and var is not None and count is not None:
-                    rows.append({
-                        "mean": mean,
-                        "variance": var,
-                        "n": count,
-                    })
+                    rows.append(
+                        {
+                            "mean": mean,
+                            "variance": var,
+                            "n": count,
+                        }
+                    )
                     setups.append(setup)  # Add setup to index only when we add a row
             if rows:
                 df = pd.DataFrame(rows, index=setups)  # Use collected setups as index
                 # Add category and metric type to column names
-                df.columns = pd.MultiIndex.from_product([[category], [metric_type], df.columns])
+                df.columns = pd.MultiIndex.from_product(
+                    [[category], [metric_type], df.columns]
+                )
                 all_data[f"{category}_{metric_type}"] = df
-    
+
     if all_data:
         return pd.concat(all_data.values(), axis=1)
     return None

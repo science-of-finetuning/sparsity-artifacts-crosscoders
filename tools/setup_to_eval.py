@@ -10,12 +10,12 @@ from tools.halfway_interventions import (
     PatchCtrl,
     PatchKFirstPredictions,
     PatchKFirstAndCtrl,
+    SteeringVector,
+    PatchProjectionFromDiff,
 )
 from tools.cc_utils import load_latent_df
 
 INTERESTING_LATENTS = [72073, 46325, 51408, 31726, 10833, 39938, 1045]
-
-
 
 
 def create_acl_vanilla_half_fns() -> dict[str, HalfStepPreprocessFn]:
@@ -322,3 +322,29 @@ def create_acl_crosscoder_half_fns(
                             )
 
     return half_fns, infos
+
+
+def baseline_diffs_half_fns(
+    mean_diff: th.Tensor, pca_vectors: list[th.Tensor]
+) -> dict[str, HalfStepPreprocessFn]:
+
+    half_fns = {
+        "steer_mean_diff": SteeringVector(
+            continue_with="chat",
+            patch_target="base",
+            vector=mean_diff,
+        )
+    }
+    for i, vector in enumerate(pca_vectors):
+        half_fns[f"add_diff-pca_proj_{i}"] = PatchProjectionFromDiff(
+            continue_with="chat",
+            patch_target="base",
+            vector=vector,
+        )
+        half_fns[f"rm_diff-pca_proj_{i}"] = PatchProjectionFromDiff(
+            continue_with="chat",
+            patch_target="chat",
+            vector=vector,
+        )
+        half_fns[f"add_diff-pca_proj_:{i}"]
+    return half_fns

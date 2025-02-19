@@ -53,6 +53,7 @@ def push_latent_df(
         force: if True, push the df even if there are missing columns
         allow_remove_columns: if not None, a list of columns to allow to be removed
         commit_message: the commit message to use for the push
+        confirm: if True, ask the user to confirm the push
     """
     if crosscoder is None:
         crosscoder = "l13_crosscoder"
@@ -63,7 +64,7 @@ def push_latent_df(
         allow_remove_columns = (
             set(allow_remove_columns) if allow_remove_columns is not None else set()
         )
-        missing_columns = original_columns - new_columns - allow_remove_columns
+        missing_columns = original_columns - new_columns
         added_columns = new_columns - original_columns
         shared_columns = original_columns & new_columns
         duplicated_columns = df.columns.duplicated()
@@ -72,13 +73,19 @@ def push_latent_df(
                 f"Duplicated columns in uploaded df: {df.columns[duplicated_columns]}"
             )
         if len(missing_columns) > 0:
-            if force:
-                warnings.warn(f"Missing columns in uploaded df: {missing_columns}")
-            else:
+            real_missing_columns = missing_columns - allow_remove_columns
+            if len(real_missing_columns) > 0 and not force:
                 raise ValueError(
                     f"Missing columns in uploaded df: {missing_columns}\n"
                     "If you want to upload the df anyway, set allow_remove_columns=your_removed_columns"
-                    " and force=True"
+                    " or force=True"
+                )
+            elif len(missing_columns) > 0 and len(real_missing_columns) == 0:
+                print(f"Removed columns in uploaded df: {missing_columns}")
+            else:
+                warnings.warn(
+                    f"Missing columns in uploaded df: {missing_columns}\n"
+                    "Force=True -> Upload df anyway"
                 )
 
         if len(added_columns) > 0 and not force:

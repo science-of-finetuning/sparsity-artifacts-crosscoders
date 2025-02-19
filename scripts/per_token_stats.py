@@ -28,7 +28,7 @@ from datasets import load_dataset
 import plotly.express as px
 
 sys.path.append(".")
-from tools.utils import tokenize_with_ctrl_ids, gemma_chat_template
+from tools.utils import tokenize_with_ctrl_ids, patch_tokenizer
 
 
 def remove_bos(mask):
@@ -648,7 +648,7 @@ if __name__ == "__main__":
         tokenizer_kwargs={"padding_side": "right"},
         device_map=args.it_device,
     )
-    it_model.tokenizer.chat_template = gemma_chat_template
+    patch_tokenizer(it_model.tokenizer, "gemma-2-2b-it")
     crosscoder = CrossCoder.from_pretrained(
         "Butanium/gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04",
         from_hub=True,

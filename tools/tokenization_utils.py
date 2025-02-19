@@ -1,18 +1,33 @@
 from pathlib import Path
+import warnings
 import torch as th
+import re
+
+
+class TokenizerNoCtrlTemplateProxy:
+    def __init__(self, tokenizer):
+        self.tokenizer = tokenizer
+
+    def __getattr__(self, name):
+        if name == "ctrl_template":
+            raise AttributeError(
+                "Tokenizer was not patched with a control template, so can't be used to compute a control mask"
+            )
+        return getattr(self.tokenizer, name)
+
 
 template_path = Path(__file__).parent.parent / "templates"
 with open(template_path / "gemma_chat_template.jinja", "r") as f:
-    gemma_chat_template = f.read()
-    chat_template = gemma_chat_template  # for backwards compatibility
+    GEMMA_CHAT_TEMPLATE = f.read()
+    chat_template = GEMMA_CHAT_TEMPLATE  # for backwards compatibility
 with open(template_path / "gemma_chat_template_ctrl_tokens.jinja", "r") as f:
-    ctrl_template = f.read()
+    CTRL_TEMPLATE = f.read()
 with open(template_path / "customizable_gemma_chat_template.jinja", "r") as f:
-    customizable_chat_template = f.read()
+    CUSTOMIZABLE_CHAT_TEMPLATE = f.read()
 with open(
     template_path / "customizable_gemma_chat_template_ctrl_tokens.jinja", "r"
 ) as f:
-    customizable_ctrl_template = f.read()
+    CUSTOMIZABLE_CTRL_TEMPLATE = f.read()
 
 sample_batch = [
     [
@@ -30,6 +45,34 @@ sample_batch = [
         {"role": "assistant", "content": "My favorite color is blue."},
     ],
 ]
+
+
+def patch_tokenizer(
+    tokenizer, model_name: str, ctrl_template: str = None, chat_template: str = None
+):
+    if model_name in ("google/gemma-2-2b-it", "gemma-2"):
+        tokenizer.chat_template = GEMMA_CHAT_TEMPLATE
+        tokenizer.ctrl_template = CTRL_TEMPLATE
+    else:
+        if chat_template is not None:
+            tokenizer.chat_template = chat_template
+        if ctrl_template is None:
+            warnings.warn(
+                f"No control template provided, you won't be able to use the control token mask for {model_name}"
+            )
+            tokenizer = TokenizerNoCtrlTemplateProxy(tokenizer)
+        else:
+            tokenizer.ctrl_template = ctrl_template
+        if tokenizer.chat_template is None:
+            raise ValueError(
+                "Tokenizer has no chat template, please provide one in the tokenizer_kwargs"
+            )
+        generation_pattern = re.compile(r"\{%\s*generation\s*%\}")
+        if not generation_pattern.search(tokenizer.chat_template):
+            raise ValueError(
+                f"Chat template for {model_name}"
+                " does not contain {% generation %} keyword"
+            )
 
 
 def sanitize(tok):
@@ -61,7 +104,7 @@ def tokenize_with_ctrl_mask(
             return_tensors="pt",
             return_assistant_tokens_mask=True,
             return_dict=True,
-            chat_template=ctrl_template,
+            chat_template=tokenizer.ctrl_template,
         )
     )
     ctrl_tok_dict = tokenizer.apply_chat_template(
@@ -149,9 +192,9 @@ def custom_chat_template(
             len(tokenizer.tokenize(assistant_token)) == 1
         ), "assistant_token must be a single token"
     if ctrl_tokens:
-        template = customizable_ctrl_template
+        template = CUSTOMIZABLE_CTRL_TEMPLATE
     else:
-        template = customizable_chat_template
+        template = CUSTOMIZABLE_CHAT_TEMPLATE
     template = (
         template.replace("<start_of_turn>", sanitize(start_of_turn_token))
         .replace("<end_of_turn>", sanitize(end_of_turn_token))
@@ -159,9 +202,9 @@ def custom_chat_template(
         .replace("model", sanitize(assistant_token))
     )
     if ctrl_tokens:
-        original_template = ctrl_template
+        original_template = CTRL_TEMPLATE
     else:
-        original_template = gemma_chat_template
+        original_template = GEMMA_CHAT_TEMPLATE
     if enforce_length:
         tokenized = tokenizer.apply_chat_template(
             sample_batch,

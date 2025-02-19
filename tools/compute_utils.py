@@ -343,7 +343,7 @@ def compute_entropy(batch, model, pred_mask):
 
 # https://github.com/DLR-RM/stable-baselines3/blob/master/stable_baselines3/common/running_mean_std.py
 class RunningMeanStd:
-    def __init__(self):
+    def __init__(self, keep_samples=False):
         """
         Calculates the running mean and std of a data stream
         https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance#Parallel_algorithm
@@ -354,6 +354,8 @@ class RunningMeanStd:
         self.mean = None
         self.var = None
         self.count = 0
+        self.keep_samples = keep_samples
+        self.samples = []
 
     def copy(self) -> "RunningMeanStd":
         """
@@ -375,6 +377,8 @@ class RunningMeanStd:
         self.update_from_moments(other.mean, other.var, other.count)
 
     def update(self, arr: th.Tensor) -> None:
+        if self.keep_samples:
+            self.samples.append(arr.cpu())
         batch_mean = arr.double().mean(dim=0)
         batch_var = arr.double().var(dim=0)
         batch_count = arr.shape[0]
@@ -420,9 +424,14 @@ class RunningMeanStd:
             mean, var, count
         """
         if return_dict:
-            return {
+            dic = {
                 "mean": self.mean.item(),
                 "var": self.var.item(),
                 "count": self.count,
             }
+            if self.keep_samples:
+                dic["samples"] = th.cat(self.samples, dim=0)
+            return dic
+        if self.keep_samples:
+            return self.mean, self.var, self.count, th.cat(self.samples, dim=0)
         return self.mean, self.var, self.count

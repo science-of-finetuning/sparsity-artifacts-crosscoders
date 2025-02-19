@@ -386,19 +386,19 @@ def display_metrics(data, current_file=None):
         # Display current file if provided
         if current_file:
             st.markdown(f"**Current file:** `{current_file}`")
-            
+
             # Add Save DataFrame button right after file display
             if st.button("Save All Data to CSV"):
                 # Create csv path from json path
-                csv_path = current_file.rsplit('.', 1)[0] + '_all_metrics.csv'
-                
+                csv_path = current_file.rsplit(".", 1)[0] + "_all_metrics.csv"
+
                 complete_df = build_complete_dataframe(data)
                 if complete_df is not None:
                     complete_df.to_csv(csv_path)
                     st.success(f"Complete DataFrame saved to {csv_path}")
                 else:
                     st.error("No data available to save")
-                    
+
             st.markdown("---")
 
         # Add CSS for tooltips and buttons

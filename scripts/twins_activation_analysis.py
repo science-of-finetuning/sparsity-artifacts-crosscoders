@@ -2,10 +2,9 @@ from pathlib import Path
 import json
 import argparse
 import sys
+import os
 import torch as th
-import numpy as np
 from tqdm.auto import tqdm
-from coolname import generate_slug
 
 sys.path.append(".")
 from tools.utils import load_latent_df, load_crosscoder, load_activation_dataset
@@ -17,26 +16,40 @@ def compute_feature_metrics(
     crosscoder_name,
     twins_file,
     device="cpu",
+    abosulte_max_act=False,
 ):
     """Compute bucketed activation statistics for twin features"""
 
     with open(twins_file, "r") as f:
         twins = json.load(f)
     all_latents = sum(twins, [])
+    left_latents = [p[0] for p in twins]
+    right_latents = [p[1] for p in twins]
 
     # Load max activations from latent df
     df = load_latent_df(crosscoder_name)
     crosscoder = load_crosscoder(crosscoder_name).to(device)
-    max_acts = (
-        th.tensor(
-            np.maximum(df["lmsys_ctrl_max_act"], df["lmsys_non_ctrl_max_act"]),
-            device=device,
-        )
-        .to(device)
-        .nan_to_num(nan=1e-6)
-        .clamp(min=1e-6)[all_latents]
-    )
+    if abosulte_max_act:
+        max_acts = th.maximum(
+            th.from_numpy(df["max_act_train"][left_latents].values),
+            th.from_numpy(df["max_act_train"][right_latents].values),
+        ).clamp(
+            min=1e-6
+        )  # shape: (len(twins))
+        max_acts = sum([[mact] * 2 for mact in max_acts], [])
+        max_acts = th.tensor(max_acts, device=device)
 
+    else:
+        max_acts = (
+            th.tensor(
+                df["max_act_train"],
+                device=device,
+            )
+            .to(device)
+            .clamp(min=1e-6)[all_latents]
+        )
+    assert not max_acts.isnan().any(), "Max activations contain NaNs"
+    assert max_acts.shape == (len(all_latents),), "Max activations have wrong shape"
     # Create bucket boundaries based on max activations
     bucket_edges = th.tensor([1e-6, 0.1, 0.4, 0.7], device=device)
 
@@ -97,35 +110,43 @@ def main(n, batch_size, twins_file, data_store, crosscoder_name, split):
     if n is not None:
         fw_dataset = th.utils.data.Subset(fw_dataset, th.arange(0, n))
         lmsys_dataset = th.utils.data.Subset(lmsys_dataset, th.arange(0, n))
-
+    num_works = min(10, os.cpu_count())
     # Create DataLoader for batch processing
     fw_dataloader = th.utils.data.DataLoader(
         fw_dataset,
         batch_size=batch_size,
         shuffle=False,
         pin_memory=True,
-        num_workers=10,
+        num_workers=num_works,
     )
     lmsys_dataloader = th.utils.data.DataLoader(
         lmsys_dataset,
         batch_size=batch_size,
         shuffle=False,
         pin_memory=True,
-        num_workers=10,
+        num_workers=num_works,
     )
 
-    fw_results = compute_feature_metrics(
-        fw_dataloader,
-        crosscoder_name,
-        twins_file,
-        device="cuda:0",
-    )
-    lmsys_results = compute_feature_metrics(
-        lmsys_dataloader,
-        crosscoder_name,
-        twins_file,
-        device="cuda:0",
-    )
+    fw_results = {
+        ("abs_max_act" if ama else "rel_max_act"): compute_feature_metrics(
+            fw_dataloader,
+            crosscoder_name,
+            twins_file,
+            device="cuda:0",
+            abosulte_max_act=ama,
+        )
+        for ama in [True, False]
+    }
+    lmsys_results = {
+        ("abs_max_act" if ama else "rel_max_act"): compute_feature_metrics(
+            lmsys_dataloader,
+            crosscoder_name,
+            twins_file,
+            device="cuda:0",
+            abosulte_max_act=ama,
+        )
+        for ama in [True, False]
+    }
     results = {
         "fw_results": fw_results,
         "lmsys_results": lmsys_results,
@@ -134,10 +155,8 @@ def main(n, batch_size, twins_file, data_store, crosscoder_name, split):
     save_path = Path("results") / "twin_stats"
     save_path.mkdir(parents=True, exist_ok=True)
     # make paths
-    file = (
-        save_path
-        / f"{split}_twins{generate_slug(2)}-{crosscoder_name}_activation_statistics_N{n}.json"
-    )
+    str_n = f"N{n}" if n is not None else "all"
+    file = save_path / f"{split}_twins-{crosscoder_name}_stats_{str_n}.json"
     with open(file, "w") as f:
         json.dump(results, f)
 
@@ -154,10 +173,10 @@ if __name__ == "__main__":
         help="Number of activations to load from validation set (default: 100,000)",
     )
     parser.add_argument(
-        "--batch_size",
+        "--batch-size",
         type=int,
         default=4096,
-        help="Batch size over N dimension (default: 1024)",
+        help="Batch size over N dimension (default: 4096)",
     )
     parser.add_argument(
         "--twins-file",
@@ -166,7 +185,7 @@ if __name__ == "__main__":
         default="data/twins.json",
     )
     parser.add_argument(
-        "--data-store", type=str, required=True, help="Path to data store"
+        "--data-store", type=str, help="Path to data store", default="."
     )
     parser.add_argument(
         "--crosscoder-name",
