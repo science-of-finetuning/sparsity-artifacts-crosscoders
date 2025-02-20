@@ -1,5 +1,6 @@
 from pathlib import Path
 import json
+import numpy as np
 import argparse
 import sys
 import os
@@ -7,7 +8,13 @@ import torch as th
 from tqdm.auto import tqdm
 
 sys.path.append(".")
-from tools.utils import load_latent_df, load_crosscoder, load_activation_dataset
+from tools.utils import (
+    load_latent_df,
+    load_crosscoder,
+    load_activation_dataset,
+    push_latent_df,
+    load_json,
+)
 
 
 @th.no_grad()
@@ -20,14 +27,18 @@ def compute_feature_metrics(
 ):
     """Compute bucketed activation statistics for twin features"""
 
-    with open(twins_file, "r") as f:
-        twins = json.load(f)
-    all_latents = sum(twins, [])
-    left_latents = [p[0] for p in twins]
-    right_latents = [p[1] for p in twins]
+    pairs = load_json(twins_file)
+    all_latents = sum(pairs, [])
+    left_latents = [p[0] for p in pairs]
+    right_latents = [p[1] for p in pairs]
 
     # Load max activations from latent df
     df = load_latent_df(crosscoder_name)
+    if "max_act_train" not in df.columns:
+        raise ValueError(
+            "max_act_train column not found in latent df,"
+            "please run scripts/compute_max_activations.py"
+        )
     crosscoder = load_crosscoder(crosscoder_name).to(device)
     if abosulte_max_act:
         max_acts = th.maximum(
@@ -160,6 +171,40 @@ def main(n, batch_size, twins_file, data_store, crosscoder_name, split):
     with open(file, "w") as f:
         json.dump(results, f)
 
+    fw_buckets = results["fw_results"]["abs_max_act"]["buckets"]
+    fw_buckets = np.array(fw_buckets)
+    # plot_twin_activation_divergence(fw_buckets, "FineWeb", True)
+    lmsys_buckets = results["lmsys_results"]["abs_max_act"]["buckets"]
+    lmsys_buckets = np.array(lmsys_buckets)
+    # plot_twin_activation_divergence(lmsys_buckets, "LMSYS", True)
+    # merged buckets
+    merged_buckets = fw_buckets + lmsys_buckets
+
+    df = load_latent_df(crosscoder_name)
+    pairs = load_json(twins_file)
+    split = "val" if split == "validation" else split
+    for data_name, buckets in zip(
+        ["_fw", "_lmsys", ""], [fw_buckets, lmsys_buckets, merged_buckets]
+    ):
+        only_A_high = buckets[:, 3:, :2].sum(axis=(1, 2))
+        only_B_high = buckets[:, :2, 3:].sum(axis=(1, 2))
+        A_high = buckets[:, 3:, :].sum(axis=(1, 2))
+        B_high = buckets[:, :, 3:].sum(axis=(1, 2))
+        exclusivity = (only_A_high + only_B_high) / (
+            A_high + B_high - buckets[:, 3:, 3:].sum(axis=(1, 2)) + 1e-10
+        )
+        df[f"twin_div{data_name}_{split}"] = np.nan
+        for i, (chat_idx, base_idx) in enumerate(pairs):
+            df.loc[chat_idx, f"twin_div{data_name}_{split}"] = exclusivity[i]
+            df.loc[base_idx, f"twin_div{data_name}_{split}"] = exclusivity[i]
+
+    push_latent_df(
+        df,
+        crosscoder_name,
+        commit_message=f"Added twin activation divergences for {split} set",
+        confirm=False,
+    )
+
 
 if __name__ == "__main__":
     # Add argument parsing
@@ -170,7 +215,7 @@ if __name__ == "__main__":
         "-n",
         type=int,
         default=None,
-        help="Number of activations to load from validation set (default: 100,000)",
+        help="Number of activations to load from validation set (default: all)",
     )
     parser.add_argument(
         "--batch-size",
