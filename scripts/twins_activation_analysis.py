@@ -27,10 +27,10 @@ def compute_feature_metrics(
 ):
     """Compute bucketed activation statistics for twin features"""
 
-    pairs = load_json(twins_file)
-    all_latents = sum(pairs, [])
-    left_latents = [p[0] for p in pairs]
-    right_latents = [p[1] for p in pairs]
+    twins = load_json(twins_file)
+    all_latents = sum(twins, [])
+    left_latents = [p[0] for p in twins]
+    right_latents = [p[1] for p in twins]
 
     # Load max activations from latent df
     df = load_latent_df(crosscoder_name)
