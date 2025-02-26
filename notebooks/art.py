@@ -19,7 +19,11 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from tools.utils import load_json
 # %%
-
+"""
+==========================
+Twin Activation Divergence
+==========================
+"""
 
 
 def plot_twin_activation_divergence(buckets, title, stitle):
@@ -73,8 +77,18 @@ lmsys_buckets = np.array(lmsys_buckets)
 merged_buckets = fw_buckets + lmsys_buckets
 plot_twin_activation_divergence(merged_buckets, "merged", False)
 # %%
+"""
+========================
+Relative Norm Difference
+========================
+"""
+
+dec_df = pd.read_csv("/workspace/clement/repos/representation-structure-comparison/results/eval_crosscoder/gemma-2-2b-L13-mu5.2e-02-lr1e-04-local-shuffling-SAEloss_model_final.pt/data/feature_df.csv")
+if "dead" not in dec_df.columns:
+    print("no dead column")
+    dec_df["dead"] = False
 green = "limegreen"
-dec_ratios = df["dec_norm_diff"][df["dead"] == False]
+dec_ratios = dec_df["dec_norm_diff"][dec_df["dead"] == False]
 values = 1 - dec_ratios
 plt.figure(figsize=(6, 4.))
 hist, bins, _ = plt.hist(values, bins=100, color="lightgray", label="Other")
