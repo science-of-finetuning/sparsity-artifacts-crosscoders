@@ -28,12 +28,18 @@ def load_latent_df(crosscoder=None):
     """Load the latent_df for the given crosscoder."""
     if crosscoder is None:
         crosscoder = "l13_crosscoder"
-    df_path = hf_hub_download(
-        repo_id=df_hf_repo[crosscoder],
-        filename="feature_df.csv",
-        repo_type="dataset",
-    )
-    return pd.read_csv(df_path, index_col=0)
+    if crosscoder in df_hf_repo:
+        df_path = hf_hub_download(
+            repo_id=df_hf_repo[crosscoder],
+            filename="feature_df.csv",
+            repo_type="dataset",
+        )
+    else:
+        df_path = Path(crosscoder)
+        if not df_path.exists():
+            raise ValueError(f"Unknown crosscoder: {crosscoder}")
+    df = pd.read_csv(df_path, index_col=0)
+    return df
 
 
 def push_latent_df(
@@ -269,7 +275,11 @@ def load_crosscoder(crosscoder=None):
     elif crosscoder == "connor":
         return load_connor_crosscoder()
     else:
-        raise ValueError(f"Unknown crosscoder: {crosscoder}")
+        path = Path(crosscoder)
+        if path.exists():
+            return CrossCoder.from_pretrained(path)
+        else:
+            raise ValueError(f"Unknown crosscoder: {crosscoder}")
 
 
 crosscoders = defaultdict(lambda: None)
