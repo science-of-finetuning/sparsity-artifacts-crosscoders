@@ -1,15 +1,33 @@
 from pathlib import Path
+import warnings
 import torch as th
+import re
+
+
+class TokenizerNoCtrlTemplateProxy:
+    def __init__(self, tokenizer):
+        self.tokenizer = tokenizer
+
+    def __getattr__(self, name):
+        if name == "ctrl_template":
+            raise AttributeError(
+                "Tokenizer was not patched with a control template, so can't be used to compute a control mask"
+            )
+        return getattr(self.tokenizer, name)
 
 
 template_path = Path(__file__).parent.parent / "templates"
-with open(template_path / "gemma_chat_template_ctrl_tokens.jinja", "r") as f:
-    ctrl_template = f.read()
 with open(template_path / "gemma_chat_template.jinja", "r") as f:
-    chat_template = f.read()
-with open(template_path / "base_gemma_chat_template.jinja", "r") as f:
-    base_chat_template = f.read()
-
+    GEMMA_CHAT_TEMPLATE = f.read()
+    chat_template = GEMMA_CHAT_TEMPLATE  # for backwards compatibility
+with open(template_path / "gemma_chat_template_ctrl_tokens.jinja", "r") as f:
+    CTRL_TEMPLATE = f.read()
+with open(template_path / "customizable_gemma_chat_template.jinja", "r") as f:
+    CUSTOMIZABLE_CHAT_TEMPLATE = f.read()
+with open(
+    template_path / "customizable_gemma_chat_template_ctrl_tokens.jinja", "r"
+) as f:
+    CUSTOMIZABLE_CTRL_TEMPLATE = f.read()
 
 sample_batch = [
     [
@@ -29,6 +47,34 @@ sample_batch = [
 ]
 
 
+def patch_tokenizer(
+    tokenizer, model_name: str, ctrl_template: str = None, chat_template: str = None
+):
+    if model_name in ("google/gemma-2-2b-it", "gemma-2"):
+        tokenizer.chat_template = GEMMA_CHAT_TEMPLATE
+        tokenizer.ctrl_template = CTRL_TEMPLATE
+    else:
+        if chat_template is not None:
+            tokenizer.chat_template = chat_template
+        if ctrl_template is None:
+            warnings.warn(
+                f"No control template provided, you won't be able to use the control token mask for {model_name}"
+            )
+            tokenizer = TokenizerNoCtrlTemplateProxy(tokenizer)
+        else:
+            tokenizer.ctrl_template = ctrl_template
+        if tokenizer.chat_template is None:
+            raise ValueError(
+                "Tokenizer has no chat template, please provide one in the tokenizer_kwargs"
+            )
+        generation_pattern = re.compile(r"\{%\s*generation\s*%\}")
+        if not generation_pattern.search(tokenizer.chat_template):
+            raise ValueError(
+                f"Chat template for {model_name}"
+                " does not contain {% generation %} keyword"
+            )
+
+
 def sanitize(tok):
     return tok.replace("\r", "\\r").replace("\n", "\\n")
 
@@ -39,15 +85,26 @@ def tokenize_with_ctrl_mask(
     **tokenizer_kwargs,
 ) -> dict:
     """
-    Create a mask that is 1 for chat control tokens and 0 for other tokens
+    Tokenizes conversations with a control mask indicating chat control tokens.
+
+    This function tokenizes a list of conversations using a custom template for chat control tokens. It returns a dictionary containing the tokenized conversations, attention mask, control mask, and assistant masks.
+
+    Args:
+        convs (list[list[dict[str, str]]]): A list of conversations, where each conversation is a list of dictionaries containing 'role' and 'content'.
+        tokenizer: The tokenizer to use for tokenization.
+        **tokenizer_kwargs: Additional keyword arguments to pass to the tokenizer.
+
+    Returns:
+        dict: A dictionary containing the tokenized conversations, attention_mask, ctrl_mask, and assistant_masks
     """
+    # Update tokenizer_kwargs with default settings for control mask and attention mask
     kwargs = tokenizer_kwargs.copy()
     kwargs.update(
         dict(
             return_tensors="pt",
             return_assistant_tokens_mask=True,
             return_dict=True,
-            chat_template=ctrl_template,
+            chat_template=tokenizer.ctrl_template,
         )
     )
     ctrl_tok_dict = tokenizer.apply_chat_template(
@@ -57,6 +114,15 @@ def tokenize_with_ctrl_mask(
     ctrl_mask = th.tensor(ctrl_tok_dict["assistant_masks"], dtype=th.bool)
     tokenizer_kwargs["return_dict"] = True
     tokenizer_kwargs["return_assistant_tokens_mask"] = True
+    tokenizer_kwargs["return_tensors"] = "pt"
+    if tokenizer.chat_template is None and "chat_template" not in tokenizer_kwargs:
+        raise ValueError(
+            "Tokenizer has no chat template, please provide one in the tokenizer_kwargs"
+        )
+    else:
+        chat_template = tokenizer_kwargs.get("chat_template", tokenizer.chat_template)
+        if "generation" not in chat_template:
+            raise ValueError("Chat template does not contain {% generation %} keyword")
     tok_dict = tokenizer.apply_chat_template(convs, **tokenizer_kwargs)
     if tok_dict["attention_mask"].shape != ctrl_tok_dict["attention_mask"].shape:
         raise ValueError(
@@ -96,6 +162,7 @@ def custom_chat_template(
     user_token="user",
     assistant_token="model",
     enforce_length=True,
+    ctrl_tokens=False,
 ):
     """
     Create a custom chat template with alternative tokens
@@ -124,16 +191,24 @@ def custom_chat_template(
         assert (
             len(tokenizer.tokenize(assistant_token)) == 1
         ), "assistant_token must be a single token"
+    if ctrl_tokens:
+        template = CUSTOMIZABLE_CTRL_TEMPLATE
+    else:
+        template = CUSTOMIZABLE_CHAT_TEMPLATE
     template = (
-        base_chat_template.replace("<start_of_turn>", sanitize(start_of_turn_token))
+        template.replace("<start_of_turn>", sanitize(start_of_turn_token))
         .replace("<end_of_turn>", sanitize(end_of_turn_token))
         .replace("<user>", sanitize(user_token))
         .replace("model", sanitize(assistant_token))
     )
+    if ctrl_tokens:
+        original_template = CTRL_TEMPLATE
+    else:
+        original_template = GEMMA_CHAT_TEMPLATE
     if enforce_length:
         tokenized = tokenizer.apply_chat_template(
             sample_batch,
-            chat_template=chat_template,
+            chat_template=original_template,
             return_dict=True,
             return_assistant_tokens_mask=True,
         )

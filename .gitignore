@@ -6,3 +6,7 @@ wandb/**
 results-runai/**
 .gitignore
 .vscode
+.venv
+.env
+display_metrics/cache/
+.junk

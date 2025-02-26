@@ -11,6 +11,7 @@ __all__ = [
     "compute_cross_entropy",
     "compute_entropy",
     "RunningMeanStd",
+    "chunked_kl",
 ]
 
 
@@ -225,7 +226,7 @@ def compute_chunked_cosine_similarity(weights1, weights2, chunk_size=4):
             for _id in range(th.cuda.device_count()):
                 th.cuda.synchronize(f"cuda:{_id}")
             th.cpu.synchronize()
-        cosim_matrix_chunk = th.nn.functional.cosine_similarity(
+        cosim_matrix_chunk = cosine_similarity(
             chunk.unsqueeze(1).to(device, non_blocking=True),
             weights2.unsqueeze(0).to(device, non_blocking=True),
             dim=2,
@@ -280,6 +281,23 @@ def compute_kl(
     return kl
 
 
+def chunked_kl(logits, logit_target, chunk_size=32):
+    pass
+    num_samples = logits.shape[0]
+    assert logits.dim() == 2, "logits should be (num_tokens, vocab_size)"
+    assert logit_target.dim() == 2, "logit_target should be (num_tokens, vocab_size)"
+    assert (
+        logits.shape == logit_target.shape
+    ), "logits and logit_target should have the same shape"
+    kl_chunks = []
+    for i in range(0, num_samples, chunk_size):
+        chunk_logits = logits[i : min(i + chunk_size, logits.shape[0])]
+        chunk_logit_target = logit_target[i : min(i + chunk_size, logits.shape[0])]
+        kl = compute_kl(chunk_logits, chunk_logit_target, average_over_tokens=False)
+        kl_chunks.append(kl)
+    return th.cat(kl_chunks, dim=0)
+
+
 def compute_cross_entropy(batch, model, pred_mask):
     """
     Compute the cross entropy loss for the given tokens and model. A mask is provided to indicate which tokens are predicted.
@@ -325,7 +343,7 @@ def compute_entropy(batch, model, pred_mask):
 
 # https://github.com/DLR-RM/stable-baselines3/blob/master/stable_baselines3/common/running_mean_std.py
 class RunningMeanStd:
-    def __init__(self, epsilon: float = 1e-4, shape: tuple[int, ...] = (), device: str = "cpu"):
+    def __init__(self, keep_samples=False):
         """
         Calculates the running mean and std of a data stream
         https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance#Parallel_algorithm
@@ -333,18 +351,21 @@ class RunningMeanStd:
         :param epsilon: helps with arithmetic issues
         :param shape: the shape of the data stream's output
         """
-        self.mean = th.zeros(shape, dtype=th.float64, device=device)
-        self.var = th.ones(shape, dtype=th.float64, device=device)
-        self.count = epsilon
+        self.mean = None
+        self.var = None
+        self.count = 0
+        self.keep_samples = keep_samples
+        self.samples = []
 
     def copy(self) -> "RunningMeanStd":
         """
         :return: Return a copy of the current object.
         """
-        new_object = RunningMeanStd(shape=self.mean.shape, device=self.mean.device)
-        new_object.mean = self.mean.clone()
-        new_object.var = self.var.clone()
-        new_object.count = float(self.count)
+        new_object = RunningMeanStd()
+        if self.mean is not None:
+            new_object.mean = self.mean.clone()
+            new_object.var = self.var.clone()
+            new_object.count = float(self.count)
         return new_object
 
     def combine(self, other: "RunningMeanStd") -> None:
@@ -356,14 +377,25 @@ class RunningMeanStd:
         self.update_from_moments(other.mean, other.var, other.count)
 
     def update(self, arr: th.Tensor) -> None:
-        batch_mean = arr.mean(dim=0)
-        batch_var = arr.var(dim=0)
+        if self.keep_samples:
+            self.samples.append(arr.cpu())
+        batch_mean = arr.double().mean(dim=0)
+        batch_var = arr.double().var(dim=0)
         batch_count = arr.shape[0]
-        self.update_from_moments(batch_mean, batch_var, batch_count)
+        if batch_count == 0:
+            return
+        if self.mean is None:
+            self.mean = batch_mean
+            self.var = batch_var
+            self.count = batch_count
+        else:
+            self.update_from_moments(batch_mean, batch_var, batch_count)
 
     def update_from_moments(
         self, batch_mean: th.Tensor, batch_var: th.Tensor, batch_count: float
     ) -> None:
+        if batch_count == 0:
+            return
         delta = batch_mean - self.mean
         tot_count = self.count + batch_count
 
@@ -378,16 +410,28 @@ class RunningMeanStd:
         new_var = m_2 / (self.count + batch_count)
 
         new_count = batch_count + self.count
-
         self.mean = new_mean
         self.var = new_var
         self.count = new_count
 
-    def compute(self) -> tuple[th.Tensor, th.Tensor, float]:
+    def compute(
+        self, return_dict=False
+    ) -> tuple[th.Tensor, th.Tensor, float] | dict[str, float]:
         """
         Compute the running mean and variance and also return the count
 
         Returns:
             mean, var, count
         """
+        if return_dict:
+            dic = {
+                "mean": self.mean.item(),
+                "var": self.var.item(),
+                "count": self.count,
+            }
+            if self.keep_samples:
+                dic["samples"] = th.cat(self.samples, dim=0)
+            return dic
+        if self.keep_samples:
+            return self.mean, self.var, self.count, th.cat(self.samples, dim=0)
         return self.mean, self.var, self.count

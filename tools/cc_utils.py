@@ -53,6 +53,7 @@ def push_latent_df(
         force: if True, push the df even if there are missing columns
         allow_remove_columns: if not None, a list of columns to allow to be removed
         commit_message: the commit message to use for the push
+        confirm: if True, ask the user to confirm the push
     """
     if crosscoder is None:
         crosscoder = "l13_crosscoder"
@@ -63,7 +64,7 @@ def push_latent_df(
         allow_remove_columns = (
             set(allow_remove_columns) if allow_remove_columns is not None else set()
         )
-        missing_columns = original_columns - new_columns - allow_remove_columns
+        missing_columns = original_columns - new_columns
         added_columns = new_columns - original_columns
         shared_columns = original_columns & new_columns
         duplicated_columns = df.columns.duplicated()
@@ -72,13 +73,19 @@ def push_latent_df(
                 f"Duplicated columns in uploaded df: {df.columns[duplicated_columns]}"
             )
         if len(missing_columns) > 0:
-            if force:
-                warnings.warn(f"Missing columns in uploaded df: {missing_columns}")
-            else:
+            real_missing_columns = missing_columns - allow_remove_columns
+            if len(real_missing_columns) > 0 and not force:
                 raise ValueError(
                     f"Missing columns in uploaded df: {missing_columns}\n"
                     "If you want to upload the df anyway, set allow_remove_columns=your_removed_columns"
-                    " and force=True"
+                    " or force=True"
+                )
+            elif len(missing_columns) > 0 and len(real_missing_columns) == 0:
+                print(f"Removed columns in uploaded df: {missing_columns}")
+            else:
+                warnings.warn(
+                    f"Missing columns in uploaded df: {missing_columns}\n"
+                    "Force=True -> Upload df anyway"
                 )
 
         if len(added_columns) > 0 and not force:
@@ -276,7 +283,14 @@ def _crosscoder(crosscoder=None):
     return crosscoders[crosscoder]
 
 
-def online_dashboard(crosscoder=None, max_acts=None):
+def online_dashboard(
+    crosscoder=None,
+    max_acts=None,
+    crosscoder_device="auto",
+    base_device="auto",
+    chat_device="auto",
+    torch_dtype=th.bfloat16,
+):
     """
     Instantiate an online dashboard for crosscoder latent analysis.
 
@@ -285,6 +299,9 @@ def online_dashboard(crosscoder=None, max_acts=None):
         max_acts: a dictionary of max activations for each latent. If None, will be loaded from the latent_df of the crosscoder.
     """
     coder = _crosscoder(crosscoder)
+    if crosscoder_device == "auto":
+        crosscoder_device = "cuda:0" if th.cuda.is_available() else "cpu"
+    coder = coder.to(crosscoder_device)
     if max_acts is None:
         df = _latent_df(crosscoder)
         max_acts_cols = ["max_act", "lmsys_max_act"]
@@ -293,10 +310,16 @@ def online_dashboard(crosscoder=None, max_acts=None):
                 max_acts = df[col].dropna().to_dict()
                 break
     base_model = load_model(
-        "google/gemma-2-2b", dtype=th.bfloat16, attn_implementation="eager"
+        "google/gemma-2-2b",
+        torch_dtype=torch_dtype,
+        attn_implementation="eager",
+        device_map=base_device,
     )
     chat_model = load_model(
-        "google/gemma-2-2b-chat", dtype=th.bfloat16, attn_implementation="eager"
+        "google/gemma-2-2b-it",
+        torch_dtype=torch_dtype,
+        attn_implementation="eager",
+        device_map=chat_device,
     )
     return CrosscoderOnlineFeatureDashboard(
         base_model,
@@ -304,6 +327,7 @@ def online_dashboard(crosscoder=None, max_acts=None):
         coder,
         13,
         max_acts=max_acts,
+        crosscoder_device=crosscoder_device,
     )
 
 

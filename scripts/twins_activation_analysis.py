@@ -2,160 +2,211 @@ import sys
 
 sys.path.append(".")
 from pathlib import Path
-from dictionary_learning.cache import PairedActivationCache
-import torch as th
-import pandas as pd
-import numpy as np
-from tqdm.auto import tqdm, trange
 import json
+import numpy as np
 import argparse
+import sys
+import os
+import torch as th
+from tqdm.auto import tqdm
 
-from dictionary_learning import CrossCoder
-from tools.utils import load_activation_dataset
+sys.path.append(".")
+from tools.utils import (
+    load_latent_df,
+    load_crosscoder,
+    load_activation_dataset,
+    push_latent_df,
+    load_json,
+)
 
 
+@th.no_grad()
 def compute_feature_metrics(
     dataloader,
-    features,
-    crosscoder,
+    crosscoder_name,
     twins_file,
-    batch_size=1000,
-    d_batch_size=1000,
     device="cpu",
+    abosulte_max_act=False,
 ):
-    """ """
+    """Compute bucketed activation statistics for twin features"""
 
-    with open(twins_file, "r") as f:
-        twins = json.load(f)
+    twins = load_json(twins_file)
+    all_latents = sum(twins, [])
+    left_latents = [p[0] for p in twins]
+    right_latents = [p[1] for p in twins]
+
+    # Load max activations from latent df
+    df = load_latent_df(crosscoder_name)
+    if "max_act_train" not in df.columns:
+        raise ValueError(
+            "max_act_train column not found in latent df,"
+            "please run scripts/compute_max_activations.py"
+        )
+    crosscoder = load_crosscoder(crosscoder_name).to(device)
+    if abosulte_max_act:
+        max_acts = th.maximum(
+            th.from_numpy(df["max_act_train"][left_latents].values),
+            th.from_numpy(df["max_act_train"][right_latents].values),
+        ).clamp(
+            min=1e-6
+        )  # shape: (len(twins))
+        max_acts = sum([[mact] * 2 for mact in max_acts], [])
+        max_acts = th.tensor(max_acts, device=device)
+
+    else:
+        max_acts = (
+            th.tensor(
+                df["max_act_train"],
+                device=device,
+            )
+            .to(device)
+            .clamp(min=1e-6)[all_latents]
+        )
+    assert not max_acts.isnan().any(), "Max activations contain NaNs"
+    assert max_acts.shape == (len(all_latents),), "Max activations have wrong shape"
+    # Create bucket boundaries based on max activations
+    bucket_edges = th.tensor([1e-6, 0.1, 0.4, 0.7], device=device)
 
     results = {}
-    N = len(dataloader.dataset)
-    D = features.shape[0]
-
-    count_joint = th.zeros(len(twins), device=device)
-    count_A = th.zeros(len(twins), device=device)
-    count_B = th.zeros(len(twins), device=device)
-    count_A_B = th.zeros(len(twins), device=device)
-    count_B_A = th.zeros(len(twins), device=device)
+    n_buckets = len(bucket_edges) + 1
+    buckets = th.zeros((len(twins), n_buckets, n_buckets), device=device)
     count_total = th.zeros(len(twins), device=device)
-    m2_A = th.zeros(len(twins), device=device)
-    m2_B = th.zeros(len(twins), device=device)
-    covar_A = th.zeros(len(twins), device=device)
-    covar_B = th.zeros(len(twins), device=device)
-    mean_A = th.zeros(len(twins), device=device)
-    mean_B = th.zeros(len(twins), device=device)
-    th.cuda.empty_cache()
 
-    with th.no_grad():
-        crosscoder.to(device)
+    for batch_data in tqdm(dataloader, desc="Computing bucketed activations"):
+        batch_data = batch_data.to(device)
+        rel_batch_features = (
+            crosscoder.get_activations(batch_data, select_features=all_latents)
+            / max_acts
+        )
 
-        # First pass: compute all projections and store them
-        for batch_idx, batch_data in enumerate(
-            tqdm(dataloader, desc="Computing feature activations and projections")
-        ):
-            batch_data = batch_data.to(device)
-            batch_base = batch_data[:, 0]  # First column is base model data
-            batch_it = batch_data[:, 1]  # Second column is instruction model data
+        for i in range(len(twins)):
+            # Get activations for both features
+            acts_A = rel_batch_features[:, 2 * i]
+            acts_B = rel_batch_features[:, 2 * i + 1]
 
-            batch_features = crosscoder.encode(batch_data)
-            for i, twin in enumerate(twins):
-                A, B = twin
-                count_joint[i] += (
-                    (batch_features[:, A] > 0) & (batch_features[:, B] > 0)
-                ).sum()
-                count_A[i] += (batch_features[:, A] > 0).sum()
-                count_B[i] += (batch_features[:, B] > 0).sum()
-                count_A_B[i] += ((batch_features[:, A] > batch_features[:, B])).sum()
-                count_B_A[i] += ((batch_features[:, B] > batch_features[:, A])).sum()
-                count_total[i] += batch_base.size(0)
+            # Compute bucket indices
+            bucket_idx_A = th.bucketize(acts_A, bucket_edges)
+            bucket_idx_B = th.bucketize(acts_B, bucket_edges)
+            assert bucket_idx_A.max() < n_buckets
+            assert bucket_idx_B.max() < n_buckets
+            assert acts_A.shape == bucket_idx_A.shape
+            assert acts_B.shape == bucket_idx_B.shape
+            # Update bucket counts using torch operations
+            buckets[i].index_put_(
+                (bucket_idx_A, bucket_idx_B),
+                th.ones_like(bucket_idx_A, dtype=buckets[i].dtype),
+                accumulate=True,
+            )
 
-                delta_A = batch_features[:, A] - mean_A[i]
-                delta_B = batch_features[:, B] - mean_B[i]
+            count_total[i] += batch_data.size(0)
 
-                mean_A[i] += delta_A.sum() / count_total[i]
-                mean_B[i] += delta_B.sum() / count_total[i]
-
-                delta2_A = batch_features[:, A] - mean_A[i]
-                delta2_B = batch_features[:, B] - mean_B[i]
-
-                m2_A[i] += (delta_A * delta2_A).sum()
-                m2_B[i] += (delta_B * delta2_B).sum()
-
-                covar_A[i] += (delta_A * delta_B).sum()
-                covar_B[i] += (delta_B * delta_A).sum()
-
-    results["count_joint"] = count_joint.cpu()
-    results["count_A"] = count_A.cpu()
-    results["count_B"] = count_B.cpu()
-    results["count_A_B"] = count_A_B.cpu()
-    results["count_B_A"] = count_B_A.cpu()
-    results["count_total"] = count_total.cpu()
-    valid_count = count_total > 1
-    results["correAB"] = (
-        covar_A[valid_count]
-        / th.sqrt(m2_A[valid_count] * m2_B[valid_count])
-        / (count_total[valid_count] - 1)
-    )
-    results["correBA"] = (
-        covar_B[valid_count]
-        / th.sqrt(m2_B[valid_count] * m2_A[valid_count])
-        / (count_total[valid_count] - 1)
-    )
+    results["buckets"] = buckets.cpu().numpy().tolist()
+    results["bucket_edges"] = bucket_edges.cpu().numpy().tolist()
+    results["count_total"] = count_total.cpu().numpy().tolist()
     return results
 
 
-def main(n, batch_size, d_batch_size, twins_file, data_store):
+def main(n, batch_size, twins_file, data_store, crosscoder_name, split):
     print("CUDA available: ", th.cuda.is_available())
-
-    crosscoder = CrossCoder.from_pretrained(
-        "Butanium/gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04", from_hub=True
-    )
 
     BASE_MODEL = "gemma-2-2b"
     INSTRUCT_MODEL = "gemma-2-2b-it"
     DATA_STORE = Path(data_store)
     activation_store_dir = DATA_STORE / "activations"
 
-    fineweb_cache, lmsys_cache = load_activation_dataset(
+    fw_dataset, lmsys_dataset = load_activation_dataset(
         activation_store_dir,
         base_model=BASE_MODEL,
         instruct_model=INSTRUCT_MODEL,
         layer=13,
-        split="validation",
+        split=split,
     )
-
-    dataset = th.utils.data.ConcatDataset(
-        [
-            th.utils.data.Subset(fineweb_cache, th.arange(0, n)),
-            th.utils.data.Subset(lmsys_cache, th.arange(0, n)),
-        ]
-    )
-
-    crosscoder.decoder.weight.shape
-    it_decoder = crosscoder.decoder.weight[1, :, :].clone()
-    base_decoder = crosscoder.decoder.weight[0, :, :].clone()
-
-    print("Number of activations: ", len(dataset))
-
+    if n is not None:
+        fw_dataset = th.utils.data.Subset(fw_dataset, th.arange(0, n))
+        lmsys_dataset = th.utils.data.Subset(lmsys_dataset, th.arange(0, n))
+    num_works = min(10, os.cpu_count())
     # Create DataLoader for batch processing
-    dataloader = th.utils.data.DataLoader(
-        dataset, batch_size=batch_size, shuffle=False, pin_memory=True, num_workers=10
+    fw_dataloader = th.utils.data.DataLoader(
+        fw_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        pin_memory=True,
+        num_workers=num_works,
+    )
+    lmsys_dataloader = th.utils.data.DataLoader(
+        lmsys_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        pin_memory=True,
+        num_workers=num_works,
     )
 
-    results = compute_feature_metrics(
-        dataloader,
-        it_decoder,
-        crosscoder,
-        twins_file,
-        d_batch_size=d_batch_size,
-        device="cuda:0",
-    )
-    save_path = DATA_STORE / "results"
-    # make paths
-    name = twins_file.split("/")[-1].split(".")[0]
+    fw_results = {
+        ("abs_max_act" if ama else "rel_max_act"): compute_feature_metrics(
+            fw_dataloader,
+            crosscoder_name,
+            twins_file,
+            device="cuda:0",
+            abosulte_max_act=ama,
+        )
+        for ama in [True, False]
+    }
+    lmsys_results = {
+        ("abs_max_act" if ama else "rel_max_act"): compute_feature_metrics(
+            lmsys_dataloader,
+            crosscoder_name,
+            twins_file,
+            device="cuda:0",
+            abosulte_max_act=ama,
+        )
+        for ama in [True, False]
+    }
+    results = {
+        "fw_results": fw_results,
+        "lmsys_results": lmsys_results,
+    }
+
+    save_path = Path("results") / "twin_stats"
     save_path.mkdir(parents=True, exist_ok=True)
-    file = save_path / f"{name}_activation_statistics_N{n}.pt"
-    th.save(results, file)
+    # make paths
+    str_n = f"N{n}" if n is not None else "all"
+    file = save_path / f"{split}_twins-{crosscoder_name}_stats_{str_n}.json"
+    with open(file, "w") as f:
+        json.dump(results, f)
+
+    fw_buckets = results["fw_results"]["abs_max_act"]["buckets"]
+    fw_buckets = np.array(fw_buckets)
+    # plot_twin_activation_divergence(fw_buckets, "FineWeb", True)
+    lmsys_buckets = results["lmsys_results"]["abs_max_act"]["buckets"]
+    lmsys_buckets = np.array(lmsys_buckets)
+    # plot_twin_activation_divergence(lmsys_buckets, "LMSYS", True)
+    # merged buckets
+    merged_buckets = fw_buckets + lmsys_buckets
+
+    df = load_latent_df(crosscoder_name)
+    pairs = load_json(twins_file)
+    split = "val" if split == "validation" else split
+    for data_name, buckets in zip(
+        ["_fw", "_lmsys", ""], [fw_buckets, lmsys_buckets, merged_buckets]
+    ):
+        only_A_high = buckets[:, 3:, :2].sum(axis=(1, 2))
+        only_B_high = buckets[:, :2, 3:].sum(axis=(1, 2))
+        A_high = buckets[:, 3:, :].sum(axis=(1, 2))
+        B_high = buckets[:, :, 3:].sum(axis=(1, 2))
+        exclusivity = (only_A_high + only_B_high) / (
+            A_high + B_high - buckets[:, 3:, 3:].sum(axis=(1, 2)) + 1e-10
+        )
+        df[f"twin_div{data_name}_{split}"] = np.nan
+        for i, (chat_idx, base_idx) in enumerate(pairs):
+            df.loc[chat_idx, f"twin_div{data_name}_{split}"] = exclusivity[i]
+            df.loc[base_idx, f"twin_div{data_name}_{split}"] = exclusivity[i]
+
+    push_latent_df(
+        df,
+        crosscoder_name,
+        commit_message=f"Added twin activation divergences for {split} set",
+        confirm=False,
+    )
 
 
 if __name__ == "__main__":
@@ -166,27 +217,43 @@ if __name__ == "__main__":
     parser.add_argument(
         "-n",
         type=int,
-        default=100_000,
-        help="Number of activations to load from validation set (default: 100,000)",
+        default=None,
+        help="Number of activations to load from validation set (default: all)",
     )
     parser.add_argument(
-        "--batch_size",
+        "--batch-size",
         type=int,
         default=4096,
-        help="Batch size over N dimension (default: 1024)",
+        help="Batch size over N dimension (default: 4096)",
     )
     parser.add_argument(
-        "--d_batch_size",
-        type=int,
-        default=2048,
-        help="Batch size over D dimension (default: 1024)",
+        "--twins-file",
+        type=str,
+        help="Path to file containing twins",
+        default="data/twins.json",
     )
     parser.add_argument(
-        "--twins-file", type=str, required=True, help="Path to file containing twins"
+        "--data-store", type=str, help="Path to data store", default="."
     )
     parser.add_argument(
-        "--data-store", type=str, required=True, help="Path to data store"
+        "--crosscoder-name",
+        type=str,
+        help="Name of crosscoder",
+        default="l13_crosscoder",
+    )
+    parser.add_argument(
+        "--split",
+        type=str,
+        help="Split to use",
+        default="validation",
     )
     args = parser.parse_args()
 
-    main(args.n, args.batch_size, args.d_batch_size, args.twins_file, args.data_store)
+    main(
+        args.n,
+        args.batch_size,
+        args.twins_file,
+        args.data_store,
+        args.crosscoder_name,
+        args.split,
+    )
