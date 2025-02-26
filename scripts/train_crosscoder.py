@@ -9,6 +9,7 @@ from dictionary_learning.cache import PairedActivationCache
 from dictionary_learning import ActivationBuffer, CrossCoder
 from dictionary_learning.trainers import CrossCoderTrainer
 from dictionary_learning.training import trainSAE
+from dictionary_learning.dictionary import LossType
 import os
 
 import wandb
@@ -50,7 +51,7 @@ if __name__ == "__main__":
     parser.add_argument("--disable-wandb", action="store_true")
     parser.add_argument("--expansion-factor", type=int, default=32)
     parser.add_argument("--batch-size", type=int, default=2048)
-    parser.add_argument("--workers", type=int, default=32)
+    parser.add_argument("--workers", type=int, default=16)
     parser.add_argument("--mu", type=float, default=1e-1)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max-steps", type=int, default=None)
@@ -69,6 +70,7 @@ if __name__ == "__main__":
     parser.add_argument("--text-column", type=str, default="text")
     parser.add_argument("--no-train-shuffle", action="store_true")
     parser.add_argument("--local-shuffling", action="store_true")
+    parser.add_argument("--loss-type", type=str, default="crosscoder", choices=["crosscoder", "sae"])
 
     args = parser.parse_args()
 
@@ -100,10 +102,10 @@ if __name__ == "__main__":
         layer=args.layer,
         lmsys_split="train" + lmsys_split_suffix,
         fineweb_split="train" + fineweb_split_suffix,
-        lmsys_name="lmsys-chat-1m-chat-formatted",
     )
     num_samples_per_dataset = args.num_samples // 2
-    
+    num_samples_per_dataset = min(num_samples_per_dataset, len(fineweb_cache))
+    num_samples_per_dataset = min(num_samples_per_dataset, len(lmsys_cache))
     train_dataset = th.utils.data.ConcatDataset([
         th.utils.data.Subset(fineweb_cache, th.arange(0, num_samples_per_dataset)),
         th.utils.data.Subset(lmsys_cache, th.arange(0, num_samples_per_dataset)),
@@ -150,7 +152,6 @@ if __name__ == "__main__":
         layer=args.layer,
         lmsys_split="validation" + lmsys_split_suffix,
         fineweb_split="validation" + fineweb_split_suffix,
-        lmsys_name="lmsys-chat-1m-chat-formatted",
     )
     num_validation_samples = args.num_validation_samples // 2
     validation_dataset = th.utils.data.ConcatDataset([
@@ -160,11 +161,14 @@ if __name__ == "__main__":
     
     name = f"{args.base_model.split('/')[-1]}-L{args.layer}-mu{args.mu:.1e}-lr{args.lr:.0e}" + \
         (f"-{args.run_name}" if args.run_name is not None else "") + \
-        (f"-local-shuffling" if args.local_shuffling else "")
+        (f"-local-shuffling" if args.local_shuffling else "") + \
+        (f"-CCloss" if args.loss_type == "crosscoder" else "-SAEloss")
     if args.pretrained is not None:
         name += f"-pt"
     device = "cuda" if th.cuda.is_available() else "cpu"
     print(f"Training on device={device}.")
+    loss_type = LossType.from_string(args.loss_type)
+    print(f"Loss type: {loss_type}")
     trainer_cfg = {
         "trainer": CrossCoderTrainer,
         "dict_class": CrossCoder,
@@ -184,6 +188,7 @@ if __name__ == "__main__":
             "norm_init_scale": args.norm_init_scale,
             "init_with_transpose": args.init_with_transpose,
             "encoder_layers": args.encoder_layers,
+            "loss_type": loss_type,
         },
         "pretrained_ae": (
             CrossCoder.from_pretrained(args.pretrained)
@@ -192,7 +197,6 @@ if __name__ == "__main__":
         ),
     }
 
-   
 
     print(f"Training on {len(train_dataset)} token activations.")
     dataloader = th.utils.data.DataLoader(
@@ -205,7 +209,7 @@ if __name__ == "__main__":
     )
     validation_dataloader = th.utils.data.DataLoader(
         validation_dataset,
-        batch_size=8192,
+        batch_size=4096,
         shuffle=False,
         num_workers=args.workers,
         pin_memory=True,

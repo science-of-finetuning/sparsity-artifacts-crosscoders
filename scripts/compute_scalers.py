@@ -50,6 +50,11 @@ def load_base_activation(batch, **kwargs):
 def load_chat_activation(batch, **kwargs):
     return batch[:, 1, :]
 
+def load_base_activation_no_bias(batch, crosscoder: CrossCoder, **kwargs):
+    return batch[:, 0, :] - crosscoder.decoder.bias[0, :]
+
+def load_chat_activation_no_bias(batch, crosscoder: CrossCoder, **kwargs):
+    return batch[:, 1, :] - crosscoder.decoder.bias[1, :]
 
 def load_base_error(
     batch,
@@ -117,7 +122,7 @@ def main():
     )
     parser.add_argument("--dataset-split", type=str, default="train")
     parser.add_argument("--batch-size", type=int, default=128)
-    parser.add_argument("-N", "--num-samples", type=int, default=20_000_000)
+    parser.add_argument("-N", "--num-samples", type=int, default=50_000_000)
     parser.add_argument("--base-model", type=str, default="google/gemma-2-2b")
     parser.add_argument("--chat-model", type=str, default="google/gemma-2-2b-it")
     parser.add_argument(
@@ -143,6 +148,10 @@ def main():
     parser.add_argument("--chat-reconstruction", action="store_true")
     parser.add_argument("--base-error", action="store_true")
     parser.add_argument("--base-reconstruction", action="store_true")
+    parser.add_argument("--base-activation", action="store_true")
+    parser.add_argument("--chat-activation", action="store_true")
+    parser.add_argument("--base-activation-no-bias", action="store_true")
+    parser.add_argument("--chat-activation-no-bias", action="store_true")
     parser.add_argument("--random-vectors", action="store_true")
     parser.add_argument("--random-indices", action="store_true")
     parser.add_argument("--connor-crosscoder", action="store_true")
@@ -166,13 +175,20 @@ def main():
         and not args.chat_reconstruction
         and not args.base_error
         and not args.base_reconstruction
+        and not args.chat_activation
+        and not args.base_activation
+        and not args.base_activation_no_bias
+        and not args.chat_activation_no_bias
     ):
         logger.info("No computations selected, running all")
         args.chat_error = True
         args.chat_reconstruction = True
         args.base_error = True
         args.base_reconstruction = True
-
+        args.base_activation = True
+        args.base_activation_no_bias = True
+        args.chat_activation = True
+        args.chat_activation_no_bias = True
     th.manual_seed(args.seed)
     np.random.seed(args.seed)
 
@@ -287,18 +303,27 @@ def main():
 
     print("Saving results to ", results_dir)
     computations = []
+    if args.base_activation:
+        computations.append(("base_activation", load_base_activation))
+    if args.chat_activation:
+        computations.append(("chat_activation", load_chat_activation))
     if args.base_reconstruction:
         computations.append(("base_reconstruction", load_base_reconstruction))
     if args.base_error:
         computations.append(
             ("base_error", partial(load_base_error, base_decoder=base_decoder))
         )
+    if args.base_activation_no_bias:
+        computations.append(("base_activation_no_bias", load_base_activation_no_bias))
+    if args.chat_activation_no_bias:
+        computations.append(("chat_activation_no_bias", load_chat_activation_no_bias))
     if args.chat_reconstruction:
         computations.append(("it_reconstruction", load_chat_reconstruction))
     if args.chat_error:
         computations.append(("it_error", load_chat_error))
 
     latent_vectors = it_decoder[chat_only_indices].clone()
+    print("latent_vectors.shape", latent_vectors.shape)
     if args.random_vectors:
         random_vectors = th.randn(
             len(chat_only_indices), cc.activation_dim, device=device

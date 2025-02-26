@@ -30,7 +30,7 @@ def load_activation_dataset(
     split="validation",
     lmsys_split: str = None,
     fineweb_split: str = None,
-    lmsys_name: str = "lmsys-chat-1m-gemma-formatted",
+    lmsys_name: str = "lmsys-chat-1m-chat-formatted",
     fineweb_name: str = "fineweb-1m-sample",
 ):
     """

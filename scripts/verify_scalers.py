@@ -82,6 +82,7 @@ def compute_stats(
     Compute statistics for each scaler.
     """
     dim_model = crosscoder.activation_dim
+    betas = betas.to(device)
     assert betas.shape == (len(latent_indices),)
     mse = th.zeros(len(latent_indices), device=device, dtype=th.float64)
     mse_std = RunningMeanStd(shape=(len(latent_indices),), device=device)
@@ -286,7 +287,11 @@ def load_betas(args, computation, results_dir, train_num_samples, train_n_offset
 
     # Load betas and continue with existing logic
     logger.info(f"Loading betas from {betas_path}")
-    betas = th.load(betas_path, weights_only=True)
+    try:
+        betas = th.load(betas_path, weights_only=True)
+    except Exception as e:
+        # for legacy filenames
+        betas = th.load(betas_path.replace("chat", "it"), weights_only=True)
     return betas, name
 
 
@@ -331,9 +336,11 @@ def main():
     parser.add_argument("--chat-reconstruction", action="store_true")
     parser.add_argument("--base-error", action="store_true")
     parser.add_argument("--base-reconstruction", action="store_true")
+    parser.add_argument("--base-activation", action="store_true")
+    parser.add_argument("--chat-activation", action="store_true")
     parser.add_argument("--name", type=str, default=None)
-    parser.add_argument("-N", "--num-samples", type=int, default=1000000)
-    parser.add_argument("--train-num-samples", type=int, default=None)
+    parser.add_argument("-N", "--num-samples", type=int, default=5_000_000)
+    parser.add_argument("--train-num-samples", type=int, default=50_000_000)
     parser.add_argument("--dataset-split", type=str, default="validation")
     parser.add_argument("--special-results-dir", type=str, default="", help="Addon to the results directory. Results will be loaded and saved in results_dir/SRD/model_name/")
     parser.add_argument("--n-offset", type=int, default=0)
@@ -432,6 +439,14 @@ def main():
         computations.append(
             ("it_error", load_zero_vector, load_chat_error)
         )
+    if args.chat_activation:
+        computations.append(
+            ("it_activation", load_zero_vector, load_chat_activation)
+        )
+    if args.base_activation:
+        computations.append(
+            ("base_activation", load_zero_vector, load_base_activation)
+        )
 
     if len(computations) == 0:
         logger.info("No computations selected, running all")
@@ -444,6 +459,8 @@ def main():
             ),
             ("it_reconstruction", load_zero_vector, load_chat_reconstruction),
             ("it_error", load_zero_vector, load_chat_error),
+            ("it_activation", load_zero_vector, load_chat_activation),
+            ("base_activation", load_zero_vector, load_base_activation),
         ]
 
     if args.max_activations is not None:

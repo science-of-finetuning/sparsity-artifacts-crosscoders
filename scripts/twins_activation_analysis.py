@@ -117,14 +117,19 @@ def main(n, batch_size, d_batch_size, twins_file, data_store):
     activation_store_dir = DATA_STORE / "activations"
 
     fineweb_cache, lmsys_cache = load_activation_dataset(
-            activation_store_dir,
-            base_model=BASE_MODEL,
-            instruct_model=INSTRUCT_MODEL,
-            layer=13,
-            split="validation"
+        activation_store_dir,
+        base_model=BASE_MODEL,
+        instruct_model=INSTRUCT_MODEL,
+        layer=13,
+        split="validation",
     )
 
-    dataset = th.utils.data.ConcatDataset([th.utils.data.Subset(fineweb_cache, th.arange(0, n)), th.utils.data.Subset(lmsys_cache, th.arange(0, n))])
+    dataset = th.utils.data.ConcatDataset(
+        [
+            th.utils.data.Subset(fineweb_cache, th.arange(0, n)),
+            th.utils.data.Subset(lmsys_cache, th.arange(0, n)),
+        ]
+    )
 
     crosscoder.decoder.weight.shape
     it_decoder = crosscoder.decoder.weight[1, :, :].clone()
