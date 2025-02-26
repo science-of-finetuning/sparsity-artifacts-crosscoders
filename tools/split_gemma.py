@@ -1,5 +1,5 @@
 import torch
-from typing import Optional, Union, Tuple
+from typing import Optional, Union, Tuple, List
 from transformers.models.gemma.modeling_gemma import (
     BaseModelOutputWithPast,
     CausalLMOutputWithPast,
@@ -17,8 +17,15 @@ def model_first_half_forward(
     input_ids: torch.LongTensor = None,
     attention_mask: Optional[torch.Tensor] = None,
     position_ids: Optional[torch.LongTensor] = None,
+    past_key_values=None,
     inputs_embeds: Optional[torch.FloatTensor] = None,
+    use_cache: Optional[bool] = None,
+    output_attentions: Optional[bool] = None,
+    output_hidden_states: Optional[bool] = None,
+    return_dict: Optional[bool] = None,
+    cache_position: Optional[torch.LongTensor] = None,
     layer_idx: int = 13,
+    **kwargs,
 ) -> Union[Tuple, BaseModelOutputWithPast]:
     if (input_ids is None) ^ (inputs_embeds is not None):
         raise ValueError(
@@ -40,12 +47,17 @@ def model_first_half_forward(
         past_seen_tokens + inputs_embeds.shape[1],
         device=inputs_embeds.device,
     )
-    causal_mask = self._update_causal_mask(
-        attention_mask, inputs_embeds, cache_position, None, False
-    )
 
     if position_ids is None:
         position_ids = cache_position.unsqueeze(0)
+
+    causal_mask = self._update_causal_mask(
+        attention_mask,
+        inputs_embeds,
+        cache_position,
+        past_key_values,
+        output_attentions,
+    )
 
     # embed positions
     hidden_states = inputs_embeds
@@ -56,6 +68,9 @@ def model_first_half_forward(
     normalizer = torch.tensor(self.config.hidden_size**0.5, dtype=hidden_states.dtype)
     hidden_states = hidden_states * normalizer
 
+    # Add position_embeddings computation before the layer loop
+    position_embeddings = self.rotary_emb(hidden_states, position_ids)
+
     for i, decoder_layer in enumerate(self.layers):
         if self.gradient_checkpointing and self.training:
             layer_outputs = self._gradient_checkpointing_func(
@@ -63,26 +78,30 @@ def model_first_half_forward(
                 hidden_states,
                 causal_mask,
                 position_ids,
-                None,
-                False,
+                past_key_values,
+                output_attentions,
                 use_cache,
-                None,
+                cache_position,
+                position_embeddings,
+                **kwargs,
             )
         else:
             layer_outputs = decoder_layer(
                 hidden_states,
                 attention_mask=causal_mask,
                 position_ids=position_ids,
-                past_key_value=None,
-                output_attentions=False,
-                use_cache=None,
+                past_key_value=past_key_values,
+                output_attentions=output_attentions,
+                use_cache=use_cache,
                 cache_position=cache_position,
+                position_embeddings=position_embeddings,
+                **kwargs,
             )
 
         hidden_states = layer_outputs[0]
         if i == layer_idx:
             break
-    return hidden_states, causal_mask, position_ids
+    return hidden_states, causal_mask, position_ids, cache_position
 
 
 def model_second_half_forward(
@@ -93,7 +112,11 @@ def model_second_half_forward(
     layer_idx: int = 13,
     return_dict: bool = False,
     all_layers_process_fn: Callable[[torch.Tensor], torch.Tensor] | None = None,
+    cache_position: Optional[torch.LongTensor] = None,
+    **kwargs,
 ):
+    # Add position_embeddings computation
+    position_embeddings = self.rotary_emb(hidden_states, position_ids)
 
     for i, decoder_layer in enumerate(self.layers[layer_idx + 1 :]):
         if self.gradient_checkpointing and self.training:
@@ -105,7 +128,9 @@ def model_second_half_forward(
                 None,
                 False,
                 None,
-                None,
+                position_embeddings,
+                cache_position,
+                **kwargs,
             )
         else:
             layer_outputs = decoder_layer(
@@ -115,7 +140,9 @@ def model_second_half_forward(
                 past_key_value=None,
                 output_attentions=False,
                 use_cache=None,
-                cache_position=None,
+                position_embeddings=position_embeddings,
+                cache_position=cache_position,
+                **kwargs,
             )
 
         hidden_states = layer_outputs[0]
@@ -147,6 +174,7 @@ def causal_lm_first_half_forward(
     return_dict: Optional[bool] = None,
     cache_position: Optional[torch.LongTensor] = None,
     layer_idx: int = 13,
+    **kwargs,
 ) -> Union[Tuple, CausalLMOutputWithPast]:
     r"""
     Args:
@@ -202,8 +230,15 @@ def causal_lm_first_half_forward(
         input_ids=input_ids,
         attention_mask=attention_mask,
         position_ids=position_ids,
+        past_key_values=past_key_values,
         inputs_embeds=inputs_embeds,
+        use_cache=use_cache,
+        output_attentions=output_attentions,
+        output_hidden_states=output_hidden_states,
+        return_dict=return_dict,
+        cache_position=cache_position,
         layer_idx=layer_idx,
+        **kwargs,
     )
     return outputs
 
@@ -218,6 +253,7 @@ def causal_lm_second_half_forward(
     return_dict: bool = False,
     layer_idx: int = 13,
     all_layers_process_fn: Callable[[torch.Tensor], torch.Tensor] | None = None,
+    **kwargs,
 ):
     outputs = self.model.second_half_forward(
         hidden_states=hidden_states,
@@ -226,6 +262,7 @@ def causal_lm_second_half_forward(
         layer_idx=layer_idx,
         return_dict=return_dict,
         all_layers_process_fn=all_layers_process_fn,
+        **kwargs,
     )
     hidden_states = outputs[0]
     # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
@@ -265,6 +302,10 @@ def causal_lm_second_half_forward(
 
 
 def compute_loss(self, logits, labels, already_shifted=False):
+    """
+    Compute the loss for a given logits and labels.
+    If already_shifted is True, it is assumed that at an index i the target index is at index i in the labels.
+    """
     if not already_shifted:
         # Shift so that tokens < n predict n
         shift_logits = logits[..., :-1, :].contiguous()
@@ -273,10 +314,9 @@ def compute_loss(self, logits, labels, already_shifted=False):
         shift_logits = logits
         shift_labels = labels
     # Flatten the tokens
-    loss_fct = CrossEntropyLoss()
+    loss_fct = CrossEntropyLoss(reduction="none")
     shift_logits = shift_logits.view(-1, self.config.vocab_size)
     shift_labels = shift_labels.view(-1)
-    # Enable model parallelism
     shift_labels = shift_labels.to(shift_logits.device)
     return loss_fct(shift_logits, shift_labels)
 

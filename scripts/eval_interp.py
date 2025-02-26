@@ -1,20 +1,89 @@
 import sys
-
-sys.path.append(".")
-
 from argparse import ArgumentParser
-from dlabutils import model_path
+import json
+from pathlib import Path
+from collections import defaultdict
+
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import torch as th
-import json
-from collections import defaultdict
-from evaluate import evaluate_interpretation
 from dictionary_learning import CrossCoder
 from datasets import load_from_disk
 from tqdm.auto import tqdm
-from string import Template
-import json
-from pathlib import Path
+import einops
+
+sys.path.append(".")
+
+from tools.split_gemma import split_gemma
+
+
+@th.inference_mode()
+def evaluate_interpretation(
+    base_model,
+    instruct_model,
+    crosscoder: CrossCoder,
+    dataset,
+    feature_index,
+    get_predicted_mask,
+    batch_size=8,
+    device="cuda",
+    # max_seq_len=1024,
+    layer_to_stop=13,
+):
+    """
+    Evaluate the interpretation of a feature. Return the activation of a feature over the predicted to be active tokens
+    and the activation of the feature over the other tokens.
+
+    Args:
+        base_model: The base model to evaluate.
+        instruct_model: The instruct model to evaluate.
+        dataset: The dataset to evaluate on.
+        feature_index: The index of the feature to evaluate.
+        get_predicted_mask: A function that takes an input_ids tensor and returns a predicted mask.
+        The mask should be a boolean tensor of shape (batch_size, seq_len) where True indicates the token is predicted to be active.
+        batch_size: The batch size to use for evaluation.
+        device: The device to use for evaluation.
+        layer_to_stop: The layer to take the activations from.
+    """
+    base_model = split_gemma(base_model)
+    instruct_model = split_gemma(instruct_model)
+    true_activations = []
+    false_activations = []
+    for i in tqdm(range(0, len(dataset), batch_size)):
+        batch = dataset[i : i + batch_size]
+        batch_tokens = instruct_model.tokenizer(
+            batch,
+            # return_assistant_tokens_mask=True,
+            # chat_template=CHAT_TEMPLATE,
+            # return_dict=True,
+            return_tensors="pt",
+            padding=True,
+        )
+        input_ids = batch_tokens["input_ids"].to(device)
+        attention_mask = batch_tokens["attention_mask"].to(device)
+        # assistant_mask = th.tensor(batch_tokens["assistant_masks"]).bool().to(device)
+        predicted_mask = get_predicted_mask(input_ids)
+        base_activations, *_ = base_model.first_half_forward(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            layer_idx=layer_to_stop,
+        )
+        instruct_activations, *_ = instruct_model.first_half_forward(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            layer_idx=layer_to_stop,
+        )
+        cc_input = th.stack([base_activations, instruct_activations], dim=2).float()
+        cc_input = einops.rearrange(cc_input, "b s l d -> (b s) l d")
+        cc_activations = crosscoder.encoder(cc_input, select_features=[feature_index])
+        cc_activations = einops.rearrange(
+            cc_activations, "(b s) f -> b s f", b=len(batch)
+        ).squeeze(2)
+        attn_mask = attention_mask.bool()
+        pred_act = cc_activations[predicted_mask & attn_mask]
+        false_act = cc_activations[(~predicted_mask) & attn_mask]
+        true_activations.append(pred_act.cpu())
+        false_activations.append(false_act.cpu())
+    return th.cat(true_activations), th.cat(false_activations)
 
 
 def generate_questions(templates, words, langs):
@@ -82,13 +151,13 @@ def evaluate_geopo_feature_51408(args):
         return mask
 
     instruct_model = AutoModelForCausalLM.from_pretrained(
-        model_path("google/gemma-2-2b-it"),
+        "google/gemma-2-2b-it",
         torch_dtype=th.bfloat16,
         device_map="cuda",
         attn_implementation="eager",
     )
     base_model = AutoModelForCausalLM.from_pretrained(
-        model_path("google/gemma-2-2b"),
+        "google/gemma-2-2b",
         torch_dtype=th.bfloat16,
         device_map="cuda",
         attn_implementation="eager",
@@ -96,7 +165,7 @@ def evaluate_geopo_feature_51408(args):
     save_path = Path("results/51408_global_political")
     save_path.mkdir(exist_ok=True, parents=True)
     crosscoder = CrossCoder.from_pretrained(args.crosscoder_path, device="cuda")
-    tokenizer = AutoTokenizer.from_pretrained(model_path("google/gemma-2-2b-it"))
+    tokenizer = AutoTokenizer.from_pretrained("google/gemma-2-2b-it")
     instruct_model.tokenizer = tokenizer
     dataset_json = json.load(open("data/geopo_feature_51408.json"))["questions"]
     datasets = {

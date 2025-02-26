@@ -1,23 +1,19 @@
-from dictionary_learning.dictionary import CrossCoder
-from collections import defaultdict
-import einops
-import torch as th
-from argparse import ArgumentParser
-from tqdm.auto import tqdm
-import pandas as pd
-import json
-from abc import ABC, abstractmethod
-from torch.nn.functional import relu
-import wandb
-from dlabutils import model_path
+import sys
 from pathlib import Path
-from torch.nn.functional import kl_div
-from torchmetrics.aggregation import MeanMetric
+from typing import Callable
+import json
+from argparse import ArgumentParser
+
+
+import torch as th
+import pandas as pd
 from datasets import load_from_disk
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from typing import Callable
+from dictionary_learning.dictionary import CrossCoder
 
-from setup_to_eval import (
+sys.path.append(str(Path(__file__).parent.parent))
+
+from tools.setup_to_eval import (
     HalfStepPreprocessFn,
     IdentityPreprocessFn,
     SwitchPreprocessFn,
@@ -278,9 +274,9 @@ if __name__ == "__main__":
     parser.add_argument("--feature-index", type=int, default=None)
     parser.add_argument("--use-it-only", action="store_true")
     parser.add_argument("--use-base-only", action="store_true")
-    parser.add_argument("--continue-with", choices=["base", "it"], default="it")
-    parser.add_argument("--feature-decoder", choices=["base", "it"], default="base")
-    parser.add_argument("--activation", choices=["base", "it"], default="it")
+    parser.add_argument("--continue-with", choices=["base", "chat"], default="chat")
+    parser.add_argument("--feature-decoder", choices=["base", "chat"], default="base")
+    parser.add_argument("--activation", choices=["base", "chat"], default="chat")
     parser.add_argument("--scale", type=float, default=1.0)
     parser.add_argument("--ignore-encoder", action="store_true")
     parser.add_argument("--feature-ablation-file", type=Path, default=None)
@@ -315,17 +311,17 @@ if __name__ == "__main__":
         assert args.switch, "Layer sweep requires switch"
 
     instruct_model = AutoModelForCausalLM.from_pretrained(
-        model_path("google/gemma-2-2b-it"),
+        "google/gemma-2-2b-it",
         torch_dtype=th.bfloat16,
         device_map="cuda",
         attn_implementation="eager",
     )
 
-    tokenizer = AutoTokenizer.from_pretrained(model_path("google/gemma-2-2b-it"))
+    tokenizer = AutoTokenizer.from_pretrained("google/gemma-2-2b-it")
     instruct_model.tokenizer = tokenizer
 
     base_model = AutoModelForCausalLM.from_pretrained(
-        model_path("google/gemma-2-2b"),
+        "google/gemma-2-2b",
         device_map="cuda",
         torch_dtype=th.bfloat16,
         attn_implementation="eager",
@@ -360,7 +356,7 @@ if __name__ == "__main__":
     if args.switch:
         print(f"Switching to {args.continue_with}")
         id_fun = IdentityPreprocessFn(
-            continue_with="it" if args.continue_with == "base" else "base"
+            continue_with="chat" if args.continue_with == "base" else "base"
         )
         fun = SwitchPreprocessFn(continue_with=args.continue_with)
     elif len(features_indices) != 0:

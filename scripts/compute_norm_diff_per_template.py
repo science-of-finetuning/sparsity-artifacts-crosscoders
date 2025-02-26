@@ -17,7 +17,7 @@ import seaborn as sns
 sys.path.append(".")
 from tools.compute_utils import RunningMeanStd
 from tools.tokenization_utils import custom_chat_template
-from tools.tokenization_utils import chat_template as default_chat_template
+from tools.tokenization_utils import GEMMA_CHAT_TEMPLATE as default_chat_template
 from tools.tokenization_utils import tokenize_with_ctrl_ids
 
 
