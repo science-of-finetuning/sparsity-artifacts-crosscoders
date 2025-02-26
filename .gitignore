@@ -10,3 +10,13 @@ results-runai/**
 .env
 display_metrics/cache/
 .junk
+checkpoints/
+autointerp/detection/
+autointerp/fuzzing/
+autointerp/*.pdf
+*.pt
+run.sh
+interactive.sh
+*.code-workspace
+playground.ipynb
+*.png
