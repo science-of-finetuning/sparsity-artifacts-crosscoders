@@ -20,3 +20,4 @@ interactive.sh
 *.code-workspace
 playground.ipynb
 *.png
+_archive/**
