@@ -188,6 +188,7 @@ class BucketedStats:
         return stats
 
 
+@th.no_grad()
 def compute_chunked_cosine_similarity(weights1, weights2, chunk_size=4):
     """
     Compute the cosine similarity between all vectors in weights1 and weights2 in chunks of weights1 to avoid OOM.
@@ -435,3 +436,60 @@ class RunningMeanStd:
         if self.keep_samples:
             return self.mean, self.var, self.count, th.cat(self.samples, dim=0)
         return self.mean, self.var, self.count
+
+
+@th.no_grad()
+def chunked_max_cosim(weights1, weights2, chunk_size=4):
+    """
+    Compute the max cosine similarity between all vectors in weights1 and weights2 in chunks of weights1 to avoid OOM.
+
+    Args:
+        weights1: tensor of shape (num_vectors1, dim)
+        weights2: tensor of shape (num_vectors2, dim)
+        chunk_size: the number of vectors in weights1 to process at a time
+
+    Returns:
+        cosim_matrix: tensor of shape (num_vectors1) containing the max cosine similarity for each vector in weights1 with all vectors in weights2
+    """
+    if weights1.dim() != 2:
+        raise ValueError("weights1 must be a 2D tensor")
+    if weights2.dim() != 2:
+        raise ValueError("weights2 must be a 2D tensor")
+    # Calculate chunk size
+    num_chunks = weights1.shape[0] // chunk_size
+
+    # Create list to store chunk matrices
+    cosim_matrices = []
+
+    # Process each chunk
+    for i in tqdm(range(num_chunks)):
+        # th.cuda.empty_cache()
+        start_idx = i * chunk_size
+        end_idx = start_idx + chunk_size if i < num_chunks - 1 else weights1.shape[0]
+        chunk = weights1[start_idx:end_idx]
+
+        # Compute cosine similarity for this chunk
+        # Use modulo to cycle through available GPUs
+        gpu_idx = i % th.cuda.device_count()
+        device = f"cuda:{gpu_idx}"
+        if gpu_idx == 0:
+            # sync
+            for _id in range(th.cuda.device_count()):
+                th.cuda.synchronize(f"cuda:{_id}")
+            th.cpu.synchronize()
+        cosim_matrix_chunk = (
+            cosine_similarity(
+                chunk.unsqueeze(1).to(device, non_blocking=True),
+                weights2.unsqueeze(0).to(device, non_blocking=True),
+                dim=2,
+            )
+            .max(dim=1)
+            .values.to("cpu", non_blocking=True)
+        )
+        cosim_matrices.append(cosim_matrix_chunk)
+
+    # Combine all chunks and move to CPU
+    cosim_matrix = th.cat(cosim_matrices, dim=0)
+    assert cosim_matrix.shape == (weights1.shape[0],)
+
+    return cosim_matrix
