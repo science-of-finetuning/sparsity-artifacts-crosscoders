@@ -3,7 +3,7 @@
 set -x
 
 # Define datasets and other constants
-CHAT_DATASET=science-of-finetuning/lmsys-chat-1m-gemma-formatted
+CHAT_DATASET=science-of-finetuning/lmsys-chat-1m-chat-formatted
 FINEWEB_DATASET=science-of-finetuning/fineweb-1m-sample
 ACTIVATION_STORE_DIR=/workspace/data/activations
 BATCH_SIZE=128
@@ -43,7 +43,7 @@ fi
 # Validate split argument and set corresponding values
 if [ "$SPLIT_ARG" == "train" ]; then
     SPLIT="train"
-    N_TOKS=25_000_000
+    N_TOKS=50_000_000
 elif [ "$SPLIT_ARG" == "val" ]; then
     SPLIT="validation"
     N_TOKS=5_000_000

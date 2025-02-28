@@ -40,6 +40,13 @@ def get_local_shuffled_indices(num_samples_per_dataset, shard_size):
     shuffled_indices = th.cat(shuffled_indices)
     return shuffled_indices
 
+def get_loss_name(loss_type):
+    if loss_type == LossType.SAE:
+        return "SAELoss"
+    elif loss_type == LossType.MIXED:
+        return "MixedLoss"
+    else:
+        return "CCLoss"
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -70,7 +77,7 @@ if __name__ == "__main__":
     parser.add_argument("--text-column", type=str, default="text")
     parser.add_argument("--no-train-shuffle", action="store_true")
     parser.add_argument("--local-shuffling", action="store_true")
-    parser.add_argument("--loss-type", type=str, default="crosscoder", choices=["crosscoder", "sae"])
+    parser.add_argument("--loss-type", type=str, default="crosscoder", choices=["crosscoder", "sae", "mixed"])
 
     args = parser.parse_args()
 
@@ -159,15 +166,15 @@ if __name__ == "__main__":
         th.utils.data.Subset(lmsys_cache_val, th.arange(0, num_validation_samples)),
     ])
     
+    loss_type = LossType.from_string(args.loss_type)
     name = f"{args.base_model.split('/')[-1]}-L{args.layer}-mu{args.mu:.1e}-lr{args.lr:.0e}" + \
         (f"-{args.run_name}" if args.run_name is not None else "") + \
         (f"-local-shuffling" if args.local_shuffling else "") + \
-        (f"-CCloss" if args.loss_type == "crosscoder" else "-SAEloss")
+        (f"-{get_loss_name(loss_type)}")
     if args.pretrained is not None:
         name += f"-pt"
     device = "cuda" if th.cuda.is_available() else "cpu"
     print(f"Training on device={device}.")
-    loss_type = LossType.from_string(args.loss_type)
     print(f"Loss type: {loss_type}")
     trainer_cfg = {
         "trainer": CrossCoderTrainer,
@@ -188,7 +195,9 @@ if __name__ == "__main__":
             "norm_init_scale": args.norm_init_scale,
             "init_with_transpose": args.init_with_transpose,
             "encoder_layers": args.encoder_layers,
-            "loss_type": loss_type,
+            "sparsity_loss_type": loss_type,
+            "sparsity_loss_alpha_sae": 1.0,
+            "sparsity_loss_alpha_cc": 0.1,
         },
         "pretrained_ae": (
             CrossCoder.from_pretrained(args.pretrained)

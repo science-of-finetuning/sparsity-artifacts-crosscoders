@@ -14,7 +14,7 @@ from functools import partial
 import argparse
 from torchmetrics import MeanSquaredError
 import os
-from tools.utils import load_activation_dataset
+from tools.utils import load_activation_dataset, load_crosscoder
 from tools.compute_utils import BucketedStats, RunningMeanStd
 
 th.set_grad_enabled(False)
@@ -51,7 +51,6 @@ def get_bucket_edges(n_buckets, add_noise_threshold=0.05):
         steps = th.cat([th.tensor([0, add_noise_threshold]), steps[1:]])
     return steps
 
-
 def squared_error(residual):
     # residual: [n_latents, batch_size, dim_model]
     # return: [n_latents, batch_size]
@@ -85,9 +84,9 @@ def compute_stats(
     betas = betas.to(device)
     assert betas.shape == (len(latent_indices),)
     mse = th.zeros(len(latent_indices), device=device, dtype=th.float64)
-    mse_std = RunningMeanStd(shape=(len(latent_indices),), device=device)
+    mse_std = RunningMeanStd()
     mse_before = th.zeros(len(latent_indices), device=device, dtype=th.float64)
-    mse_before_std = RunningMeanStd(shape=(len(latent_indices),), device=device)
+    mse_before_std = RunningMeanStd()
     count = th.zeros(len(latent_indices), device=device, dtype=dtype)
 
     if max_activations is not None:
@@ -307,9 +306,13 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--crosscoder-path", type=str, required=True)
     parser.add_argument("--activation-store-dir", type=Path, required=True)
-    parser.add_argument("--chat-only-indices-path", type=Path, required=True)
-    parser.add_argument("--base-model", type=str, default="gemma-2-2b")
-    parser.add_argument("--instruct-model", type=str, default="gemma-2-2b-it")
+    parser.add_argument(
+            "--latent-indices-path",
+            type=Path,
+            default="/workspace/data/latent_indices/Butanium_gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04/chat_only_indices.pt",
+        )    
+    parser.add_argument("--base-model", type=str, default="google/gemma-2-2b")
+    parser.add_argument("--chat-model", type=str, default="google/gemma-2-2b-it")
     parser.add_argument("--layer", type=int, default=13)
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--device", type=str, default="cuda")
@@ -361,11 +364,10 @@ def main():
     else:
         train_n_offset = args.train_n_offset
 
-    # Construct betas path following compute_scalers.py logic
-    if args.special_results_dir:
-        results_dir = args.results_dir / args.special_results_dir / args.crosscoder_path.replace("/", "_")
-    else:
-        results_dir = args.results_dir / args.crosscoder_path.replace("/", "_")
+
+    dtype_map = {"float32": th.float32, "float64": th.float64, "bfloat16": th.bfloat16}
+    dtype = dtype_map[args.dtype]
+    logger.info(f"Using dtype: {dtype}")
 
     # Setup device and dtype
     if args.device == "cuda" and not th.cuda.is_available():
@@ -373,21 +375,36 @@ def main():
         args.device = "cpu"
     device = th.device(args.device)
 
-    dtype_map = {"float32": th.float32, "float64": th.float64, "bfloat16": th.bfloat16}
-    dtype = dtype_map[args.dtype]
-    logger.info(f"Using dtype: {dtype}")
-
     # Load crosscoder
-    cc = CrossCoder.from_pretrained(args.crosscoder_path, from_hub=True)
+    cc = load_crosscoder(args.crosscoder_path)
     cc = cc.to(device).to(dtype)
+
+    # If crosscoder is a local path, replace with only the directory name (e.g. /path/to/crosscoder/model_final.pt -> crosscoder)
+    if Path(args.crosscoder_path).exists():
+        args.crosscoder_path = Path(args.crosscoder_path).parent.name
+
+    print(f"Using crosscoder name: {args.crosscoder_path}")
+
+    # Construct betas path following compute_scalers.py logic
+    if args.special_results_dir:
+        results_dir = args.results_dir / args.special_results_dir / args.crosscoder_path.replace("/", "_")
+    else:
+        results_dir = args.results_dir / args.crosscoder_path.replace("/", "_")
+    results_dir = results_dir / Path(args.latent_indices_path).name.split(".")[0]
+    
+
+
+
 
     # Load validation dataset
     activation_store_dir = Path(args.activation_store_dir)
 
+    base_model_stub = args.base_model.split("/")[-1]
+    chat_model_stub = args.chat_model.split("/")[-1]
     fineweb_cache, lmsys_cache = load_activation_dataset(
         activation_store_dir,
-        base_model=args.base_model,
-        instruct_model=args.instruct_model,
+        base_model=base_model_stub,
+        instruct_model=chat_model_stub,
         layer=args.layer,
         split=args.dataset_split,
         lmsys_subfolder=args.lmsys_subfolder
@@ -410,12 +427,12 @@ def main():
     )
 
     # Load betas and chat indices
-    chat_only_indices = th.load(args.chat_only_indices_path, weights_only=True)
+    latent_indices = th.load(args.latent_indices_path, weights_only=True)
 
     # Get decoder weights
     it_decoder = cc.decoder.weight[1, :, :].clone().to(dtype)
     base_decoder = cc.decoder.weight[0, :, :].clone().to(dtype)
-    latent_vectors = it_decoder[chat_only_indices].clone()
+    latent_vectors = it_decoder[latent_indices].clone()
 
     # Determine which computation to verify
     computations = []
@@ -476,14 +493,14 @@ def main():
             betas_subset = th.load(args.betas_subset_path)
             betas = betas[betas_subset]
             latent_vectors = latent_vectors[betas_subset]
-            chat_only_indices = chat_only_indices[betas_subset]
+            latent_indices = latent_indices[betas_subset]
             betas_name += f"_subset_{args.betas_subset_path.stem}"
         if args.train_num_samples is not None:
             betas_name += f"_EVAL_N{args.num_samples}_n_offset{args.n_offset}"
         metrics = compute_stats(
             betas=betas,
             latent_vectors=latent_vectors,
-            latent_indices=chat_only_indices,
+            latent_indices=latent_indices,
             dataloader=dataloader,
             crosscoder=cc,
             activation_postprocessing_fn=loader_fn,

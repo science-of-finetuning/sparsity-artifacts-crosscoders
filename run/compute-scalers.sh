@@ -21,6 +21,10 @@ while [[ $# -gt 0 ]]; do
       LATENT_INDICES="$2"
       shift 2
       ;;
+    --batch-size)
+      BATCH_SIZE="$2"
+      shift 2
+      ;;
     *)
       REMAINING_ARGS+=("$1")
       shift
