@@ -8,6 +8,10 @@ LATENT_TYPE_NAMES = {
     "antipareto": "Worst",
     "random-chat": "Random chat only",
     "random": "Random",
+    "sae_pareto": "SAE Best",
+    "sae_antipareto": "SAE Worst",
+    "sae_pareto_nofilter": "SAE Best (no filter)",
+    "sae_antipareto_nofilter": "SAE Worst (no filter)",
 }
 # Constants for setup name formatting
 VANILLA_NAMES = {
@@ -38,6 +42,7 @@ COLUMN_NAMES = {
     "beta activation base": "Beta activation base",
     "beta error chat": "Beta error chat",
     "beta error base": "Beta error base",
+    "beta activation ratio abs": "Absolute Beta activation ratio",
 }
 
 
@@ -65,6 +70,14 @@ def parse_key(key: str) -> dict:
         d["patch_name"] = None
         d["patch_target"] = None
         d["has_base_only"] = "+base only" in key
+        return d
+
+    # Match SAE patch keys
+    pattern_sae = r"^patch all sae (?P<latents_type>[^ ]+) c(?P<continue_with>.+)$"
+    m = re.match(pattern_sae, key)
+    if m:
+        d = m.groupdict()
+        d["kind"] = "sae"
         return d
 
     # Match patch_all_add keys
@@ -158,6 +171,14 @@ def format_setup_name(setup: str) -> str:
             "ctrlfirst5": "control & first 5 predicted tokens",
         }[parsed["patch_type"]]
         return f"Use {parsed['model']} but replace {patch_type_desc} with {other_model}, continue with {parsed['continue_with']}"
+    elif parsed["kind"] == "sae":
+        latent_type = parsed["latents_type"]
+        if latent_type.startswith("random"):
+            seed = latent_type[len("random"):]
+            return f"SAE: Random latents (seed {seed}), continue with {parsed['continue_with']}"
+        else:
+            latent_desc = LATENT_TYPE_NAMES.get(f"sae_{latent_type}", latent_type)
+            return f"SAE: {latent_desc} latents, continue with {parsed['continue_with']}"
     else:
         print(f"Unknown kind: {parsed['kind']}")
     return setup

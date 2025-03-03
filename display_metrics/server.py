@@ -152,7 +152,7 @@ def setup_selector():
     data = st.session_state.get("current_data", {})
     options = get_available_options(data) if data else {}
 
-    setup_type = st.selectbox("Setup Type", ["Vanilla", "Patching", "CrossCoder"])
+    setup_type = st.selectbox("Setup Type", ["Vanilla", "Patching", "CrossCoder", "SAE"])
 
     if setup_type == "Vanilla":
         model = st.selectbox(
@@ -264,6 +264,23 @@ def setup_selector():
             return (
                 f"patch all add {column} {latent_type} {percentage}pct c{continue_with}"
             )
+
+    elif setup_type == "SAE":
+        latent_type = st.selectbox(
+            "Latent Selection",
+            ["pareto", "antipareto", "pareto_nofilter", "antipareto_nofilter", "random"],
+            format_func=lambda x: LATENT_TYPE_NAMES.get(f"sae_{x}", x),
+        )
+
+        continue_with = st.selectbox("Continue generation with", ["base", "chat"])
+
+        # Add seed selector if random is selected
+        if latent_type == "random":
+            available_seeds = options.get("seeds", ["0", "1", "2", "3", "4"])
+            seed = st.selectbox("Random Seed", available_seeds)
+            latent_type = f"random{seed}"
+
+        return f"patch all sae {latent_type} c{continue_with}"
 
 
 def create_metric_plot(df, metric_name, categories):
