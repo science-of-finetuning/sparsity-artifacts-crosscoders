@@ -40,7 +40,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--activation-cache-path", "-p", type=Path, default="./activations"
     )
-    parser.add_argument("--dataset", default="lmsys-chat-1m-gemma-formatted")
+    parser.add_argument("--dataset", default="lmsys-chat-1m-chat-formatted")
     parser.add_argument("--crosscoder", type=str, default="l13_crosscoder")
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--layer", type=int, default=13)

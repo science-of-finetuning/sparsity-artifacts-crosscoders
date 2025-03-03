@@ -13,6 +13,7 @@ from transformers import AutoTokenizer
 from huggingface_hub import hf_hub_download, hf_api
 
 from dictionary_learning import CrossCoder
+from dictionary_learning.trainers.batch_top_k import BatchTopKSAE
 from nnterp import load_model
 from tiny_dashboard import OfflineFeatureCentricDashboard
 from tiny_dashboard.dashboard_implementations import CrosscoderOnlineFeatureDashboard
@@ -20,7 +21,9 @@ from tiny_dashboard.dashboard_implementations import CrosscoderOnlineFeatureDash
 dfs = defaultdict(lambda: None)
 df_hf_repo = {
     "l13_crosscoder": "science-of-finetuning/max-activating-examples-gemma-2-2b-l13-mu4.1e-02-lr1e-04",
+    "Butanium/gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04": "science-of-finetuning/max-activating-examples-gemma-2-2b-l13-mu4.1e-02-lr1e-04",
     "connor": "science-of-finetuning/max-activating-examples-gemma-2-2b-l13-ckissane",
+    "ckkissane/crosscoder-gemma-2-2b-model-diff": "science-of-finetuning/max-activating-examples-gemma-2-2b-l13-ckissane",
 }
 
 
@@ -162,7 +165,7 @@ def chat_only_latent_indices(crosscoder=None):
     df = _latent_df(crosscoder)
     # filter for tag = Chat only
     return th.tensor(
-        df[df["tag"] == "Chat only" | df["tag"] == "IT only"].index.tolist()
+        df[(df["tag"] == "Chat only") | (df["tag"] == "IT only")].index.tolist()
     )
 
 
@@ -268,11 +271,11 @@ def load_connor_crosscoder():
 def load_crosscoder(crosscoder=None):
     if crosscoder is None:
         crosscoder = "l13_crosscoder"
-    if crosscoder == "l13_crosscoder":
+    if crosscoder == "l13_crosscoder" or crosscoder == "Butanium/gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04":
         return CrossCoder.from_pretrained(
             "Butanium/gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04", from_hub=True
         )
-    elif crosscoder == "connor":
+    elif crosscoder == "connor" or crosscoder == "ckkissane/crosscoder-gemma-2-2b-model-diff":
         return load_connor_crosscoder()
     else:
         path = Path(crosscoder)
@@ -281,6 +284,11 @@ def load_crosscoder(crosscoder=None):
         else:
             raise ValueError(f"Unknown crosscoder: {crosscoder}")
 
+def load_dictionary_model(model_name: str):
+    if "SAE-" in model_name:
+        return BatchTopKSAE.from_pretrained(model_name)
+    else:
+        return load_crosscoder(model_name)
 
 crosscoders = defaultdict(lambda: None)
 

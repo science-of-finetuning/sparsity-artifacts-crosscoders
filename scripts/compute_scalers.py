@@ -13,6 +13,8 @@ import numpy as np
 from functools import partial
 from loguru import logger
 import argparse
+from tools.utils import load_activation_dataset
+from tools.cc_utils import load_crosscoder
 
 import os
 
@@ -49,6 +51,11 @@ def load_base_activation(batch, **kwargs):
 def load_chat_activation(batch, **kwargs):
     return batch[:, 1, :]
 
+def load_base_activation_no_bias(batch, crosscoder: CrossCoder, **kwargs):
+    return batch[:, 0, :] - crosscoder.decoder.bias[0, :]
+
+def load_chat_activation_no_bias(batch, crosscoder: CrossCoder, **kwargs):
+    return batch[:, 1, :] - crosscoder.decoder.bias[1, :]
 
 def load_base_error(
     batch,
@@ -65,33 +72,6 @@ def load_base_error(
         base_decoder[latent_indices],
     )
 
-
-def load_base_reconstruction(
-    batch,
-    crosscoder: CrossCoder,
-    latent_activations: th.Tensor,
-    latent_indices: th.Tensor,
-    latent_vectors: th.Tensor,
-    **kwargs,
-):
-    reconstruction = crosscoder.decode(latent_activations)
-    return remove_latents(
-        reconstruction[:, 0, :], latent_activations[:, latent_indices], latent_vectors
-    )
-
-
-def load_chat_reconstruction(
-    batch,
-    crosscoder: CrossCoder,
-    latent_activations: th.Tensor,
-    latent_indices: th.Tensor,
-    latent_vectors: th.Tensor,
-    **kwargs,
-):
-    reconstruction = crosscoder.decode(latent_activations)
-    return reconstruction[:, 1, :]
-
-
 def load_chat_error(
     batch,
     crosscoder: CrossCoder,
@@ -104,6 +84,30 @@ def load_chat_error(
     return batch[:, 1, :] - remove_latents(
         reconstruction[:, 1, :], latent_activations[:, latent_indices], latent_vectors
     )
+
+
+def load_base_reconstruction(
+    batch,
+    crosscoder: CrossCoder,
+    latent_activations: th.Tensor,
+    latent_indices: th.Tensor,
+    latent_vectors: th.Tensor,
+    **kwargs,
+):
+    reconstruction = crosscoder.decode(latent_activations)
+    return reconstruction[:, 0, :]
+
+
+def load_chat_reconstruction(
+    batch,
+    crosscoder: CrossCoder,
+    latent_activations: th.Tensor,
+    latent_indices: th.Tensor,
+    latent_vectors: th.Tensor,
+    **kwargs,
+):
+    reconstruction = crosscoder.decode(latent_activations)
+    return reconstruction[:, 1, :]
 
 
 def main():
@@ -119,14 +123,13 @@ def main():
     )
     parser.add_argument("--dataset-split", type=str, default="train")
     parser.add_argument("--batch-size", type=int, default=128)
-    parser.add_argument("-N", "--num-samples", type=int, default=20_000_000)
-    parser.add_argument("--base-model", type=str, default="gemma-2-2b")
-    # parser.add_argument("--latent-df-path", type=str, default="Butanium/max-activating-examples-gemma-2-2b-l13-mu4.1e-02-lr1e-04")
-    parser.add_argument("--instruct-model", type=str, default="gemma-2-2b-it")
+    parser.add_argument("-N", "--num-samples", type=int, default=50_000_000)
+    parser.add_argument("--base-model", type=str, default="google/gemma-2-2b")
+    parser.add_argument("--chat-model", type=str, default="google/gemma-2-2b-it")
     parser.add_argument(
-        "--chat-only-indices-path",
+        "--latent-indices-path",
         type=Path,
-        default="/workspace/data/only_it_decoder_feature_indices.pt",
+        default="/workspace/data/latent_indices/Butanium_gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04/chat_only_indices.pt",
     )
     parser.add_argument("--layer", type=int, default=13)
     parser.add_argument(
@@ -146,10 +149,19 @@ def main():
     parser.add_argument("--chat-reconstruction", action="store_true")
     parser.add_argument("--base-error", action="store_true")
     parser.add_argument("--base-reconstruction", action="store_true")
+    parser.add_argument("--base-activation", action="store_true")
+    parser.add_argument("--chat-activation", action="store_true")
+    parser.add_argument("--base-activation-no-bias", action="store_true")
+    parser.add_argument("--chat-activation-no-bias", action="store_true")
     parser.add_argument("--random-vectors", action="store_true")
     parser.add_argument("--random-indices", action="store_true")
-    parser.add_argument("--connor-crosscoder", action="store_true")
     parser.add_argument("--name", type=str, default=None)
+    parser.add_argument("--epochs", type=int, default=1)
+    parser.add_argument("-SRD", "--special-results-dir", type=str, default="", help="Addon to the results directory. Results will be saved in results_dir/SRD/model_name/")
+    parser.add_argument("--n-offset", type=int, default=0, help="Offset for the number of samples. If non-zero, the start index will be n_offset * num_samples")
+    parser.add_argument("--shuffle-within-dataset", action="store_true")
+    parser.add_argument("--lmsys-subfolder", type=str, default=None, help="Subfolder for the LMSYS dataset")
+    parser.add_argument("--lmsys-split", type=str, default=None, help="Split for the LMSYS dataset. If not provided, the default split will be used.")
     parser.add_argument(
         "--dtype",
         type=str,
@@ -159,18 +171,28 @@ def main():
     )
     args = parser.parse_args()
 
+    if args.lmsys_split is None:
+        args.lmsys_split = args.dataset_split
+
     if (
         not args.chat_error
         and not args.chat_reconstruction
         and not args.base_error
         and not args.base_reconstruction
+        and not args.chat_activation
+        and not args.base_activation
+        and not args.base_activation_no_bias
+        and not args.chat_activation_no_bias
     ):
         logger.info("No computations selected, running all")
         args.chat_error = True
         args.chat_reconstruction = True
         args.base_error = True
         args.base_reconstruction = True
-
+        args.base_activation = True
+        args.base_activation_no_bias = True
+        args.chat_activation = True
+        args.chat_activation_no_bias = True
     th.manual_seed(args.seed)
     np.random.seed(args.seed)
 
@@ -185,6 +207,7 @@ def main():
     logger.info(f"Using dtype: {dtype}")
 
     # Run tests first
+    print("Running tests...")
     run_tests(verbose=True)
 
     if args.threshold_active_latents is not None:
@@ -193,42 +216,45 @@ def main():
         ), "Threshold must be between 0 and 1"
 
     # Load crosscoder
-    if args.connor_crosscoder:
-        cc = load_connor_crosscoder()
-        lmsys_split = f"{args.dataset_split}-coltext_base_format"
-        args.crosscoder_path = "ckkissane/crosscoder-gemma-2-2b-model-diff"
-    else:
-        cc = CrossCoder.from_pretrained(args.crosscoder_path, from_hub=True)
-        lmsys_split = args.dataset_split
+    print(f"Loading crosscoder from {args.crosscoder_path}")
+    cc = load_crosscoder(args.crosscoder_path)
     cc = cc.to(device).to(dtype)
 
+    # If crosscoder is a local path, replace with only the directory name (e.g. /path/to/crosscoder/model_final.pt -> crosscoder)
+    if Path(args.crosscoder_path).exists():
+        args.crosscoder_path = Path(args.crosscoder_path).parent.name
+    print(f"Using crosscoder name: {args.crosscoder_path}")
+
+
     # Setup paths
+    # Load validation dataset
     activation_store_dir = Path(args.activation_store_dir)
-    base_model_dir = activation_store_dir / args.base_model
-    instruct_model_dir = activation_store_dir / args.instruct_model
 
-    base_model_fineweb = base_model_dir / "fineweb-1m-sample" / args.dataset_split
-    base_model_lmsys_chat = (
-        base_model_dir / "lmsys-chat-1m-gemma-formatted" / lmsys_split
-    )
-    instruct_model_fineweb = (
-        instruct_model_dir / "fineweb-1m-sample" / args.dataset_split
-    )
-    instruct_model_lmsys_chat = (
-        instruct_model_dir / "lmsys-chat-1m-gemma-formatted" / lmsys_split
-    )
-    submodule_name = f"layer_{args.layer}_out"
-
-    # Load caches and create dataset
-    fineweb_cache = PairedActivationCache(
-        base_model_fineweb / submodule_name, instruct_model_fineweb / submodule_name
-    )
-    lmsys_chat_cache = PairedActivationCache(
-        base_model_lmsys_chat / submodule_name,
-        instruct_model_lmsys_chat / submodule_name,
+    base_model_stub = args.base_model.split("/")[-1]
+    chat_model_stub = args.chat_model.split("/")[-1]
+    fineweb_cache, lmsys_cache = load_activation_dataset(
+        activation_store_dir,
+        base_model=base_model_stub,
+        instruct_model=chat_model_stub,
+        layer=args.layer,
+        split=args.dataset_split,
+        lmsys_subfolder=args.lmsys_subfolder,
+        lmsys_split=args.lmsys_split,
     )
 
-    dataset = th.utils.data.ConcatDataset([fineweb_cache, lmsys_chat_cache])
+    num_samples_per_dataset = args.num_samples // 2
+    dataset = th.utils.data.ConcatDataset(
+        [
+            th.utils.data.Subset(fineweb_cache, th.arange(args.n_offset * num_samples_per_dataset, (args.n_offset + 1) * num_samples_per_dataset)),
+            th.utils.data.Subset(lmsys_cache, th.arange(args.n_offset * num_samples_per_dataset, (args.n_offset + 1) * num_samples_per_dataset)),
+        ]
+    )
+
+    if args.epochs > 1:
+        dataset = th.utils.data.ConcatDataset([dataset] * args.epochs)
+
+    if args.shuffle_within_dataset:
+        dataset = th.utils.data.Subset(dataset, th.randperm(len(dataset)))
 
     # Get decoder weights
     it_decoder = cc.decoder.weight[1, :, :].clone().to(dtype)
@@ -236,11 +262,6 @@ def main():
     base_decoder = cc.decoder.weight[0, :, :].clone().to(dtype)
     assert base_decoder.shape == (cc.dict_size, cc.activation_dim)
 
-    n_per_dataset = args.num_samples // 2
-    test_idx = th.cat(
-        [th.arange(n_per_dataset), th.arange(n_per_dataset) + len(fineweb_cache)]
-    )
-    dataset = th.utils.data.Subset(dataset, test_idx)
     logger.info(f"Number of activations: {len(dataset)}")
 
     dataloader = th.utils.data.DataLoader(
@@ -251,7 +272,7 @@ def main():
         num_workers=args.num_workers,
     )
 
-    chat_only_indices = th.load(args.chat_only_indices_path, weights_only=True)
+    latent_indices = th.load(args.latent_indices_path, weights_only=True)
 
     latent_activation_postprocessing_fn = None
     if args.threshold_active_latents is not None:
@@ -277,63 +298,80 @@ def main():
             return latent_activations
 
         latent_activation_postprocessing_fn = jumprelu_latent_activations
+    
     # Create results directory
-    results_dir = args.results_dir / args.crosscoder_path.replace("/", "_")
+    if args.special_results_dir:
+        results_dir = args.results_dir / args.special_results_dir / args.crosscoder_path.replace("/", "_")
+    else:
+        results_dir = args.results_dir / args.crosscoder_path.replace("/", "_")
+    results_dir = results_dir / Path(args.latent_indices_path).name.split(".")[0]
     results_dir.mkdir(parents=True, exist_ok=True)
 
+    print("Saving results to ", results_dir)
     computations = []
+    if args.base_activation:
+        computations.append(("base_activation", load_base_activation))
+    if args.chat_activation:
+        computations.append(("chat_activation", load_chat_activation))
     if args.base_reconstruction:
         computations.append(("base_reconstruction", load_base_reconstruction))
     if args.base_error:
         computations.append(
             ("base_error", partial(load_base_error, base_decoder=base_decoder))
         )
+    if args.base_activation_no_bias:
+        computations.append(("base_activation_no_bias", load_base_activation_no_bias))
+    if args.chat_activation_no_bias:
+        computations.append(("chat_activation_no_bias", load_chat_activation_no_bias))
     if args.chat_reconstruction:
         computations.append(("it_reconstruction", load_chat_reconstruction))
     if args.chat_error:
         computations.append(("it_error", load_chat_error))
 
-    latent_vectors = it_decoder[chat_only_indices].clone()
+    latent_vectors = it_decoder[latent_indices].clone()
+    print("latent_vectors.shape", latent_vectors.shape)
     if args.random_vectors:
         random_vectors = th.randn(
-            len(chat_only_indices), cc.activation_dim, device=device
+            len(latent_indices), cc.activation_dim, device=device
         )
-        assert random_vectors.shape == (len(chat_only_indices), cc.activation_dim)
+        assert random_vectors.shape == (len(latent_indices), cc.activation_dim)
         # Scale random vectors to match the norm of the IT decoder vectors
         it_decoder_norm = th.norm(latent_vectors, dim=1)
         print(it_decoder_norm.shape)
         print(th.norm(random_vectors, dim=1, keepdim=True).shape)
-        assert it_decoder_norm.shape == (len(chat_only_indices),)
+        assert it_decoder_norm.shape == (len(latent_indices),)
         random_vectors = random_vectors * (
             it_decoder_norm / th.norm(random_vectors, dim=1)
         ).unsqueeze(1)
-        assert random_vectors.shape == (len(chat_only_indices), cc.activation_dim)
+        assert random_vectors.shape == (len(latent_indices), cc.activation_dim)
         latent_vectors = random_vectors
+
     if args.random_indices:
         random_indices = th.randint(
-            0, cc.dict_size, (len(chat_only_indices),), device=device
+            0, cc.dict_size, (len(latent_indices),), device=device
         )
-        assert random_indices.shape == (len(chat_only_indices),)
+        assert random_indices.shape == (len(latent_indices),)
         # Scale random indices to match the norm of the IT decoder vectors
         random_indices_vectors = it_decoder[random_indices].clone()
         assert random_indices_vectors.shape == (
-            len(chat_only_indices),
+            len(latent_indices),
             cc.activation_dim,
         )
         # Scale random vectors to match the norm of the IT decoder vectors
         it_decoder_norm = th.norm(latent_vectors, dim=1)
-        assert it_decoder_norm.shape == (len(chat_only_indices),)
+        assert it_decoder_norm.shape == (len(latent_indices),)
         random_indices_vectors = random_indices_vectors * (
             it_decoder_norm / th.norm(random_indices_vectors, dim=1)
         ).unsqueeze(1)
         assert random_indices_vectors.shape == (
-            len(chat_only_indices),
+            len(latent_indices),
             cc.activation_dim,
         )
         latent_vectors = random_indices_vectors
 
     # Run all computations
     for name, loader_fn in computations:
+        name += f"_N{args.num_samples}_n_offset{args.n_offset}"
         if latent_activation_postprocessing_fn is not None:
             name += f"_jumprelu{args.threshold_active_latents}"
         if args.random_vectors:
@@ -343,9 +381,9 @@ def main():
         if args.name:
             name += f"_{args.name}"
         logger.info(f"Computing {name}")
-        betas, count_active = closed_form_scalars(
+        betas, count_active, nominator, norm_f, norm_d = closed_form_scalars(
             latent_vectors,
-            chat_only_indices,
+            latent_indices,
             dataloader,
             cc,
             loader_fn,
@@ -353,9 +391,16 @@ def main():
             dtype=dtype,
             latent_activation_postprocessing_fn=latent_activation_postprocessing_fn,
         )
-        th.save(betas, results_dir / f"betas_{name}.pt")
-        th.save(count_active, results_dir / f"count_active_{name}.pt")
+        th.save(betas.cpu(), results_dir / f"betas_{name}.pt")
+        th.save(count_active.cpu(), results_dir / f"count_active_{name}.pt")
+        th.save(nominator.cpu(), results_dir / f"nominator_{name}.pt")
+        th.save(norm_f.cpu(), results_dir / f"norm_f_{name}.pt")
+        th.save(norm_d.cpu(), results_dir / f"norm_d_{name}.pt")
 
+        if args.random_indices or args.random_vectors:
+            th.save(latent_vectors.cpu(), results_dir / f"latent_vectors_{name}.pt")
+        if args.random_indices:
+            th.save(random_indices.cpu(), results_dir / f"random_indices_{name}.pt")
 
 if __name__ == "__main__":
     main()
