@@ -57,14 +57,25 @@ def parse_key(key: str) -> dict:
         return d
 
     # Match patch_all keys
-    pattern2 = r"^patch all (?P<column>.*?) (?P<latents_type>[^ ]+) (?P<perc>[0-9.]+)pct(?:\+base only)? c(?P<continue_with>.+)$"
+    pattern2 = r"^patch all(?P<add> add)? (?P<column>.*?) (?P<latents_type>[^ ]+) (?P<perc>[0-9.]+)pct(?:\+base only)? c(?P<continue_with>.+)$"
     m = re.match(pattern2, key)
     if m:
         d = m.groupdict()
-        d["kind"] = "patch_all"
+        d["kind"] = "patch_all" if not d["add"] else "patch_all_add"
         d["patch_name"] = None
         d["patch_target"] = None
         d["has_base_only"] = "+base only" in key
+        return d
+
+    # Match patch_all_add keys
+    pattern2b = r"^patch all add (?P<column>[^-]+) (?P<latents_type>[^-]+) (?P<perc>[0-9.]+)pct$"
+    m = re.match(pattern2b, key)
+    if m:
+        d = m.groupdict()
+        d["kind"] = "patch_all_add"
+        d["patch_name"] = None
+        d["patch_target"] = None
+        d["has_base_only"] = False
         return d
 
     # Match error patching keys
@@ -123,6 +134,19 @@ def format_setup_name(setup: str) -> str:
             " (with base only latents)" if parsed.get("has_base_only", False) else ""
         )
         return f"CrossCoder: Steer {latent_type} latents ({parsed['perc']}%) using {column_desc}{base_only_suffix}, continue with {parsed['continue_with']}"
+    elif parsed["kind"] == "patch_all_add":
+        latent_type = parsed["latents_type"]
+        # Handle the case where we want to show mean across all random seeds
+        if latent_type.startswith("random") and latent_type != "random":
+            seed = latent_type[len("random") :]
+            latent_type = f"Random (seed {seed})"
+        elif latent_type == "random":
+            latent_type = "Random (mean across seeds)"
+        else:
+            latent_type = LATENT_TYPE_NAMES.get(latent_type, latent_type)
+
+        column_desc = COLUMN_NAMES.get(parsed["column"], parsed["column"])
+        return f"CrossCoder: Steer by adding {latent_type} latents ({parsed['perc']}%) using {column_desc}"
     elif parsed["kind"] == "error":
         other_model = "chat" if parsed["model"] == "base" else "base"
         return f"{parsed['model'].capitalize()} error + {other_model} reconstruction, continue with {parsed['continue_with']}"

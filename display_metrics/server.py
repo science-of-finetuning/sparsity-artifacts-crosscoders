@@ -208,21 +208,32 @@ def setup_selector():
             format_func=lambda x: LATENT_TYPE_NAMES[x],
         )
 
-        add_base_only = st.checkbox("Include base only latents", value=False)
-
-        patch_option = st.selectbox(
-            "What to patch",
-            ["all"] + list(PATCH_TYPE_NAMES.keys()),
+        patch_style = st.selectbox(
+            "Patching Style",
+            ["Replace", "Add"],
             format_func=lambda x: (
-                "All activations" if x == "all" else PATCH_TYPE_NAMES[x]
+                "Replace original activations"
+                if x == "Replace"
+                else "Add to original activations"
             ),
         )
+
+        if patch_style == "Replace":
+            add_base_only = st.checkbox("Include base only latents", value=False)
+
+            patch_option = st.selectbox(
+                "What to patch",
+                ["all"] + list(PATCH_TYPE_NAMES.keys()),
+                format_func=lambda x: (
+                    "All activations" if x == "all" else PATCH_TYPE_NAMES[x]
+                ),
+            )
+            patch_target = (
+                None
+                if patch_option == "all"
+                else st.selectbox("Target model", ["base", "chat"])
+            )
         continue_with = st.selectbox("Continue generation with", ["base", "chat"])
-        patch_target = (
-            None
-            if patch_option == "all"
-            else st.selectbox("Target model", ["base", "chat"])
-        )
 
         # Add seed selector if random is selected, using dynamic seeds
         if latent_type == "random":
@@ -240,13 +251,19 @@ def setup_selector():
 
         # Add base_only suffix to the name if selected
         name = f"{column} {latent_type} {percentage}pct"
-        if add_base_only:
-            name += "+base only"
 
-        if patch_option == "all":
-            return f"patch all {name} c{continue_with}"
-        else:
-            return f"patch {name}->{patch_option} {patch_target} c{continue_with}"
+        if patch_style == "Replace":
+            if add_base_only:
+                name += "+base only"
+
+            if patch_option == "all":
+                return f"patch all {name} c{continue_with}"
+            else:
+                return f"patch {name}->{patch_option} {patch_target} c{continue_with}"
+        else:  # Add style
+            return (
+                f"patch all add {column} {latent_type} {percentage}pct c{continue_with}"
+            )
 
 
 def create_metric_plot(df, metric_name, categories):
