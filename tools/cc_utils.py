@@ -13,6 +13,7 @@ from transformers import AutoTokenizer
 from huggingface_hub import hf_hub_download, hf_api
 
 from dictionary_learning import CrossCoder
+from dictionary_learning.trainers.batch_top_k import BatchTopKSAE
 from nnterp import load_model
 from tiny_dashboard import OfflineFeatureCentricDashboard
 from tiny_dashboard.dashboard_implementations import CrosscoderOnlineFeatureDashboard
@@ -283,6 +284,11 @@ def load_crosscoder(crosscoder=None):
         else:
             raise ValueError(f"Unknown crosscoder: {crosscoder}")
 
+def load_dictionary_model(model_name: str):
+    if "SAE-" in model_name:
+        return BatchTopKSAE.from_pretrained(model_name)
+    else:
+        return load_crosscoder(model_name)
 
 crosscoders = defaultdict(lambda: None)
 
