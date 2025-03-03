@@ -338,6 +338,35 @@ class CrossCoderSteeringLatent(IdentityPreprocessFn):
         return act + self.last_steering_latent
 
 
+class CrossCoderAdditiveSteering(CrossCoderSteeringLatent):
+    """Preprocessing function that adds activations using CrossCoder latent space.
+
+    This class implements activation steering by:
+    1. Encoding activations into the CrossCoder latent space
+    2. Computing steering based on the latents from the steer_with_latents_from model
+    3. Applying the steering to the original activations
+
+    Args:
+        crosscoder: The CrossCoder model to use for encoding/decoding
+        steer_activations_of: Which model's activations to steer ("base" or "chat")
+        steer_with_latents_from: Which model's latents to use for steering ("base" or "chat")
+        latents_to_steer: List of latent dimensions to use for steering, or None for all
+        continue_with: Which model should continue generation after steering
+        monitored_latents: List of latent dimensions to monitor, defaults to latents_to_steer
+        filter_treshold: Optional threshold for filtering based on latent magnitudes
+        scale_steering_latent: Scale factor for steering magnitude
+        ignore_encoder: If True, uses only decoder weights for steering without encoding
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.decoder_weight = self.decoder_weight.clone()
+        if self.steer_with_latents_from == "chat":
+            self.decoder_weight[0] = 0
+        else:
+            self.decoder_weight[1] = 0
+
+
 class CrossCoderOutProjection(IdentityPreprocessFn):
     """Preprocessing function that projects out certain directions from activations using CrossCoder.
 
