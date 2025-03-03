@@ -1,13 +1,12 @@
 import torch as th
 from typing import Callable, Union
-from dictionary_learning import CrossCoder
+from dictionary_learning.dictionary import Dictionary
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from pathlib import Path
 from dictionary_learning.cache import PairedActivationCache
 import numpy as np
 from loguru import logger
-
 
 def remove_latents(
     activation: th.Tensor, latent_activations: th.Tensor, latent_vectors: th.Tensor
@@ -45,14 +44,18 @@ def remove_latents(
     return activation_stacked
 
 
+def identity_fn(x: th.Tensor) -> th.Tensor:
+    return x
+
 # %%
 @th.no_grad()
 def closed_form_scalars(
     latent_vectors: th.Tensor,
     latent_indices: th.Tensor,
     dataloader: DataLoader,
-    crosscoder: CrossCoder,
-    activation_postprocessing_fn: Callable[[th.Tensor], th.Tensor],
+    dict_model: Dictionary,
+    target_activation_fn: Callable[[th.Tensor], th.Tensor],
+    encode_activation_fn: Callable[[th.Tensor], th.Tensor] = identity_fn,
     latent_activation_postprocessing_fn: Callable[[th.Tensor], th.Tensor] = None,
     device: th.device = th.device("cuda"),
     dtype: Union[th.dtype, None] = th.float32,
@@ -87,7 +90,7 @@ def closed_form_scalars(
 
     dim_model = latent_vectors.size(1)
     num_latent_vectors = latent_vectors.size(0)
-    dict_size = crosscoder.dict_size
+    dict_size = dict_model.dict_size
     print(
         f"dim_model: {dim_model}, num_latent_vectors: {num_latent_vectors}, dict_size: {dict_size}"
     )
@@ -106,14 +109,16 @@ def closed_form_scalars(
     for batch in tqdm(dataloader):
         batch_size_current = batch.shape[0]
         batch = batch.to(device).to(dtype)
-        latent_activations = crosscoder.encode(batch)
+        latent_activations = dict_model.encode(encode_activation_fn(batch), use_threshold=True) # use threshold is for BatchTopKSAE
+        assert latent_activations.shape == (batch_size_current, dict_size)
+        
         if latent_activation_postprocessing_fn is not None:
             latent_activations = latent_activation_postprocessing_fn(latent_activations)
-        assert latent_activations.shape == (batch_size_current, dict_size)
+        
 
-        Y_batch = activation_postprocessing_fn(
+        Y_batch = target_activation_fn(
             batch,
-            crosscoder=crosscoder,
+            crosscoder=dict_model,
             latent_activations=latent_activations,
             latent_indices=latent_indices,
             latent_vectors=latent_vectors,

@@ -12,13 +12,18 @@ BASE_MODEL="google/gemma-2-2b"
 INSTRUCT_MODEL="google/gemma-2-2b-it"
 DEVICE="cuda"
 LR=1e-4
-MU=0.041
+K=50
 
 # Parse command line arguments to check for custom mu value
-custom_mu=false
+custom_k=false
+custom_lr=false
 for arg in "$@"; do
-    if [[ $arg == --mu* ]]; then
-        custom_mu=true
+    if [[ $arg == --k* ]]; then
+        custom_k=true
+        break
+    fi
+    if [[ $arg == --lr* ]]; then
+        custom_lr=true
         break
     fi
 done
@@ -29,9 +34,6 @@ FLAGS="--activation-store-dir $ACTIVATION_DIR \
 --layer $LAYER \
 --base-model $BASE_MODEL \
 --chat-model $INSTRUCT_MODEL \
---same-init-for-all-layers \
---lr $LR \
---init-with-transpose \
 --validate-every-n-steps 20_000 \
 --epochs 2 \
 --local-shuffling \
@@ -39,10 +41,13 @@ FLAGS="--activation-store-dir $ACTIVATION_DIR \
 --num-samples 100_000_000"
 
 # Only add default mu if not provided in command line arguments
-if [ "$custom_mu" = false ]; then
-    FLAGS="$FLAGS --mu $MU"
+if [ "$custom_k" = false ]; then
+    FLAGS="$FLAGS --k $K"
+fi
+if [ "$custom_lr" = false ]; then
+    FLAGS="$FLAGS --lr $LR"
 fi
 
 additional_flags=$@
 
-python scripts/train_crosscoder.py $FLAGS $additional_flags
+python scripts/train_sae.py $FLAGS $additional_flags
