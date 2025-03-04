@@ -16,6 +16,14 @@ def load_betas(
     count_active_filename = (
         f"count_active_{computation}_N{num_samples}_n_offset{n_offset}{suffix}.pt"
     )
+    if not (betas_dir_path / betas_filename).exists() and "_chat_" in betas_filename:
+        # legacy naming (chat -> it)
+        betas_filename = betas_filename.replace("_chat_", "_it_")
+        count_active_filename = count_active_filename.replace("_chat_", "_it_")
+
+    if not (betas_dir_path / betas_filename).exists():
+        raise FileNotFoundError(f"Betas file not found: {betas_filename}.")
+
     betas = th.load(betas_dir_path / betas_filename, weights_only=True).cpu()
     count_active = th.load(
         betas_dir_path / count_active_filename, weights_only=True
