@@ -14,8 +14,8 @@ from functools import partial
 from loguru import logger
 import argparse
 from tools.utils import load_activation_dataset
-from tools.cc_utils import load_crosscoder
-
+from tools.cc_utils import load_dictionary_model
+from dictionary_learning.trainers.batch_top_k import BatchTopKSAE
 import os
 
 th.set_grad_enabled(False)
@@ -25,8 +25,8 @@ from tools.latent_scaler.closed_form import (
     remove_latents,
     closed_form_scalars,
     run_tests,
+    identity_fn,
 )
-from tools.utils import load_connor_crosscoder
 
 
 def compute_max_activations(dataloader, cc, device):
@@ -114,7 +114,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
-        "--crosscoder-path",
+        "--dictionary-model",
         type=str,
         default="Butanium/gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04",
     )
@@ -129,7 +129,8 @@ def main():
     parser.add_argument(
         "--latent-indices-path",
         type=Path,
-        default="/workspace/data/latent_indices/Butanium_gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04/chat_only_indices.pt",
+        default=None,
+        help="Path to the latent indices file. If not provided, all latents are considered."
     )
     parser.add_argument("--layer", type=int, default=13)
     parser.add_argument(
@@ -169,7 +170,14 @@ def main():
         choices=["float32", "float64", "bfloat16"],
         help="Data type for computations",
     )
+    parser.add_argument("--run-tests", action="store_true", help="Run tests first")
     args = parser.parse_args()
+
+    if str(args.latent_indices_path).strip() == "None":
+        args.latent_indices_path = None
+        latent_indices_name = "all_latents"
+    else:
+        latent_indices_name = Path(args.latent_indices_path).name.split(".")[0]
 
     if args.lmsys_split is None:
         args.lmsys_split = args.dataset_split
@@ -207,23 +215,24 @@ def main():
     logger.info(f"Using dtype: {dtype}")
 
     # Run tests first
-    print("Running tests...")
-    run_tests(verbose=True)
+    if args.run_tests:
+        print("Running tests...")
+        run_tests(verbose=True)
 
     if args.threshold_active_latents is not None:
         assert (
             args.threshold_active_latents > 0 and args.threshold_active_latents < 1
         ), "Threshold must be between 0 and 1"
 
-    # Load crosscoder
-    print(f"Loading crosscoder from {args.crosscoder_path}")
-    cc = load_crosscoder(args.crosscoder_path)
-    cc = cc.to(device).to(dtype)
+    # Load dictionary model
+    print(f"Loading dictionary model from {args.dictionary_model}")
+    dict_model = load_dictionary_model(args.dictionary_model)
+    dict_model = dict_model.to(device).to(dtype)
 
     # If crosscoder is a local path, replace with only the directory name (e.g. /path/to/crosscoder/model_final.pt -> crosscoder)
-    if Path(args.crosscoder_path).exists():
-        args.crosscoder_path = Path(args.crosscoder_path).parent.name
-    print(f"Using crosscoder name: {args.crosscoder_path}")
+    if Path(args.dictionary_model).exists():
+        args.dictionary_model = Path(args.dictionary_model).parent.name
+    print(f"Using dictionary model name: {args.dictionary_model}")
 
 
     # Setup paths
@@ -257,10 +266,17 @@ def main():
         dataset = th.utils.data.Subset(dataset, th.randperm(len(dataset)))
 
     # Get decoder weights
-    it_decoder = cc.decoder.weight[1, :, :].clone().to(dtype)
-    assert it_decoder.shape == (cc.dict_size, cc.activation_dim)
-    base_decoder = cc.decoder.weight[0, :, :].clone().to(dtype)
-    assert base_decoder.shape == (cc.dict_size, cc.activation_dim)
+    if isinstance(dict_model, CrossCoder):
+        chat_decoder = dict_model.decoder.weight[1, :, :].clone().to(dtype)
+        assert chat_decoder.shape == (dict_model.dict_size, dict_model.activation_dim)
+        base_decoder = dict_model.decoder.weight[0, :, :].clone().to(dtype)
+        assert base_decoder.shape == (dict_model.dict_size, dict_model.activation_dim)
+    else:
+        chat_decoder = dict_model.decoder.weight.clone().to(dtype).T
+        print("chat_decoder.shape", chat_decoder.shape)
+        assert chat_decoder.shape == (dict_model.dict_size, dict_model.activation_dim)
+        base_decoder = dict_model.decoder.weight.clone().to(dtype).T
+        assert base_decoder.shape == (dict_model.dict_size, dict_model.activation_dim)
 
     logger.info(f"Number of activations: {len(dataset)}")
 
@@ -271,8 +287,12 @@ def main():
         pin_memory=True,
         num_workers=args.num_workers,
     )
-
-    latent_indices = th.load(args.latent_indices_path, weights_only=True)
+    print("args.latent_indices_path", args.latent_indices_path, args.latent_indices_path is None)
+    if args.latent_indices_path is not None:
+        latent_indices = th.load(args.latent_indices_path, weights_only=True)
+    else:
+        print("No latent indices provided, using all latents")
+        latent_indices = th.arange(dict_model.dict_size)
 
     latent_activation_postprocessing_fn = None
     if args.threshold_active_latents is not None:
@@ -281,8 +301,8 @@ def main():
         )
         if not os.path.exists(max_act_path):
             # Compute max activations
-            max_activations = compute_max_activations(dataloader, cc, device)
-            assert max_activations.shape == (cc.dict_size,)
+            max_activations = compute_max_activations(dataloader, dict_model, device)
+            assert max_activations.shape == (dict_model.dict_size,)
             th.save(max_activations, max_act_path)
         else:
             max_activations = th.load(max_act_path)
@@ -301,13 +321,18 @@ def main():
     
     # Create results directory
     if args.special_results_dir:
-        results_dir = args.results_dir / args.special_results_dir / args.crosscoder_path.replace("/", "_")
+        results_dir = args.results_dir / args.special_results_dir / args.dictionary_model.replace("/", "_")
     else:
-        results_dir = args.results_dir / args.crosscoder_path.replace("/", "_")
-    results_dir = results_dir / Path(args.latent_indices_path).name.split(".")[0]
+        results_dir = args.results_dir / args.dictionary_model.replace("/", "_")
+    results_dir = results_dir / latent_indices_name
     results_dir.mkdir(parents=True, exist_ok=True)
 
     print("Saving results to ", results_dir)
+    encode_activation_fn = identity_fn
+    if isinstance(dict_model, BatchTopKSAE):
+        # Deal with BatchTopKSAE 
+        print("BatchTopKSAE detected, using load_chat_activation as encode_activation_fn")
+        encode_activation_fn = load_chat_activation
     computations = []
     if args.base_activation:
         computations.append(("base_activation", load_base_activation))
@@ -316,6 +341,7 @@ def main():
     if args.base_reconstruction:
         computations.append(("base_reconstruction", load_base_reconstruction))
     if args.base_error:
+        assert isinstance(dict_model, CrossCoder), "Base error only supported for CrossCoder"
         computations.append(
             ("base_error", partial(load_base_error, base_decoder=base_decoder))
         )
@@ -328,13 +354,13 @@ def main():
     if args.chat_error:
         computations.append(("it_error", load_chat_error))
 
-    latent_vectors = it_decoder[latent_indices].clone()
+    latent_vectors = chat_decoder[latent_indices].clone()
     print("latent_vectors.shape", latent_vectors.shape)
     if args.random_vectors:
         random_vectors = th.randn(
-            len(latent_indices), cc.activation_dim, device=device
+            len(latent_indices), dict_model.activation_dim, device=device
         )
-        assert random_vectors.shape == (len(latent_indices), cc.activation_dim)
+        assert random_vectors.shape == (len(latent_indices), dict_model.activation_dim)
         # Scale random vectors to match the norm of the IT decoder vectors
         it_decoder_norm = th.norm(latent_vectors, dim=1)
         print(it_decoder_norm.shape)
@@ -343,19 +369,19 @@ def main():
         random_vectors = random_vectors * (
             it_decoder_norm / th.norm(random_vectors, dim=1)
         ).unsqueeze(1)
-        assert random_vectors.shape == (len(latent_indices), cc.activation_dim)
+        assert random_vectors.shape == (len(latent_indices), dict_model.activation_dim)
         latent_vectors = random_vectors
 
     if args.random_indices:
         random_indices = th.randint(
-            0, cc.dict_size, (len(latent_indices),), device=device
+            0, dict_model.dict_size, (len(latent_indices),), device=device
         )
         assert random_indices.shape == (len(latent_indices),)
         # Scale random indices to match the norm of the IT decoder vectors
-        random_indices_vectors = it_decoder[random_indices].clone()
+        random_indices_vectors = chat_decoder[random_indices].clone()
         assert random_indices_vectors.shape == (
             len(latent_indices),
-            cc.activation_dim,
+            dict_model.activation_dim,
         )
         # Scale random vectors to match the norm of the IT decoder vectors
         it_decoder_norm = th.norm(latent_vectors, dim=1)
@@ -365,7 +391,7 @@ def main():
         ).unsqueeze(1)
         assert random_indices_vectors.shape == (
             len(latent_indices),
-            cc.activation_dim,
+            dict_model.activation_dim,
         )
         latent_vectors = random_indices_vectors
 
@@ -385,10 +411,11 @@ def main():
             latent_vectors,
             latent_indices,
             dataloader,
-            cc,
+            dict_model,
             loader_fn,
             device=device,
             dtype=dtype,
+            encode_activation_fn=encode_activation_fn,
             latent_activation_postprocessing_fn=latent_activation_postprocessing_fn,
         )
         th.save(betas.cpu(), results_dir / f"betas_{name}.pt")

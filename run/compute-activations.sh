@@ -44,6 +44,9 @@ fi
 if [ "$SPLIT_ARG" == "train" ]; then
     SPLIT="train"
     N_TOKS=50_000_000
+    if [ "$DATASET_ARG" == "chat" ]; then
+        N_TOKS=100_000_000
+    fi
 elif [ "$SPLIT_ARG" == "val" ]; then
     SPLIT="validation"
     N_TOKS=5_000_000
