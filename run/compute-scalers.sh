@@ -17,7 +17,7 @@ while [[ $# -gt 0 ]]; do
       DICT_MODEL_PATH="$2"
       shift 2
       ;;
-    --latent-indices)
+    --latent-indices-path)
       LATENT_INDICES="$2"
       shift 2
       ;;
@@ -40,7 +40,7 @@ if [ -z "$LATENT_INDICES" ]; then
 fi
 
 FLAGS="--dictionary-model $DICT_MODEL_PATH \
-      --latent-indices $LATENT_INDICES \
+      --latent-indices-path $LATENT_INDICES \
       --activation-store-dir $DATASTORE/activations/ \
       --dataset-split $SPLIT \
       --batch-size $BATCH_SIZE \

@@ -184,6 +184,7 @@ if __name__ == "__main__":
         (f"-{args.run_name}" if args.run_name is not None else "") + \
         (f"-local-shuffling" if args.local_shuffling else "")
 
+    
     device = "cuda" if th.cuda.is_available() else "cpu"
     if args.max_steps is None:
         args.max_steps = len(train_dataset) // args.batch_size

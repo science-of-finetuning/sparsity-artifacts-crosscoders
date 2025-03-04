@@ -7,9 +7,9 @@ from pathlib import Path
 from nnsight import LanguageModel
 from dictionary_learning.cache import PairedActivationCache
 from dictionary_learning import ActivationBuffer, CrossCoder
-from dictionary_learning.trainers import CrossCoderTrainer
+from dictionary_learning.trainers.crosscoder import CrossCoderTrainer, BatchTopKCrossCoderTrainer
 from dictionary_learning.training import trainSAE
-from dictionary_learning.dictionary import LossType
+from dictionary_learning.dictionary import LossType, BatchTopKCrossCoder
 import os
 
 import wandb
@@ -77,8 +77,10 @@ if __name__ == "__main__":
     parser.add_argument("--text-column", type=str, default="text")
     parser.add_argument("--no-train-shuffle", action="store_true")
     parser.add_argument("--local-shuffling", action="store_true")
-    parser.add_argument("--loss-type", type=str, default="crosscoder", choices=["crosscoder", "sae", "mixed"])
+    parser.add_argument("--sparsity-type", type=str, default="crosscoder", choices=["crosscoder", "sae", "mixed"])
     parser.add_argument("--use-mse-loss", action="store_true")
+    parser.add_argument("--k", type=int, default=100)
+    parser.add_argument("--type", type=str, default="relu", choices=["batch-top-k", "relu"])
 
     args = parser.parse_args()
 
@@ -167,48 +169,91 @@ if __name__ == "__main__":
         th.utils.data.Subset(lmsys_cache_val, th.arange(0, num_validation_samples)),
     ])
     
-    loss_type = LossType.from_string(args.loss_type)
-    name = f"{args.base_model.split('/')[-1]}-L{args.layer}-mu{args.mu:.1e}-lr{args.lr:.0e}" + \
+    sparsity_type = LossType.from_string(args.sparsity_type)
+    if args.type == "relu":
+        name = f"{args.base_model.split('/')[-1]}-L{args.layer}-mu{args.mu:.1e}-lr{args.lr:.0e}" + \
         (f"-{args.run_name}" if args.run_name is not None else "") + \
         (f"-local-shuffling" if args.local_shuffling else "") + \
-        (f"-{get_loss_name(loss_type)}") + \
+        (f"-{get_loss_name(sparsity_type)}") + \
         (f"-mse" if args.use_mse_loss else "")
+    elif args.type == "batch-top-k":
+        name = f"{args.base_model.split('/')[-1]}-L{args.layer}-k{args.k}-lr{args.lr:.0e}" + \
+        (f"-{args.run_name}" if args.run_name is not None else "") + \
+        (f"-local-shuffling" if args.local_shuffling else "") + \
+        (f"-{get_loss_name(sparsity_type)}") 
+    else:
+        raise ValueError(f"Invalid sparsity type: {args.sparsity_type}")
+
     if args.pretrained is not None:
         name += f"-pt"
+    if args.max_steps is None:
+        args.max_steps = len(train_dataset) // args.batch_size
     device = "cuda" if th.cuda.is_available() else "cpu"
     print(f"Training on device={device}.")
-    print(f"Loss type: {loss_type}")
-    trainer_cfg = {
-        "trainer": CrossCoderTrainer,
-        "dict_class": CrossCoder,
-        "activation_dim": activation_dim,
-        "dict_size": dictionary_size,
-        "lr": args.lr,
-        "resample_steps": args.resample_steps,
-        "device": device,
-        "warmup_steps": 1000,
-        "layer": args.layer,
-        "lm_name": f"{args.chat_model}-{args.base_model}",
-        "compile": True,
-        "wandb_name": name,
-        "l1_penalty": args.mu,
-        "dict_class_kwargs": {
-            "same_init_for_all_layers": args.same_init_for_all_layers,
-            "norm_init_scale": args.norm_init_scale,
-            "init_with_transpose": args.init_with_transpose,
-            "encoder_layers": args.encoder_layers,
-            "sparsity_loss_type": loss_type,
-            "sparsity_loss_alpha_sae": 1.0,
-            "sparsity_loss_alpha_cc": 0.1,
-        },
-        "pretrained_ae": (
-            CrossCoder.from_pretrained(args.pretrained)
-            if args.pretrained is not None
-            else None
-        ),
-        "use_mse_loss": args.use_mse_loss,
-    }
-
+    print(f"Loss type: {sparsity_type}")
+    if args.type == "relu":
+        trainer_cfg = {
+            "trainer": CrossCoderTrainer,
+            "dict_class": CrossCoder,
+            "activation_dim": activation_dim,
+            "dict_size": dictionary_size,
+            "lr": args.lr,
+            "resample_steps": args.resample_steps,
+            "device": device,
+            "warmup_steps": 1000,
+            "layer": args.layer,
+            "lm_name": f"{args.chat_model}-{args.base_model}",
+            "compile": True,
+            "wandb_name": name,
+            "l1_penalty": args.mu,
+            "dict_class_kwargs": {
+                "same_init_for_all_layers": args.same_init_for_all_layers,
+                "norm_init_scale": args.norm_init_scale,
+                "init_with_transpose": args.init_with_transpose,
+                "encoder_layers": args.encoder_layers,
+                "sparsity_loss_type": sparsity_type,
+                "sparsity_loss_alpha_sae": 1.0,
+                "sparsity_loss_alpha_cc": 0.1,
+            },
+            "pretrained_ae": (
+                CrossCoder.from_pretrained(args.pretrained)
+                if args.pretrained is not None
+                else None
+            ),
+            "use_mse_loss": args.use_mse_loss,
+        }
+    elif args.type == "batch-top-k":
+        trainer_cfg = {
+            "trainer": BatchTopKCrossCoderTrainer,
+            "dict_class": BatchTopKCrossCoder,
+            "activation_dim": activation_dim,
+            "dict_size": dictionary_size,
+            "lr": args.lr,
+            "device": device,
+            "warmup_steps": 1000,
+            "layer": args.layer,
+            "lm_name": f"{args.chat_model}-{args.base_model}",
+            "wandb_name": name,
+            "k": args.k,
+            "steps": args.max_steps,
+            "auxk_alpha": 1 / 32,
+            "dict_class_kwargs": {
+                "same_init_for_all_layers": args.same_init_for_all_layers,
+                "norm_init_scale": args.norm_init_scale,
+                "init_with_transpose": args.init_with_transpose,
+                "encoder_layers": args.encoder_layers,
+                "sparsity_loss_type": sparsity_type,
+                "sparsity_loss_alpha_sae": 1.0,
+                "sparsity_loss_alpha_cc": 0.1,
+            },
+            "pretrained_ae": (
+                BatchTopKCrossCoder.from_pretrained(args.pretrained)
+                if args.pretrained is not None
+                else None
+            ),
+        }
+    else:
+        raise ValueError(f"Invalid sparsity type: {args.sparsity_type}")
 
     print(f"Training on {len(train_dataset)} token activations.")
     dataloader = th.utils.data.DataLoader(
