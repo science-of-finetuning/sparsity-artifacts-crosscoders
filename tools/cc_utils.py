@@ -11,6 +11,7 @@ from pandas.io.formats.printing import pprint_thing
 import torch as th
 from transformers import AutoTokenizer
 from huggingface_hub import hf_hub_download, hf_api
+from dictionary_learning.dictionary import Dictionary
 
 from dictionary_learning.dictionary import BatchTopKCrossCoder, CrossCoder
 from dictionary_learning.trainers.batch_top_k import BatchTopKSAE
@@ -19,28 +20,40 @@ from tiny_dashboard import OfflineFeatureCentricDashboard
 from tiny_dashboard.dashboard_implementations import CrosscoderOnlineFeatureDashboard
 
 dfs = defaultdict(lambda: None)
-df_hf_repo = {
+df_hf_repo_legacy = {
     "l13_crosscoder": "science-of-finetuning/max-activating-examples-gemma-2-2b-l13-mu4.1e-02-lr1e-04",
     "Butanium/gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04": "science-of-finetuning/max-activating-examples-gemma-2-2b-l13-mu4.1e-02-lr1e-04",
+    "science-of-finetuning/diffing-stats-gemma-2-2b-l13-mu4.1e-02-lr1e-04": "science-of-finetuning/max-activating-examples-gemma-2-2b-l13-mu4.1e-02-lr1e-04",
     "connor": "science-of-finetuning/max-activating-examples-gemma-2-2b-l13-ckissane",
     "ckkissane/crosscoder-gemma-2-2b-model-diff": "science-of-finetuning/max-activating-examples-gemma-2-2b-l13-ckissane",
+    "science-of-finetuning/diffing-stats-gemma-2-2b-l13-mu4.1e-02-lr1e-04": "science-of-finetuning/max-activating-examples-gemma-2-2b-l13-mu4.1e-02-lr1e-04",
 }
 
 
-def load_latent_df(crosscoder=None):
+def load_latent_df(crosscoder_or_path=None):
     """Load the latent_df for the given crosscoder."""
-    if crosscoder is None:
-        crosscoder = "l13_crosscoder"
-    if crosscoder in df_hf_repo:
+    if crosscoder_or_path is None:
+        crosscoder_or_path = "l13_crosscoder"
+    if crosscoder_or_path in df_hf_repo_legacy:
+        # LEGACY SUPPORT
         df_path = hf_hub_download(
-            repo_id=df_hf_repo[crosscoder],
+            repo_id=df_hf_repo_legacy[crosscoder_or_path],
             filename="feature_df.csv",
             repo_type="dataset",
         )
-    else:
-        df_path = Path(crosscoder)
-        if not df_path.exists():
-            raise ValueError(f"Unknown crosscoder: {crosscoder}")
+    elif Path(crosscoder_or_path).exists():
+        # Local model
+        df_path = Path(crosscoder_or_path)
+    else: 
+        repo_id = f"science-of-finetuning/diffing-stats-{crosscoder_or_path}"
+        try:
+            df_path = hf_hub_download(
+                repo_id=repo_id,
+                filename="feature_df.csv",
+                repo_type="dataset",
+            )
+        except Exception as e:
+            raise ValueError(f"Failed to download latent_df for {crosscoder_or_path}: {e}")
     df = pd.read_csv(df_path, index_col=0)
     return df
 
@@ -52,6 +65,7 @@ def push_latent_df(
     allow_remove_columns=None,
     commit_message=None,
     confirm=True,
+    create_repo_if_missing=False,
 ):
     """
     Push a new feature_df.csv to the hub.
@@ -63,87 +77,187 @@ def push_latent_df(
         allow_remove_columns: if not None, a list of columns to allow to be removed
         commit_message: the commit message to use for the push
         confirm: if True, ask the user to confirm the push
+        create_repo_if_missing: if True, create the repository if it doesn't exist
     """
     if crosscoder is None:
         crosscoder = "l13_crosscoder"
     if not force or confirm:
-        original_df = load_latent_df(crosscoder)
-        original_columns = set(original_df.columns)
-        new_columns = set(df.columns)
-        allow_remove_columns = (
-            set(allow_remove_columns) if allow_remove_columns is not None else set()
-        )
-        missing_columns = original_columns - new_columns
-        added_columns = new_columns - original_columns
-        shared_columns = original_columns & new_columns
-        duplicated_columns = df.columns.duplicated()
-        if duplicated_columns.any():
-            raise ValueError(
-                f"Duplicated columns in uploaded df: {df.columns[duplicated_columns]}"
+        try:
+            original_df = load_latent_df(crosscoder)
+            original_columns = set(original_df.columns)
+            new_columns = set(df.columns)
+            allow_remove_columns = (
+                set(allow_remove_columns) if allow_remove_columns is not None else set()
             )
-        if len(missing_columns) > 0:
-            real_missing_columns = missing_columns - allow_remove_columns
-            if len(real_missing_columns) > 0 and not force:
+            missing_columns = original_columns - new_columns
+            added_columns = new_columns - original_columns
+            shared_columns = original_columns & new_columns
+            duplicated_columns = df.columns.duplicated()
+            if duplicated_columns.any():
                 raise ValueError(
-                    f"Missing columns in uploaded df: {missing_columns}\n"
-                    "If you want to upload the df anyway, set allow_remove_columns=your_removed_columns"
-                    " or force=True"
+                    f"Duplicated columns in uploaded df: {df.columns[duplicated_columns]}"
                 )
-            elif len(missing_columns) > 0 and len(real_missing_columns) == 0:
-                print(f"Removed columns in uploaded df: {missing_columns}")
-            else:
-                warnings.warn(
-                    f"Missing columns in uploaded df: {missing_columns}\n"
-                    "Force=True -> Upload df anyway"
-                )
-
-        if len(added_columns) > 0 and not force:
-            print(f"Added columns in uploaded df: {added_columns}")
-
-        for column in shared_columns:
-            if original_df[column].dtype != df[column].dtype:
-                warnings.warn(
-                    f"Column {column} has different dtype in original and new df"
-                )
-            # diff the columns
-            if "float" in str(original_df[column].dtype):
-                equal = np.allclose(
-                    original_df[column].values, df[column].values, equal_nan=True
-                )
-            else:
-                equal = original_df[column].equals(df[column])
-            if not equal:
-                print(f"Column {column} has different values in original and new df:")
-                if "float" in str(original_df[column].dtype):
-                    diff_ratio = (
-                        ~np.isclose(
-                            original_df[column].values,
-                            df[column].values,
-                            equal_nan=True,
-                        )
-                    ).mean() * 100
+            if len(missing_columns) > 0:
+                real_missing_columns = missing_columns - allow_remove_columns
+                if len(real_missing_columns) > 0 and not force:
+                    raise ValueError(
+                        f"Missing columns in uploaded df: {missing_columns}\n"
+                        "If you want to upload the df anyway, set allow_remove_columns=your_removed_columns"
+                        " or force=True"
+                    )
+                elif len(missing_columns) > 0 and len(real_missing_columns) == 0:
+                    print(f"Removed columns in uploaded df: {missing_columns}")
                 else:
-                    diff_ratio = (original_df[column] != df[column]).mean() * 100
-                print(f"% of different values: {diff_ratio:.2f}%")
+                    warnings.warn(
+                        f"Missing columns in uploaded df: {missing_columns}\n"
+                        "Force=True -> Upload df anyway"
+                    )
 
-                print(f"Original: {pprint_thing(original_df[column].values)}")
-                print(f"New     : {pprint_thing(df[column].values)}")
-                print("=" * 20 + "\n", flush=True)
+            if len(added_columns) > 0 and not force:
+                print(f"Added columns in uploaded df: {added_columns}")
+
+            for column in shared_columns:
+                if original_df[column].dtype != df[column].dtype:
+                    warnings.warn(
+                        f"Column {column} has different dtype in original and new df"
+                    )
+                # diff the columns
+                if "float" in str(original_df[column].dtype):
+                    equal = np.allclose(
+                        original_df[column].values, df[column].values, equal_nan=True
+                    )
+                else:
+                    equal = original_df[column].equals(df[column])
+                if not equal:
+                    print(f"Column {column} has different values in original and new df:")
+                    if "float" in str(original_df[column].dtype):
+                        diff_ratio = (
+                            ~np.isclose(
+                                original_df[column].values,
+                                df[column].values,
+                                equal_nan=True,
+                            )
+                        ).mean() * 100
+                    else:
+                        diff_ratio = (original_df[column] != df[column]).mean() * 100
+                    print(f"% of different values: {diff_ratio:.2f}%")
+
+                    print(f"Original: {pprint_thing(original_df[column].values)}")
+                    print(f"New     : {pprint_thing(df[column].values)}")
+                    print("=" * 20 + "\n", flush=True)
+        except Exception as e:
+            if not create_repo_if_missing:
+                raise e
+            print(f"Failed to load original df: {e}")
+            print("Will create a new repository.")
+            
     if confirm:
         print(f"Commit message: {commit_message}")
         r = input("Would you like to push the df to the hub? y/(n)")
         if r != "y":
             raise ValueError("User cancelled")
+            
+    # Get the repository ID
+    repo_id = df_hf_repo_legacy.get(crosscoder) if hasattr(df_hf_repo_legacy, 'get') else None
+    if repo_id is None:
+        repo_id = f"science-of-finetuning/diffing-stats-{crosscoder}"
+        
     with TemporaryDirectory() as tmpdir:
         df.to_csv(Path(tmpdir) / "feature_df.csv")
-        hf_api.upload_file(
-            repo_id=df_hf_repo[crosscoder],
-            path_or_fileobj=Path(tmpdir) / "feature_df.csv",
-            path_in_repo="feature_df.csv",
-            repo_type="dataset",
-            commit_message=commit_message,
-        )
+        try:
+            hf_api.upload_file(
+                repo_id=repo_id,
+                path_or_fileobj=Path(tmpdir) / "feature_df.csv",
+                path_in_repo="feature_df.csv",
+                repo_type="dataset",
+                commit_message=commit_message,
+            )
+        except Exception as e:
+            if not create_repo_if_missing:
+                raise e
+                
+            print(f"Repository {repo_id} doesn't exist. Creating it...")
+            
+            # Create the repository
+            hf_api.create_repo(
+                repo_id=repo_id,
+                repo_type="dataset",
+                private=False,
+            )
+            
+            # Try uploading again
+            hf_api.upload_file(
+                repo_id=repo_id,
+                path_or_fileobj=Path(tmpdir) / "feature_df.csv",
+                path_in_repo="feature_df.csv",
+                repo_type="dataset",
+                commit_message=commit_message or f"Initial upload for {crosscoder}",
+            )
+            print(f"Successfully created repository {repo_id} and uploaded data.")
+    return repo_id
 
+def model_path_to_name(model_path: Path):
+    """Convert a model path to a name."""
+    if str(model_path).endswith(".pt"):
+        return model_path.parent.name
+    else:
+        return model_path.name
+
+def push_dictionary_model(model_path: Path):
+    """Push a dictionary model to the Hugging Face Hub.
+    
+    Args:
+        model_path: The path to the model to push
+    """
+    model_name = model_path_to_name(model_path)
+    repo_id = f"science-of-finetuning/{model_name}"
+    model_dir = model_path.parent
+    config_path = model_dir / "config.json"
+
+
+    model = load_dictionary_model(model_path)
+    # Upload files to the hub
+    try:
+        model.push_to_hub(repo_id)
+        
+        # Upload config
+        hf_api.upload_file(
+            repo_id=repo_id,
+            path_or_fileobj=config_path,
+            path_in_repo="trainer_config.json",
+            repo_type="model",
+            commit_message=f"Upload {model_name} dictionary model",
+        )
+        
+        print(f"Successfully uploaded model to {repo_id}")
+    except Exception as e:
+        print(f"Error uploading model to hub: {e}")
+        
+        # Try creating the repository
+        try:
+            print(f"Repository {repo_id} doesn't exist. Creating it...")
+            hf_api.create_repo(
+                repo_id=repo_id,
+                repo_type="model",
+                private=False,
+            )
+            
+            # Try uploading again
+            model.push_to_hub(repo_id)
+            
+            hf_api.upload_file(
+                repo_id=repo_id,
+                path_or_fileobj=config_path,
+                path_in_repo="trainer_config.json",
+                repo_type="model",
+                commit_message=f"Initial upload of {model_name} dictionary model",
+            )
+            
+            print(f"Successfully created repository {repo_id} and uploaded model.")
+        except Exception as e2:
+            print(f"Failed to create repository and upload model: {e2}")
+            raise e2
+    return repo_id
 
 def _latent_df(crosscoder=None):
     if crosscoder is None:
@@ -286,11 +400,58 @@ def load_crosscoder(crosscoder=None):
         else:
             raise ValueError(f"Unknown crosscoder: {crosscoder}")
 
-def load_dictionary_model(model_name: str):
-    if "SAE-" in model_name:
-        return BatchTopKSAE.from_pretrained(model_name)
+def load_dictionary_model(model_name: str | Path):
+    """Load a dictionary model from a local path or HuggingFace Hub.
+    
+    Args:
+        model_name: Name or path of the model to load
+        
+    Returns:
+        The loaded dictionary model
+    """
+    # Check if it's a HuggingFace Hub model
+    if "/" not in str(model_name) or not Path(model_name).exists():
+        # Legacy model
+        if str(model_name) in df_hf_repo_legacy:
+            model_name = df_hf_repo_legacy[str(model_name)]
+        else:
+            model_id = "science-of-finetuning/" + str(model_name)
+            # Download config to determine model type
+        try:
+            config_path = hf_hub_download(repo_id=model_id, filename="trainer_config.json")
+            with open(config_path, "r") as f:
+                config = json.load(f)["trainer"]
+
+            # Determine model class based on config
+            if "dict_class" in config and config["dict_class"] in ["BatchTopKSAE", "CrossCoder", "BatchTopKCrossCoder"]:
+                return eval(f"{config['dict_class']}.from_pretrained(model_id, from_hub=True)")
+            else:
+                raise ValueError(f"Unknown model type: {config['dict_class']}")
+        except Exception as e:
+            print(f"Error loading model from hub: {e}")
+            # If no model_type in config, try to infer from other fields
+            if "k" in config and "dict_size" in config:
+                return BatchTopKSAE.from_pretrained(model_name, from_hub=True)
+            else:
+                return CrossCoder.from_pretrained(model_name, from_hub=True)
+        except Exception as e:
+            raise e
     else:
-        return load_crosscoder(model_name)
+        # Local model
+        model_path = Path(model_name)
+        if not model_path.exists():
+            raise ValueError(f"Local model {model_name} does not exist")
+        
+        # Load the config
+        with open(model_path.parent / "config.json", "r") as f:
+            config = json.load(f)["trainer"]
+
+        # Determine model class based on config
+        if "dict_class" in config and config["dict_class"] in ["BatchTopKSAE", "CrossCoder", "BatchTopKCrossCoder"]:
+            return eval(f"{config['dict_class']}.from_pretrained(model_path)")
+        else:
+            raise ValueError(f"Unknown model type: {config['dict_class']}")
+
 
 crosscoders = defaultdict(lambda: None)
 
@@ -365,7 +526,7 @@ def load_max_activating_examples(
         case "chat":
             return th.load(
                 hf_hub_download(
-                    repo_id=df_hf_repo[crosscoder],
+                    repo_id=df_hf_repo_legacy[crosscoder],
                     filename="chat_examples.pt",
                     repo_type="dataset",
                 )
@@ -373,7 +534,7 @@ def load_max_activating_examples(
         case "base":
             return th.load(
                 hf_hub_download(
-                    repo_id=df_hf_repo[crosscoder],
+                    repo_id=df_hf_repo_legacy[crosscoder],
                     filename="base_examples.pt",
                     repo_type="dataset",
                 )
@@ -381,7 +542,7 @@ def load_max_activating_examples(
         case "both":
             return th.load(
                 hf_hub_download(
-                    repo_id=df_hf_repo[crosscoder],
+                    repo_id=df_hf_repo_legacy[crosscoder],
                     filename="chat_base_examples.pt",
                     repo_type="dataset",
                 )
