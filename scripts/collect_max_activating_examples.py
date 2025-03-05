@@ -7,22 +7,16 @@ import argparse
 import gc
 import sqlite3
 import sys
-import bisect
 import random
 import numpy as np
-import time
 
 import torch as th
-from torch.utils.data import DataLoader
 from tqdm import tqdm
 import wandb
 from huggingface_hub import hf_api
 
 sys.path.append(".")
 
-from tools.utils import (
-    load_latent_df,
-)
 from tools.cache_utils import LatentActivationCache
 
 th.set_grad_enabled(False)
