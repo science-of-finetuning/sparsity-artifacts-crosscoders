@@ -21,3 +21,5 @@ interactive.sh
 playground.ipynb
 *.png
 _archive/**
+run/run1.sh
+run/run2.sh
