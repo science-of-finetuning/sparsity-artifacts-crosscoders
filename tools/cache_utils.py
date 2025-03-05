@@ -257,41 +257,15 @@ class SampleCache:
     
     
 class LatentActivationCache:
-    def __init__(self, latent_activations_dir: Path, pad_token_id: int):
+    def __init__(self, latent_activations_dir: Path):
         self.acts = th.load(latent_activations_dir / "out_acts.pt", weights_only=True)
         self.ids = th.load(latent_activations_dir / "out_ids.pt", weights_only=True)
         self.max_activations = th.load(latent_activations_dir / "max_activations.pt", weights_only=True)
         self.latent_ids = th.load(latent_activations_dir / "latent_ids.pt", weights_only=True)
         self.padded_sequences = th.load(latent_activations_dir / "padded_sequences.pt", weights_only=True)
-        self.pad_token_id = pad_token_id
         self.dict_size = self.max_activations.shape[0]
         self.sequence_lengths = th.load(latent_activations_dir / "seq_lengths.pt", weights_only=True)
         self.sequence_ranges = th.load(latent_activations_dir / "seq_ranges.pt", weights_only=True)
-
-    def compute_sequence_lengths(self):
-        """
-        Computes the actual length of each sequence by finding the first pad token.
-        
-        Returns:
-            torch.Tensor: A tensor containing the length of each sequence.
-        """
-        # Create a tensor to store sequence lengths
-        sequence_lengths = th.zeros(len(self.padded_sequences), dtype=th.long)
-        
-        # For each sequence, find the position of the first pad token
-        for i, seq in enumerate(self.padded_sequences):
-            # Find indices where the token is the pad token
-            pad_positions = (seq == self.pad_token_id).nonzero(as_tuple=True)[0]
-            
-            if len(pad_positions) > 0:
-                # If pad tokens exist, the length is the position of the first pad token
-                sequence_lengths[i] = pad_positions[0]
-            else:
-                # If no pad tokens, the length is the full sequence length
-                sequence_lengths[i] = len(seq)
-                
-        return sequence_lengths
-
 
     def __len__(self):
         return len(self.padded_sequences)
@@ -301,9 +275,10 @@ class LatentActivationCache:
         start_index = self.sequence_ranges[index]
         end_index = self.sequence_ranges[index+1]
         seq_indices = self.ids[start_index:end_index]
-        assert seq_indices.shape == (self.sequence_lengths[index], 3)
         assert th.all(seq_indices[:, 0] == index)
+        print(seq_indices)
         seq_indices = seq_indices[:, 1:] # remove seq_idx column
+        print(seq_indices)
         latent_activations[seq_indices[:, 0], seq_indices[:, 1]] = self.acts[start_index:end_index]
         return self.padded_sequences[index][:self.sequence_lengths[index]], latent_activations
 
