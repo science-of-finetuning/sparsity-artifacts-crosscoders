@@ -332,14 +332,14 @@ def main():
             raise ValueError(
                 f"Provided max activations path {max_act_path} does not exist"
             )
-        max_activations = th.load(max_act_path)
+        max_activations = th.load(max_act_path).to(device)
         assert max_activations.shape == (dict_model.dict_size,)
 
         threshold = max_activations * args.threshold_active_latents
 
         def jumprelu_latent_activations(latent_activations):
             # latent_activations: (batch_size, dict_size)
-            # Set latent activations to 0 if their value lies below 10% of the max act.
+            # Set latent activations to 0 if their value lies below x% of the max act.
             latent_activations = latent_activations.masked_fill(
                 latent_activations < threshold, 0
             )
