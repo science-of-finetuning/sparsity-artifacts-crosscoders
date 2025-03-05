@@ -83,7 +83,7 @@ Relative Norm Difference
 ========================
 """
 
-dec_df = pd.read_csv("/workspace/clement/repos/representation-structure-comparison/results/eval_crosscoder/gemma-2-2b-L13-mu5.2e-02-lr1e-04-local-shuffling-SAEloss_model_final.pt/data/feature_df.csv")
+dec_df = load_latent_df() #pd.read_csv("/workspace/julian/repositories/representation-structure-comparison/results/eval_crosscoder/gemma-2-2b-L13-mu5.2e-02-lr1e-04-2x100M-local-shuffling-SAELoss/data/feature_df.csv")
 if "dead" not in dec_df.columns:
     print("no dead column")
     dec_df["dead"] = False
@@ -91,23 +91,27 @@ green = "limegreen"
 dec_ratios = dec_df["dec_norm_diff"][dec_df["dead"] == False]
 values = 1 - dec_ratios
 plt.figure(figsize=(6, 4.))
-hist, bins, _ = plt.hist(values, bins=100, color="lightgray", label="Other")
+hist, bins, _ = plt.hist(values, bins=100, color="lightgray", label="Other", log=True)
+
 # Color specific regions
 mask_center = (bins[:-1] >= 0.4) & (bins[:-1] < 0.6)
 mask_left = (bins[:-1] >= 0.9) & (bins[:-1] <= 1.0)
 mask_right = (bins[:-1] >= 0.0) & (bins[:-1] < 0.1)
 
-plt.hist(values, bins=bins, color="lightgray")  # Base gray histogram
+plt.hist(values, bins=bins, color="lightgray", log=True)  # Base gray histogram
 plt.hist(
-    values[((values >= 0.4) & (values < 0.6))], bins=bins, color="C1", label="Shared"
+    values[((values >= 0.4) & (values < 0.6))], bins=bins, color="C1", label="Shared", log=True
 )
-plt.hist(values[((values >= 0.9))], bins=bins, color="C0", label="Chat-only")
-plt.hist(values[(values <= 0.1)], bins=bins, color=green, label="Base-only")
+plt.hist(values[((values >= 0.9))], bins=bins, color="C0", label="Chat-only", log=True)
+plt.hist(values[(values <= 0.1)], bins=bins, color=green, label="Base-only", log=True)
+
+# Update yticks for log scale
+plt.yticks([1, 10, 100, 1000, 4000], 
+           ["$10^0$", "$10^1$", "$10^2$", "$10^3$", r"$4\times10^3$"])
 
 # Remove the original xticks call
 # plt.xticks([0, 0.5, 1]), #["0\n(Base only)", "0.5\n(Shared)", "1\n(Chat only)"])
 plt.xticks([0, 0.1, 0.4, 0.5, 0.6, 0.9, 1])
-plt.yticks([0, 2000, 4000], ["$0$", r"$2\text{k}$", r"$4\text{k}$"])
 # # Get current axis and tick positions
 ax = plt.gca()
 # ticks = ax.get_xticks()
