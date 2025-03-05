@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+import sqlite3
 from typing import List
 import torch as th
 from datasets import load_dataset
@@ -10,6 +11,7 @@ from tools.cc_utils import *  # pylint: disable=unused-wildcard-import,wildcard-
 from tools.plotting_utils import *  # pylint: disable=unused-wildcard-import,wildcard-import
 from tools.tokenization_utils import *  # pylint: disable=unused-wildcard-import,wildcard-import
 
+
 def apply_masks(values: th.Tensor, masks: List[th.Tensor]) -> th.Tensor:
     """
     Apply the masks to the indices.
@@ -19,8 +21,6 @@ def apply_masks(values: th.Tensor, masks: List[th.Tensor]) -> th.Tensor:
     for mask in masks:
         values = values[mask]
     return values
-
-
 
 
 def load_activation_dataset(
@@ -62,7 +62,9 @@ def load_activation_dataset(
         instruct_model_dir_lmsys = activation_store_dir / instruct_model
     else:
         base_model_dir_lmsys = activation_store_dir / lmsys_subfolder / base_model
-        instruct_model_dir_lmsys = activation_store_dir / lmsys_subfolder / instruct_model
+        instruct_model_dir_lmsys = (
+            activation_store_dir / lmsys_subfolder / instruct_model
+        )
 
     if fineweb_subfolder is None:
         base_model_dir_fineweb = activation_store_dir / base_model
@@ -76,15 +78,19 @@ def load_activation_dataset(
     # Load validation caches
     base_model_fineweb = base_model_dir_fineweb / fineweb_name / fineweb_split
     instruct_model_fineweb = instruct_model_dir_fineweb / fineweb_name / fineweb_split
-    
+
     base_model_lmsys = base_model_dir_lmsys / lmsys_name / lmsys_split
     instruct_model_lmsys = instruct_model_dir_lmsys / lmsys_name / lmsys_split
-    
-    print(f"Loading fineweb cache from {base_model_fineweb / submodule_name} and {instruct_model_fineweb / submodule_name}")
+
+    print(
+        f"Loading fineweb cache from {base_model_fineweb / submodule_name} and {instruct_model_fineweb / submodule_name}"
+    )
     fineweb_cache = PairedActivationCache(
         base_model_fineweb / submodule_name, instruct_model_fineweb / submodule_name
     )
-    print(f"Loading lmsys cache from {base_model_lmsys / submodule_name} and {instruct_model_lmsys / submodule_name}")
+    print(
+        f"Loading lmsys cache from {base_model_lmsys / submodule_name} and {instruct_model_lmsys / submodule_name}"
+    )
 
     lmsys_cache = PairedActivationCache(
         base_model_lmsys / submodule_name, instruct_model_lmsys / submodule_name
@@ -154,3 +160,73 @@ def load_json(path: Path):
 def save_json(data, path: Path):
     with open(path, "w") as f:
         json.dump(data, f)
+
+
+class QuantileExamplesDB:
+    """A persistent, read-only dictionary-like interface for quantile examples database."""
+
+    def __init__(self, db_path):
+        """Initialize the database connection.
+
+        Args:
+            db_path: Path to the SQLite database
+        """
+        # Use URI format with read-only mode for better concurrent access
+        self.db_path = f"file:{db_path}?mode=ro"
+        # Create connection with URI mode enabled
+        self.conn = sqlite3.connect(self.db_path, uri=True)
+
+        # Cache the feature indices for faster access
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT DISTINCT feature_idx FROM quantile_examples")
+        self._feature_indices = frozenset(row[0] for row in cursor.fetchall())
+        cursor.close()
+
+    def __getitem__(self, feature_idx):
+        """Get examples for a specific feature index.
+
+        Returns:
+            List of tuples (max_activation_value, token_ids, activation_values)
+        """
+        if feature_idx not in self._feature_indices:
+            raise KeyError(f"Feature index {feature_idx} not found in database")
+
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            SELECT q.activation, q.sequence_idx, s.token_ids
+            FROM quantile_examples q
+            JOIN sequences s ON q.sequence_idx = s.sequence_idx
+            WHERE q.feature_idx = ?
+            ORDER BY q.activation DESC
+            """,
+            (feature_idx,),
+        )
+
+        results = [
+            (
+                activation,
+                np.frombuffer(token_ids_blob, dtype=np.int32).tolist(),
+                [0.0]
+                * len(np.frombuffer(token_ids_blob, dtype=np.int32)),  # placeholder
+            )
+            for activation, _, token_ids_blob in cursor.fetchall()
+        ]
+        cursor.close()
+        return results
+
+    def keys(self):
+        """Get all feature indices in the database."""
+        return self._feature_indices
+
+    def __iter__(self):
+        """Iterate over feature indices."""
+        return iter(self._feature_indices)
+
+    def __len__(self):
+        """Get the number of unique features."""
+        return len(self._feature_indices)
+
+    def __contains__(self, feature_idx):
+        """Check if a feature index exists in the database."""
+        return feature_idx in self._feature_indices
