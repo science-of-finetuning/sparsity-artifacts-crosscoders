@@ -245,6 +245,14 @@ class ComputedActivationStats:
                 ctrl_counts[ctrl_counts == 0] = np.nan
                 global_stats[f"lmsys_{name}_%"] = global_counts / ctrl_counts
 
+        # Compute total frequency by summing raw counts and dividing by total count
+        total_count = (
+            groups_data["ctrl"]["total_count"] + groups_data["non_ctrl"]["total_count"]
+        )
+        total_raw_counts = (
+            groups_data["ctrl"]["count"] + groups_data["non_ctrl"]["count"]
+        )
+        global_stats["lmsys_freq"] = total_raw_counts / total_count
         # Create global stats dataframe
         global_stats = pd.DataFrame(global_stats)
         global_stats.index.name = "feature"
@@ -611,10 +619,10 @@ def process_stats(stats: ComputedActivationStats, verbose=1):
         # Norm differences
         "enc_norm_diff","dec_base_norm", "dec_instruct_norm", "enc_base_norm", "enc_instruct_norm", 
     ]
+    all_cols =  ordered_cols + [col for col in new_stats.columns if col not in ordered_cols]
+    all_cols = [col for col in all_cols if col in new_stats.columns]
     # fmt: on
-    new_stats = new_stats[
-        ordered_cols + [col for col in new_stats.columns if col not in ordered_cols]
-    ]
+    new_stats = new_stats[all_cols]
     # # add enc base norm feature
     new_stats.to_csv("results/per_token_stats/feature_stats_global.csv")
 
