@@ -29,21 +29,6 @@ from tools.latent_scaler.closed_form import (
 )
 
 
-def compute_max_activations(dataloader, cc, device):
-    max_activations = th.zeros(cc.dict_size, device=device)
-    for batch in tqdm(dataloader, desc="Computing max activations"):
-        batch = batch.to(device)
-        latent_activations = cc.encode(batch)
-        # Update max values and immediately free the intermediate tensor
-        max_activations = th.max(max_activations, latent_activations.max(dim=0).values)
-        # Explicitly clear intermediate tensors
-        del latent_activations
-        # Force GPU memory cleanup
-        if device == "cuda":
-            th.cuda.empty_cache()
-    return max_activations
-
-
 def load_base_activation(batch, **kwargs):
     return batch[:, 0, :]
 
@@ -51,11 +36,14 @@ def load_base_activation(batch, **kwargs):
 def load_chat_activation(batch, **kwargs):
     return batch[:, 1, :]
 
+
 def load_base_activation_no_bias(batch, crosscoder: CrossCoder, **kwargs):
     return batch[:, 0, :] - crosscoder.decoder.bias[0, :]
 
+
 def load_chat_activation_no_bias(batch, crosscoder: CrossCoder, **kwargs):
     return batch[:, 1, :] - crosscoder.decoder.bias[1, :]
+
 
 def load_base_error(
     batch,
@@ -71,6 +59,7 @@ def load_base_error(
         latent_activations[:, latent_indices],
         base_decoder[latent_indices],
     )
+
 
 def load_chat_error(
     batch,
@@ -130,7 +119,7 @@ def main():
         "--latent-indices-path",
         type=Path,
         default=None,
-        help="Path to the latent indices file. If not provided, all latents are considered."
+        help="Path to the latent indices file. If not provided, all latents are considered.",
     )
     parser.add_argument("--layer", type=int, default=13)
     parser.add_argument(
@@ -158,17 +147,44 @@ def main():
     parser.add_argument("--random-indices", action="store_true")
     parser.add_argument("--name", type=str, default=None)
     parser.add_argument("--epochs", type=int, default=1)
-    parser.add_argument("-SRD", "--special-results-dir", type=str, default="", help="Addon to the results directory. Results will be saved in results_dir/SRD/model_name/")
-    parser.add_argument("--n-offset", type=int, default=0, help="Offset for the number of samples. If non-zero, the start index will be n_offset * num_samples")
+    parser.add_argument(
+        "-SRD",
+        "--special-results-dir",
+        type=str,
+        default="",
+        help="Addon to the results directory. Results will be saved in results_dir/SRD/model_name/",
+    )
+    parser.add_argument(
+        "--n-offset",
+        type=int,
+        default=0,
+        help="Offset for the number of samples. If non-zero, the start index will be n_offset * num_samples",
+    )
     parser.add_argument("--shuffle-within-dataset", action="store_true")
-    parser.add_argument("--lmsys-subfolder", type=str, default=None, help="Subfolder for the LMSYS dataset")
-    parser.add_argument("--lmsys-split", type=str, default=None, help="Split for the LMSYS dataset. If not provided, the default split will be used.")
+    parser.add_argument(
+        "--lmsys-subfolder",
+        type=str,
+        default=None,
+        help="Subfolder for the LMSYS dataset",
+    )
+    parser.add_argument(
+        "--lmsys-split",
+        type=str,
+        default=None,
+        help="Split for the LMSYS dataset. If not provided, the default split will be used.",
+    )
     parser.add_argument(
         "--dtype",
         type=str,
         default="float32",
         choices=["float32", "float64", "bfloat16"],
         help="Data type for computations",
+    )
+    parser.add_argument(
+        "--max-activations-path",
+        type=Path,
+        default=None,
+        help="Path to the max activations file. ",
     )
     parser.add_argument("--run-tests", action="store_true", help="Run tests first")
     args = parser.parse_args()
@@ -234,7 +250,6 @@ def main():
         args.dictionary_model = Path(args.dictionary_model).parent.name
     print(f"Using dictionary model name: {args.dictionary_model}")
 
-
     # Setup paths
     # Load validation dataset
     activation_store_dir = Path(args.activation_store_dir)
@@ -254,8 +269,20 @@ def main():
     num_samples_per_dataset = args.num_samples // 2
     dataset = th.utils.data.ConcatDataset(
         [
-            th.utils.data.Subset(fineweb_cache, th.arange(args.n_offset * num_samples_per_dataset, (args.n_offset + 1) * num_samples_per_dataset)),
-            th.utils.data.Subset(lmsys_cache, th.arange(args.n_offset * num_samples_per_dataset, (args.n_offset + 1) * num_samples_per_dataset)),
+            th.utils.data.Subset(
+                fineweb_cache,
+                th.arange(
+                    args.n_offset * num_samples_per_dataset,
+                    (args.n_offset + 1) * num_samples_per_dataset,
+                ),
+            ),
+            th.utils.data.Subset(
+                lmsys_cache,
+                th.arange(
+                    args.n_offset * num_samples_per_dataset,
+                    (args.n_offset + 1) * num_samples_per_dataset,
+                ),
+            ),
         ]
     )
 
@@ -287,7 +314,11 @@ def main():
         pin_memory=True,
         num_workers=args.num_workers,
     )
-    print("args.latent_indices_path", args.latent_indices_path, args.latent_indices_path is None)
+    print(
+        "args.latent_indices_path",
+        args.latent_indices_path,
+        args.latent_indices_path is None,
+    )
     if args.latent_indices_path is not None:
         latent_indices = th.load(args.latent_indices_path, weights_only=True)
     else:
@@ -296,16 +327,13 @@ def main():
 
     latent_activation_postprocessing_fn = None
     if args.threshold_active_latents is not None:
-        max_act_path = (
-            activation_store_dir / ".." / f"max_activations_N{args.num_samples}.pt"
-        )
+        max_act_path = args.max_activations_path
         if not os.path.exists(max_act_path):
-            # Compute max activations
-            max_activations = compute_max_activations(dataloader, dict_model, device)
-            assert max_activations.shape == (dict_model.dict_size,)
-            th.save(max_activations, max_act_path)
-        else:
-            max_activations = th.load(max_act_path)
+            raise ValueError(
+                f"Provided max activations path {max_act_path} does not exist"
+            )
+        max_activations = th.load(max_act_path)
+        assert max_activations.shape == (dict_model.dict_size,)
 
         threshold = max_activations * args.threshold_active_latents
 
@@ -318,10 +346,14 @@ def main():
             return latent_activations
 
         latent_activation_postprocessing_fn = jumprelu_latent_activations
-    
+
     # Create results directory
     if args.special_results_dir:
-        results_dir = args.results_dir / args.special_results_dir / args.dictionary_model.replace("/", "_")
+        results_dir = (
+            args.results_dir
+            / args.special_results_dir
+            / args.dictionary_model.replace("/", "_")
+        )
     else:
         results_dir = args.results_dir / args.dictionary_model.replace("/", "_")
     results_dir = results_dir / latent_indices_name
@@ -330,8 +362,10 @@ def main():
     print("Saving results to ", results_dir)
     encode_activation_fn = identity_fn
     if isinstance(dict_model, BatchTopKSAE):
-        # Deal with BatchTopKSAE 
-        print("BatchTopKSAE detected, using load_chat_activation as encode_activation_fn")
+        # Deal with BatchTopKSAE
+        print(
+            "BatchTopKSAE detected, using load_chat_activation as encode_activation_fn"
+        )
         encode_activation_fn = load_chat_activation
     computations = []
     if args.base_activation:
@@ -341,7 +375,9 @@ def main():
     if args.base_reconstruction:
         computations.append(("base_reconstruction", load_base_reconstruction))
     if args.base_error:
-        assert isinstance(dict_model, CrossCoder), "Base error only supported for CrossCoder"
+        assert isinstance(
+            dict_model, CrossCoder
+        ), "Base error only supported for CrossCoder"
         computations.append(
             ("base_error", partial(load_base_error, base_decoder=base_decoder))
         )
@@ -428,6 +464,7 @@ def main():
             th.save(latent_vectors.cpu(), results_dir / f"latent_vectors_{name}.pt")
         if args.random_indices:
             th.save(random_indices.cpu(), results_dir / f"random_indices_{name}.pt")
+
 
 if __name__ == "__main__":
     main()

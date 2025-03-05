@@ -188,8 +188,8 @@ def main():
         out_ids_lmsys[:, 0] += len(seq_fineweb)
         out_ids = th.cat([out_ids_fineweb, out_ids_lmsys])
         
-        seq_ranges_lmsys = [i+len(seq_fineweb) for i in seq_ranges_lmsys]
-        seq_ranges = th.cat([th.tensor(seq_ranges_fineweb), th.tensor(seq_ranges_lmsys)])
+        seq_ranges_lmsys = [i+len(out_acts_fineweb) for i in seq_ranges_lmsys]
+        seq_ranges = th.cat([th.tensor(seq_ranges_fineweb[:-1]), th.tensor(seq_ranges_lmsys)])
         
         # Combine max activations, taking the maximum between both datasets
         combined_max_activations = th.maximum(max_activations_fineweb, max_activations_lmsys)

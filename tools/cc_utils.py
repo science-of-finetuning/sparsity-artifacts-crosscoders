@@ -385,7 +385,7 @@ def load_connor_crosscoder():
 def load_crosscoder(crosscoder=None):
     if crosscoder is None:
         crosscoder = "l13_crosscoder"
-    if crosscoder == "l13_crosscoder" or crosscoder == "Butanium/gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04":
+    if crosscoder == "l13_crosscoder" or crosscoder == "Butanium/gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04" or crosscoder == "science-of-finetuning/gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04":
         return CrossCoder.from_pretrained(
             "Butanium/gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04", from_hub=True
         )
@@ -409,14 +409,16 @@ def load_dictionary_model(model_name: str | Path):
     Returns:
         The loaded dictionary model
     """
+    config = None
     # Check if it's a HuggingFace Hub model
     if "/" not in str(model_name) or not Path(model_name).exists():
         # Legacy model
         if str(model_name) in df_hf_repo_legacy:
             model_name = df_hf_repo_legacy[str(model_name)]
         else:
-            model_id = "science-of-finetuning/" + str(model_name)
-            # Download config to determine model type
+            model_name = str(model_name)
+        model_id = "science-of-finetuning/" + str(model_name)
+        # Download config to determine model type
         try:
             config_path = hf_hub_download(repo_id=model_id, filename="trainer_config.json")
             with open(config_path, "r") as f:
@@ -430,10 +432,10 @@ def load_dictionary_model(model_name: str | Path):
         except Exception as e:
             print(f"Error loading model from hub: {e}")
             # If no model_type in config, try to infer from other fields
-            if "k" in config and "dict_size" in config:
-                return BatchTopKSAE.from_pretrained(model_name, from_hub=True)
+            if config is not None and "k" in config and "dict_size" in config:
+                return BatchTopKSAE.from_pretrained(model_id, from_hub=True)
             else:
-                return CrossCoder.from_pretrained(model_name, from_hub=True)
+                return CrossCoder.from_pretrained(model_id, from_hub=True)
         except Exception as e:
             raise e
     else:
