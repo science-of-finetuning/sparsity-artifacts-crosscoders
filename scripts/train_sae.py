@@ -1,4 +1,5 @@
 import sys
+
 sys.path.append(".")
 import torch as th
 import argparse
@@ -17,35 +18,44 @@ import os
 from tools.cache_utils import DifferenceCache
 
 import wandb
+
 wandb.require("legacy-service")
 
 th.set_float32_matmul_precision("high")
 
 from tools.utils import load_activation_dataset
 
-def get_local_shuffled_indices(num_samples_per_dataset, shard_size, single_dataset=False):
-    num_shards_per_dataset = num_samples_per_dataset // shard_size + (1 if num_samples_per_dataset % shard_size != 0 else 0)
+
+def get_local_shuffled_indices(
+    num_samples_per_dataset, shard_size, single_dataset=False
+):
+    num_shards_per_dataset = num_samples_per_dataset // shard_size + (
+        1 if num_samples_per_dataset % shard_size != 0 else 0
+    )
     print(f"Number of shards per dataset: {num_shards_per_dataset}", flush=True)
-    
+
     shuffled_indices = []
     for i in trange(num_shards_per_dataset):
         start_idx = i * shard_size
         end_idx = min((i + 1) * shard_size, num_samples_per_dataset)
         shard_size_curr = end_idx - start_idx
-        
+
         if single_dataset:
             shard_indices = th.randperm(shard_size_curr) + start_idx
         else:
             fineweb_indices = th.randperm(shard_size_curr) + start_idx
-            lmsys_indices = th.randperm(shard_size_curr) + num_samples_per_dataset + start_idx
-        
+            lmsys_indices = (
+                th.randperm(shard_size_curr) + num_samples_per_dataset + start_idx
+            )
+
             shard_indices = th.zeros(2 * shard_size_curr, dtype=th.long)
             shard_indices[0::2] = fineweb_indices
             shard_indices[1::2] = lmsys_indices
         shuffled_indices.append(shard_indices)
-        
+
     shuffled_indices = th.cat(shuffled_indices)
     return shuffled_indices
+
 
 def setup_cache(args, fineweb_cache, lmsys_cache):
     if args.target == "base":
@@ -55,9 +65,14 @@ def setup_cache(args, fineweb_cache, lmsys_cache):
         fineweb_cache = fineweb_cache.activation_cache_2
         lmsys_cache = lmsys_cache.activation_cache_2
     elif args.target == "difference":
-        fineweb_cache = DifferenceCache(fineweb_cache.activation_cache_1, fineweb_cache.activation_cache_2)
-        lmsys_cache = DifferenceCache(lmsys_cache.activation_cache_1, lmsys_cache.activation_cache_2)
+        fineweb_cache = DifferenceCache(
+            fineweb_cache.activation_cache_1, fineweb_cache.activation_cache_2
+        )
+        lmsys_cache = DifferenceCache(
+            lmsys_cache.activation_cache_1, lmsys_cache.activation_cache_2
+        )
     return fineweb_cache, lmsys_cache
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -82,7 +97,12 @@ if __name__ == "__main__":
     parser.add_argument("--text-column", type=str, default="text")
     parser.add_argument("--no-train-shuffle", action="store_true")
     parser.add_argument("--local-shuffling", action="store_true")
-    parser.add_argument("--target", default="chat", choices=["chat", "base", "difference"], required=True)
+    parser.add_argument(
+        "--target",
+        default="chat",
+        choices=["chat", "base", "difference"],
+        required=True,
+    )
 
     args = parser.parse_args()
 
@@ -118,51 +138,70 @@ if __name__ == "__main__":
 
     fineweb_cache, lmsys_cache = setup_cache(args, fineweb_cache, lmsys_cache)
 
-
     if args.target == "base":
         num_samples_per_dataset = min(args.num_samples, len(fineweb_cache))
-        train_dataset = th.utils.data.Subset(fineweb_cache, th.arange(0, num_samples_per_dataset))
+        train_dataset = th.utils.data.Subset(
+            fineweb_cache, th.arange(0, num_samples_per_dataset)
+        )
         single_dataset = True
     elif args.target == "chat" or args.target == "difference":
         num_samples_per_dataset = min(args.num_samples, len(lmsys_cache))
-        train_dataset = th.utils.data.Subset(lmsys_cache, th.arange(0, num_samples_per_dataset))
+        train_dataset = th.utils.data.Subset(
+            lmsys_cache, th.arange(0, num_samples_per_dataset)
+        )
         single_dataset = True
     if args.local_shuffling:
-        print("Using local shuffling to optimize for cache locality while allowing randomization", flush=True)
+        print(
+            "Using local shuffling to optimize for cache locality while allowing randomization",
+            flush=True,
+        )
         # Create interleaved dataset of fineweb and lmsys samples
 
         # Shuffle within 1M sample shards while maintaining interleaving
         if isinstance(lmsys_cache, PairedActivationCache):
-            shard_size = lmsys_cache.activation_cache_1.config["shard_size"] 
+            shard_size = lmsys_cache.activation_cache_1.config["shard_size"]
         else:
-            shard_size = lmsys_cache.config["shard_size"] 
-        num_shards_per_dataset = num_samples_per_dataset // shard_size + (1 if num_samples_per_dataset % shard_size != 0 else 0)
+            shard_size = lmsys_cache.config["shard_size"]
+        num_shards_per_dataset = num_samples_per_dataset // shard_size + (
+            1 if num_samples_per_dataset % shard_size != 0 else 0
+        )
         print(f"Number of shards per dataset: {num_shards_per_dataset}", flush=True)
 
         shuffled_indices = []
         if args.epochs > 1:
             print(f"Using {args.epochs} epochs of local shuffling.", flush=True)
             for i in range(args.epochs):
-                shuffled_indices.append(get_local_shuffled_indices(num_samples_per_dataset, shard_size, single_dataset))
+                shuffled_indices.append(
+                    get_local_shuffled_indices(
+                        num_samples_per_dataset, shard_size, single_dataset
+                    )
+                )
             shuffled_indices = th.cat(shuffled_indices)
         else:
-            shuffled_indices = get_local_shuffled_indices(num_samples_per_dataset, shard_size, single_dataset)
+            shuffled_indices = get_local_shuffled_indices(
+                num_samples_per_dataset, shard_size, single_dataset
+            )
         print(f"Shuffled indices: {shuffled_indices.shape}", flush=True)
         train_dataset = th.utils.data.Subset(train_dataset, shuffled_indices)
         print(f"Shuffled train dataset with {len(train_dataset)} samples.", flush=True)
         args.no_train_shuffle = True
     else:
-        assert args.epochs == 1, "Only one epoch of shuffling is supported if local shuffling is disabled."
+        assert (
+            args.epochs == 1
+        ), "Only one epoch of shuffling is supported if local shuffling is disabled."
         train_dataset = th.utils.data.ConcatDataset(
             [
-                th.utils.data.Subset(fineweb_cache, th.arange(0, num_samples_per_dataset)),
-                th.utils.data.Subset(lmsys_cache, th.arange(0, num_samples_per_dataset)),
+                th.utils.data.Subset(
+                    fineweb_cache, th.arange(0, num_samples_per_dataset)
+                ),
+                th.utils.data.Subset(
+                    lmsys_cache, th.arange(0, num_samples_per_dataset)
+                ),
             ]
         )
 
     activation_dim = train_dataset[0].shape[0]
     dictionary_size = args.expansion_factor * activation_dim
-
 
     fineweb_cache_val, lmsys_cache_val = load_activation_dataset(
         activation_store_dir,
@@ -172,19 +211,28 @@ if __name__ == "__main__":
         lmsys_split="validation" + lmsys_split_suffix,
         fineweb_split="validation" + fineweb_split_suffix,
     )
-    fineweb_cache_val, lmsys_cache_val = setup_cache(args, fineweb_cache_val, lmsys_cache_val)
+    fineweb_cache_val, lmsys_cache_val = setup_cache(
+        args, fineweb_cache_val, lmsys_cache_val
+    )
     if args.target == "difference":
-        validation_dataset = th.utils.data.Subset(lmsys_cache_val, th.arange(0, args.num_validation_samples))
+        validation_dataset = th.utils.data.Subset(
+            lmsys_cache_val, th.arange(0, args.num_validation_samples)
+        )
     elif args.target == "base":
-        validation_dataset = th.utils.data.Subset(fineweb_cache_val, th.arange(0, args.num_validation_samples))
+        validation_dataset = th.utils.data.Subset(
+            fineweb_cache_val, th.arange(0, args.num_validation_samples)
+        )
     elif args.target == "chat":
-        validation_dataset = th.utils.data.Subset(lmsys_cache_val, th.arange(0, args.num_validation_samples))
+        validation_dataset = th.utils.data.Subset(
+            lmsys_cache_val, th.arange(0, args.num_validation_samples)
+        )
 
-    name = f"SAE-{args.target}-{args.base_model.split('/')[-1]}-L{args.layer}-k{args.k}-lr{args.lr:.0e}" + \
-        (f"-{args.run_name}" if args.run_name is not None else "") + \
-        (f"-local-shuffling" if args.local_shuffling else "")
+    name = (
+        f"SAE-{args.target}-{args.base_model.split('/')[-1]}-L{args.layer}-k{args.k}-lr{args.lr:.0e}"
+        + (f"-{args.run_name}" if args.run_name is not None else "")
+        + (f"-local-shuffling" if args.local_shuffling else "")
+    )
 
-    
     device = "cuda" if th.cuda.is_available() else "cpu"
     if args.max_steps is None:
         args.max_steps = len(train_dataset) // args.batch_size
@@ -202,9 +250,7 @@ if __name__ == "__main__":
         "wandb_name": name,
         "k": args.k,
         "steps": args.max_steps,
-
     }
-
 
     print(f"Training on {len(train_dataset)} token activations.")
     dataloader = th.utils.data.DataLoader(

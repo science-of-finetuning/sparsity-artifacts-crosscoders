@@ -1,4 +1,5 @@
 import sys
+
 sys.path.append(".")
 import torch as th
 import argparse
@@ -7,38 +8,48 @@ from pathlib import Path
 from nnsight import LanguageModel
 from dictionary_learning.cache import PairedActivationCache
 from dictionary_learning import ActivationBuffer, CrossCoder
-from dictionary_learning.trainers.crosscoder import CrossCoderTrainer, BatchTopKCrossCoderTrainer
+from dictionary_learning.trainers.crosscoder import (
+    CrossCoderTrainer,
+    BatchTopKCrossCoderTrainer,
+)
 from dictionary_learning.training import trainSAE
 from dictionary_learning.dictionary import LossType, BatchTopKCrossCoder
 import os
 
 import wandb
+
 wandb.require("legacy-service")
 
 th.set_float32_matmul_precision("high")
 
 from tools.utils import load_activation_dataset
 
+
 def get_local_shuffled_indices(num_samples_per_dataset, shard_size):
-    num_shards_per_dataset = num_samples_per_dataset // shard_size + (1 if num_samples_per_dataset % shard_size != 0 else 0)
+    num_shards_per_dataset = num_samples_per_dataset // shard_size + (
+        1 if num_samples_per_dataset % shard_size != 0 else 0
+    )
     print(f"Number of shards per dataset: {num_shards_per_dataset}", flush=True)
-    
+
     shuffled_indices = []
     for i in trange(num_shards_per_dataset):
         start_idx = i * shard_size
         end_idx = min((i + 1) * shard_size, num_samples_per_dataset)
         shard_size_curr = end_idx - start_idx
-        
+
         fineweb_indices = th.randperm(shard_size_curr) + start_idx
-        lmsys_indices = th.randperm(shard_size_curr) + num_samples_per_dataset + start_idx
-        
+        lmsys_indices = (
+            th.randperm(shard_size_curr) + num_samples_per_dataset + start_idx
+        )
+
         shard_indices = th.zeros(2 * shard_size_curr, dtype=th.long)
         shard_indices[0::2] = fineweb_indices
         shard_indices[1::2] = lmsys_indices
         shuffled_indices.append(shard_indices)
-        
+
     shuffled_indices = th.cat(shuffled_indices)
     return shuffled_indices
+
 
 def get_loss_name(loss_type):
     if loss_type == LossType.SAE:
@@ -47,6 +58,7 @@ def get_loss_name(loss_type):
         return "MixedLoss"
     else:
         return "CCLoss"
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -77,10 +89,17 @@ if __name__ == "__main__":
     parser.add_argument("--text-column", type=str, default="text")
     parser.add_argument("--no-train-shuffle", action="store_true")
     parser.add_argument("--local-shuffling", action="store_true")
-    parser.add_argument("--sparsity-type", type=str, default="crosscoder", choices=["crosscoder", "sae", "mixed"])
+    parser.add_argument(
+        "--sparsity-type",
+        type=str,
+        default="crosscoder",
+        choices=["crosscoder", "sae", "mixed"],
+    )
     parser.add_argument("--use-mse-loss", action="store_true")
     parser.add_argument("--k", type=int, default=100)
-    parser.add_argument("--type", type=str, default="relu", choices=["batch-top-k", "relu"])
+    parser.add_argument(
+        "--type", type=str, default="relu", choices=["batch-top-k", "relu"]
+    )
 
     args = parser.parse_args()
 
@@ -116,44 +135,60 @@ if __name__ == "__main__":
     num_samples_per_dataset = args.num_samples // 2
     num_samples_per_dataset = min(num_samples_per_dataset, len(fineweb_cache))
     num_samples_per_dataset = min(num_samples_per_dataset, len(lmsys_cache))
-    train_dataset = th.utils.data.ConcatDataset([
-        th.utils.data.Subset(fineweb_cache, th.arange(0, num_samples_per_dataset)),
-        th.utils.data.Subset(lmsys_cache, th.arange(0, num_samples_per_dataset)),
-    ])
+    train_dataset = th.utils.data.ConcatDataset(
+        [
+            th.utils.data.Subset(fineweb_cache, th.arange(0, num_samples_per_dataset)),
+            th.utils.data.Subset(lmsys_cache, th.arange(0, num_samples_per_dataset)),
+        ]
+    )
 
     if args.local_shuffling:
-        print("Using local shuffling to optimize for cache locality while allowing randomization", flush=True)
+        print(
+            "Using local shuffling to optimize for cache locality while allowing randomization",
+            flush=True,
+        )
         # Create interleaved dataset of fineweb and lmsys samples
 
         # Shuffle within 1M sample shards while maintaining interleaving
-        shard_size = lmsys_cache.activation_cache_1.config["shard_size"] 
-        num_shards_per_dataset = num_samples_per_dataset // shard_size + (1 if num_samples_per_dataset % shard_size != 0 else 0)
+        shard_size = lmsys_cache.activation_cache_1.config["shard_size"]
+        num_shards_per_dataset = num_samples_per_dataset // shard_size + (
+            1 if num_samples_per_dataset % shard_size != 0 else 0
+        )
         print(f"Number of shards per dataset: {num_shards_per_dataset}", flush=True)
 
         shuffled_indices = []
         if args.epochs > 1:
             print(f"Using {args.epochs} epochs of local shuffling.", flush=True)
             for i in range(args.epochs):
-                shuffled_indices.append(get_local_shuffled_indices(num_samples_per_dataset, shard_size))
+                shuffled_indices.append(
+                    get_local_shuffled_indices(num_samples_per_dataset, shard_size)
+                )
             shuffled_indices = th.cat(shuffled_indices)
         else:
-            shuffled_indices = get_local_shuffled_indices(num_samples_per_dataset, shard_size)
+            shuffled_indices = get_local_shuffled_indices(
+                num_samples_per_dataset, shard_size
+            )
         print(f"Shuffled indices: {shuffled_indices.shape}", flush=True)
         train_dataset = th.utils.data.Subset(train_dataset, shuffled_indices)
         print(f"Shuffled train dataset with {len(train_dataset)} samples.", flush=True)
         args.no_train_shuffle = True
     else:
-        assert args.epochs == 1, "Only one epoch of shuffling is supported if local shuffling is disabled."
+        assert (
+            args.epochs == 1
+        ), "Only one epoch of shuffling is supported if local shuffling is disabled."
         train_dataset = th.utils.data.ConcatDataset(
             [
-                th.utils.data.Subset(fineweb_cache, th.arange(0, num_samples_per_dataset)),
-                th.utils.data.Subset(lmsys_cache, th.arange(0, num_samples_per_dataset)),
+                th.utils.data.Subset(
+                    fineweb_cache, th.arange(0, num_samples_per_dataset)
+                ),
+                th.utils.data.Subset(
+                    lmsys_cache, th.arange(0, num_samples_per_dataset)
+                ),
             ]
         )
 
     activation_dim = train_dataset[0].shape[1]
     dictionary_size = args.expansion_factor * activation_dim
-
 
     fineweb_cache_val, lmsys_cache_val = load_activation_dataset(
         activation_store_dir,
@@ -164,23 +199,31 @@ if __name__ == "__main__":
         fineweb_split="validation" + fineweb_split_suffix,
     )
     num_validation_samples = args.num_validation_samples // 2
-    validation_dataset = th.utils.data.ConcatDataset([
-        th.utils.data.Subset(fineweb_cache_val, th.arange(0, num_validation_samples)),
-        th.utils.data.Subset(lmsys_cache_val, th.arange(0, num_validation_samples)),
-    ])
-    
+    validation_dataset = th.utils.data.ConcatDataset(
+        [
+            th.utils.data.Subset(
+                fineweb_cache_val, th.arange(0, num_validation_samples)
+            ),
+            th.utils.data.Subset(lmsys_cache_val, th.arange(0, num_validation_samples)),
+        ]
+    )
+
     sparsity_type = LossType.from_string(args.sparsity_type)
     if args.type == "relu":
-        name = f"{args.base_model.split('/')[-1]}-L{args.layer}-mu{args.mu:.1e}-lr{args.lr:.0e}" + \
-        (f"-{args.run_name}" if args.run_name is not None else "") + \
-        (f"-local-shuffling" if args.local_shuffling else "") + \
-        (f"-{get_loss_name(sparsity_type)}") + \
-        (f"-mse" if args.use_mse_loss else "")
+        name = (
+            f"{args.base_model.split('/')[-1]}-L{args.layer}-mu{args.mu:.1e}-lr{args.lr:.0e}"
+            + (f"-{args.run_name}" if args.run_name is not None else "")
+            + (f"-local-shuffling" if args.local_shuffling else "")
+            + (f"-{get_loss_name(sparsity_type)}")
+            + (f"-mse" if args.use_mse_loss else "")
+        )
     elif args.type == "batch-top-k":
-        name = f"{args.base_model.split('/')[-1]}-L{args.layer}-k{args.k}-lr{args.lr:.0e}" + \
-        (f"-{args.run_name}" if args.run_name is not None else "") + \
-        (f"-local-shuffling" if args.local_shuffling else "") + \
-        (f"-{get_loss_name(sparsity_type)}") 
+        name = (
+            f"{args.base_model.split('/')[-1]}-L{args.layer}-k{args.k}-lr{args.lr:.0e}"
+            + (f"-{args.run_name}" if args.run_name is not None else "")
+            + (f"-local-shuffling" if args.local_shuffling else "")
+            + (f"-{get_loss_name(sparsity_type)}")
+        )
     else:
         raise ValueError(f"Invalid sparsity type: {args.sparsity_type}")
 
