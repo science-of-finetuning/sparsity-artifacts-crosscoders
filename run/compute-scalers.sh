@@ -7,7 +7,7 @@ BATCH_SIZE=256
 WORKERS=32
 
 # Default values
-DICT_MODEL_PATH="Butanium/gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04"
+DICT_MODEL_PATH="gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04"
 LATENT_INDICES="None"
 
 # Parse arguments

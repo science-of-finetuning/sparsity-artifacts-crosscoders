@@ -60,5 +60,5 @@ fi
 
 # Invoke the verify-scalers.sh script twice (for train and validation)
 # with -N set from --n-val, and add the appropriate dataset split.
-bash run/verify-scalers.sh -N "$N_VAL" "${other_args[@]}" --dataset-split train --train-n-offset 0 --train-num-samples "$N_TRAIN"
+# bash run/verify-scalers.sh -N "$N_VAL" "${other_args[@]}" --dataset-split train --train-n-offset 0 --train-num-samples "$N_TRAIN"
 bash run/verify-scalers.sh -N "$N_VAL" "${other_args[@]}" --dataset-split validation --train-n-offset 0 --train-num-samples "$N_TRAIN"
