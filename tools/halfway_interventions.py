@@ -1,5 +1,5 @@
 import torch as th
-from dictionary_learning.dictionary import CrossCoder
+from dictionary_learning.dictionary import CrossCoder, Dictionary
 from abc import ABC, abstractmethod
 import einops
 from typing import Literal
@@ -338,6 +338,35 @@ class CrossCoderSteeringLatent(IdentityPreprocessFn):
         return act + self.last_steering_latent
 
 
+class CrossCoderAdditiveSteering(CrossCoderSteeringLatent):
+    """Preprocessing function that adds activations using CrossCoder latent space.
+
+    This class implements activation steering by:
+    1. Encoding activations into the CrossCoder latent space
+    2. Computing steering based on the latents from the steer_with_latents_from model
+    3. Applying the steering to the original activations
+
+    Args:
+        crosscoder: The CrossCoder model to use for encoding/decoding
+        steer_activations_of: Which model's activations to steer ("base" or "chat")
+        steer_with_latents_from: Which model's latents to use for steering ("base" or "chat")
+        latents_to_steer: List of latent dimensions to use for steering, or None for all
+        continue_with: Which model should continue generation after steering
+        monitored_latents: List of latent dimensions to monitor, defaults to latents_to_steer
+        filter_treshold: Optional threshold for filtering based on latent magnitudes
+        scale_steering_latent: Scale factor for steering magnitude
+        ignore_encoder: If True, uses only decoder weights for steering without encoding
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.decoder_weight = self.decoder_weight.clone()
+        if self.steer_with_latents_from == "chat":
+            self.decoder_weight[0] = 0
+        else:
+            self.decoder_weight[1] = 0
+
+
 class CrossCoderOutProjection(IdentityPreprocessFn):
     """Preprocessing function that projects out certain directions from activations using CrossCoder.
 
@@ -403,6 +432,72 @@ class CrossCoderOutProjection(IdentityPreprocessFn):
 
     def all_layers(self, act):
         return self.project_out(act)
+
+
+class SAEAdditiveSteering(IdentityPreprocessFn):
+    """Preprocessing function that adds activations using SAE activations and decoder weights.
+
+    Args:
+        sae: The SAE model to use
+        steer_activations_of: Which model's activations to steer ("base" or "chat")
+        steer_with_latents_from: Which model's latents to use for steering ("base" or "chat")
+        continue_with: Which model should continue generation after steering
+    """
+
+    def __init__(
+        self,
+        sae: Dictionary,
+        steer_activations_of: Literal["base", "chat"],
+        steer_with_latents_from: Literal["base", "chat"],
+        latents_to_steer: list[int] | None,
+        continue_with: Literal["base", "chat"],
+        # monitored_latents: list[int] | None = None,
+        # filter_treshold: float | None = None,
+        scale_steering_latent: float = 1.0,
+        # ignore_encoder: bool = False,
+    ):
+        super().__init__(continue_with)
+        self.sae = sae
+        self.steer_activations_of = ensure_model(steer_activations_of)
+        self.steer_with_latents_from = ensure_model(steer_with_latents_from)
+        self.latents_to_steer = latents_to_steer
+        self.scale_steering_latent = scale_steering_latent
+
+    def preprocess(self, base_activations, chat_activations, **kwargs):
+        sae_input = (
+            base_activations
+            if self.steer_with_latents_from == "base"
+            else chat_activations
+        )
+        if sae_input.dim() == 3:
+            sae_input = einops.rearrange(sae_input, "b s d -> (b s) d")
+        sae_input = sae_input.float()
+        sae_acts = self.sae.encode(sae_input)  # bs, D
+        assert sae_acts.shape == (sae_input.shape[0], self.sae.dict_size)
+        steering_act = (
+            sae_acts[:, self.latents_to_steer] * self.scale_steering_latent
+        )  # bs, L
+        assert steering_act.shape == (sae_input.shape[0], len(self.latents_to_steer))
+        assert (
+            self.sae.decoder.weight.shape[0] < self.sae.decoder.weight.shape[1]
+        ), "sae decoder has shape (dict_size, d_model), while assumed to be (d_model, dict_size)"
+        weights = self.sae.decoder.weight[:, self.latents_to_steer].T # 1, L, d
+        assert weights.shape == (
+            len(self.latents_to_steer),
+            self.sae.decoder.weight.shape[0],
+        ), f"weights.shape: {weights.shape}, latents_to_steer: {self.latents_to_steer}, decoder.weight.shape: {self.sae.decoder.weight.shape}"
+        steering_vects = th.einsum("BL, Ld -> Bd", steering_act, weights)  # bs, d
+        assert steering_vects.shape == (sae_input.shape[0], sae_input.shape[1])
+        # unfold steering_vects to b, s, d
+        steering_vects = einops.rearrange(
+            steering_vects, "(b s) d -> b s d", b=base_activations.shape[0]
+        )
+        steering_vects = steering_vects * self.scale_steering_latent
+        if self.steer_activations_of == "base":
+            steered = base_activations + steering_vects
+        else:
+            steered = chat_activations + steering_vects
+        return self.continue_with_model(steered.bfloat16())
 
 
 class BasePatchIntervention(IdentityPreprocessFn):

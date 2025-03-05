@@ -2,6 +2,7 @@ from dictionary_learning.cache import PairedActivationCache, ActivationCache
 import torch as th
 from pathlib import Path
 
+
 class DifferenceCache:
     def __init__(self, cache_1: ActivationCache, cache_2: ActivationCache):
         self.activation_cache_1 = cache_1
@@ -23,6 +24,7 @@ class DifferenceCache:
     @property
     def config(self):
         return self.activation_cache_1.config
+
 
 class TokenCache:
     """
@@ -114,17 +116,17 @@ class TokenCache:
         """
         full_cache_index = self.indices[index]
         return self._tokens[full_cache_index], self.cache[full_cache_index]
-        
+
     def get_token(self, index: int) -> int:
         """
         Retrieve the token ID at the specified index without its activation.
-        
+
         This method provides direct access to just the token ID, unlike __getitem__
         which returns both the token and its activation.
-        
+
         Args:
             index: Index into this TokenCache's subset.
-            
+
         Returns:
             int: The token ID from the underlying cache at the specified index.
         """
@@ -171,7 +173,7 @@ class TokenCache:
 class SampleCache:
     """
     A cache that organizes activations by samples, where each sample starts with a BOS token.
-    
+
     This class provides a way to access activations and tokens for complete sequences
     (samples) rather than individual tokens. It identifies sample boundaries using
     the beginning-of-sequence (BOS) token.
@@ -191,16 +193,19 @@ class SampleCache:
 
         sample_cache.sequences # List of sequences of tokens
         sample_cache[0] # (tokens: (len(sequence), ), activations: (len(sequence), num_layers, dim_model))
-    
+
     Args:
         cache: An ActivationCache or PairedActivationCache containing the tokens and activations.
         bos_token_id: The token ID that marks the beginning of a sequence (default: 2).
-    
+
     Raises:
         ValueError: If the cache type is not supported.
         AssertionError: If tokens don't match in a PairedActivationCache or if shuffled shards are used.
     """
-    def __init__(self, cache: ActivationCache | PairedActivationCache, bos_token_id: int = 2):
+
+    def __init__(
+        self, cache: ActivationCache | PairedActivationCache, bos_token_id: int = 2
+    ):
         self.cache = cache
         self.bos_token_id = bos_token_id
 
@@ -209,19 +214,26 @@ class SampleCache:
                 cache.tokens[0] == cache.tokens[1]
             ), "Tokens must be the same for PairedActivationCache"
             self._tokens = cache.tokens[0]
-            assert not cache.activation_cache_1.config["shuffle_shards"] and not cache.activation_cache_2.config["shuffle_shards"], "Shuffled shards are not supported for SampleCache"
+            assert (
+                not cache.activation_cache_1.config["shuffle_shards"]
+                and not cache.activation_cache_2.config["shuffle_shards"]
+            ), "Shuffled shards are not supported for SampleCache"
         elif isinstance(cache, ActivationCache):
             self._tokens = cache.tokens
-            assert not cache.config["shuffle_shards"], "Shuffled shards are not supported for SampleCache"
+            assert not cache.config[
+                "shuffle_shards"
+            ], "Shuffled shards are not supported for SampleCache"
         else:
             raise ValueError(f"Unsupported cache type: {type(cache)}")
         tokens = self._tokens.tolist()
-        self.sample_start_indices = [i for i in range(len(tokens)) if tokens[i] == self.bos_token_id] + [len(tokens)]
+        self.sample_start_indices = [
+            i for i in range(len(tokens)) if tokens[i] == self.bos_token_id
+        ] + [len(tokens)]
 
     def __len__(self):
         """
         Returns the number of samples in the cache.
-        
+
         Returns:
             int: The number of distinct samples identified by BOS tokens.
         """
@@ -231,19 +243,24 @@ class SampleCache:
     def sequences(self):
         """
         Returns all token sequences in the cache.
-        
+
         Returns:
             list: A list of token tensors, where each tensor represents a complete sequence.
         """
-        return [self._tokens[start_index:end_index] for start_index, end_index in zip(self.sample_start_indices[:-1], self.sample_start_indices[1:])]
+        return [
+            self._tokens[start_index:end_index]
+            for start_index, end_index in zip(
+                self.sample_start_indices[:-1], self.sample_start_indices[1:]
+            )
+        ]
 
     def __getitem__(self, index: int):
         """
         Retrieves tokens and activations for a specific sample.
-        
+
         Args:
             index: The index of the sample to retrieve.
-            
+
         Returns:
             tuple: A pair containing:
                 - The token sequence for the sample
@@ -252,37 +269,68 @@ class SampleCache:
         start_index = self.sample_start_indices[index]
         end_index = self.sample_start_indices[index + 1]
         sample_tokens = self._tokens[start_index:end_index]
-        sample_activations = th.stack([self.cache[i] for i in range(start_index, end_index)], dim=0)
+        sample_activations = th.stack(
+            [self.cache[i] for i in range(start_index, end_index)], dim=0
+        )
         return sample_tokens, sample_activations
-    
-    
+
+
 class LatentActivationCache:
-    def __init__(self, latent_activations_dir: Path):
+    def __init__(self, latent_activations_dir: Path, expand=True):
+        if isinstance(latent_activations_dir, str):
+            latent_activations_dir = Path(latent_activations_dir)
         self.acts = th.load(latent_activations_dir / "out_acts.pt", weights_only=True)
         self.ids = th.load(latent_activations_dir / "out_ids.pt", weights_only=True)
-        self.max_activations = th.load(latent_activations_dir / "max_activations.pt", weights_only=True)
-        self.latent_ids = th.load(latent_activations_dir / "latent_ids.pt", weights_only=True)
-        self.padded_sequences = th.load(latent_activations_dir / "padded_sequences.pt", weights_only=True)
+        self.max_activations = th.load(
+            latent_activations_dir / "max_activations.pt", weights_only=True
+        )
+        self.latent_ids = th.load(
+            latent_activations_dir / "latent_ids.pt", weights_only=True
+        )
+        self.padded_sequences = th.load(
+            latent_activations_dir / "padded_sequences.pt", weights_only=True
+        )
         self.dict_size = self.max_activations.shape[0]
-        self.sequence_lengths = th.load(latent_activations_dir / "seq_lengths.pt", weights_only=True)
-        self.sequence_ranges = th.load(latent_activations_dir / "seq_ranges.pt", weights_only=True)
+        self.sequence_lengths = th.load(
+            latent_activations_dir / "seq_lengths.pt", weights_only=True
+        )
+        self.sequence_ranges = th.load(
+            latent_activations_dir / "seq_ranges.pt", weights_only=True
+        )
+        self.expand = expand
 
     def __len__(self):
         return len(self.padded_sequences)
 
     def __getitem__(self, index: int):
-        latent_activations = th.zeros(self.sequence_lengths[index], self.dict_size)
+        """
+        Retrieves tokens and latent activations for a specific sequence.
+
+        Args:
+            index (int): The index of the sequence to retrieve.
+
+        Returns:
+            tuple: A pair containing:
+                - The token sequence for the sample
+                - If self.expand is True:
+                    A dense tensor of shape (sequence_length, dict_size) containing the latent activations
+                - If self.expand is False:
+                    A tuple of (indices, values) representing sparse latent activations where:
+                    - indices: Tensor of shape (N, 2) containing (token_idx, dict_idx) pairs
+                    - values: Tensor of shape (N,) containing activation values
+        """
         start_index = self.sequence_ranges[index]
-        end_index = self.sequence_ranges[index+1]
+        end_index = self.sequence_ranges[index + 1]
         seq_indices = self.ids[start_index:end_index]
-        assert th.all(seq_indices[:, 0] == index)
-        print(seq_indices)
-        seq_indices = seq_indices[:, 1:] # remove seq_idx column
-        print(seq_indices)
-        latent_activations[seq_indices[:, 0], seq_indices[:, 1]] = self.acts[start_index:end_index]
-        return self.padded_sequences[index][:self.sequence_lengths[index]], latent_activations
+        assert th.all(seq_indices[:, 0] == index), f"Was supposed to find {index} but found {seq_indices[:, 0].unique()}"
+        seq_indices = seq_indices[:, 1:]  # remove seq_idx column
+        sequence = self.padded_sequences[index][: self.sequence_lengths[index]]
 
-
-        
-        
-        
+        if self.expand:
+            latent_activations = th.zeros(self.sequence_lengths[index], self.dict_size)
+            latent_activations[seq_indices[:, 0], seq_indices[:, 1]] = self.acts[
+                start_index:end_index
+            ]
+            return sequence, latent_activations
+        else:
+            return sequence, (seq_indices, self.acts[start_index:end_index])

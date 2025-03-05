@@ -9,9 +9,9 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 import wandb
 from datasets import load_dataset
 import torch as th
-from scripts.edit_eval_results import add_random_means
 
 sys.path.append(str(Path(__file__).parent.parent))
+from scripts.edit_eval_results import add_random_means
 from tools.compute_utils import RunningMeanStd, chunked_kl
 from tools.setup_to_eval import HalfStepPreprocessFn
 from tools.split_gemma import split_gemma
@@ -22,8 +22,11 @@ from tools.setup_to_eval import (
     create_acl_vanilla_half_fns,
     create_acl_patching_half_fns,
     create_acl_crosscoder_half_fns,
+    arxiv_paper_half_fns,
+    sae_steering_half_fns,
 )
-from tools.cc_utils import load_crosscoder
+from dictionary_learning.dictionary import Dictionary
+from tools.cc_utils import load_dictionary_model, load_latent_df
 from coolname import generate_slug
 
 
@@ -395,6 +398,11 @@ def evaluate_interventions(
 
 
 # python scripts/evaluate_interventions_effects.py --name ultrachat-gemma-all-new-columns --skip-target-patch --skip-vanilla --skip-patching --columns "dec_norm_diff" "lmsys_freq" "lmsys_ctrl_%" "lmsys_ctrl_freq" "lmsys_avg_act" "beta_activation_ratio" "beta_activation_chat" "beta_activation_base" "beta_error_chat" "beta_error_base"
+# python scripts/evaluate_interventions_effects.py --name ultrachat-gemma-concat-sae --df-path results/eval_crosscoder/gemma-2-2b-L13-mu5.2e-02-lr1e-04-local-shuffling-SAEloss_model_final.pt/data/feature_df.csv --chat-only-indices /workspace/data/latent_indices/gemma-2-2b-L13-mu5.2e-02-lr1e-04-local-shuffling-SAEloss/low_norm_diff_indices_2839.pt --crosscoder /workspace/julian/repositories/representation-structure-comparison/checkpoints/gemma-2-2b-L13-mu5.2e-02-lr1e-04-local-shuffling-SAEloss/model_final.pt 
+
+# python scripts/evaluate_interventions_effects.py --name ultrachat-gemma-minicc --df-path results/eval_crosscoder/gemma-2-2b-L13-mu4.1e-02-lr1e-04-local-shuffling-CCloss_model_final.pt/data/feature_df.csv --crosscoder /workspace/julian/repositories/representation-structure-comparison/checkpoints/gemma-2-2b-L13-mu4.1e-02-lr1e-04-local-shuffling-CCloss/model_final.pt 
+
+# python scripts/evaluate_interventions_effects.py --name ultrachat-gemma-sae --crosscoder /workspace/julian/repositories/representation-structure-comparison/checkpoints/SAE-chat-gemma-2-2b-L13-k100-lr1e-04-local-shuffling/model_final.pt --df-path /workspace/julian/repositories/representation-structure-comparison/checkpoints/SAE-chat-gemma-2-2b-L13-k100-lr1e-04-local-shuffling/SAE-chat-gemma-2-2b-L13-k100-lr1e-04-local-shuffling.csv
 if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("--layer-to-stop", type=int, default=13)
@@ -431,12 +439,15 @@ if __name__ == "__main__":
             "beta_ratio_reconstruction",
             "beta_ratio_error",
             "base uselessness score",
+            "dec_norm_diff",
         ],
     )
     parser.add_argument("--skip-target-patch", action="store_true")
     parser.add_argument("--skip-vanilla", action="store_true")
     parser.add_argument("--skip-patching", action="store_true")
     parser.add_argument("--add-base-only-latents", action="store_true")
+    parser.add_argument("--df-path", type=Path, default=None)
+    parser.add_argument("--chat-only-indices", type=Path, default=None)
     args = parser.parse_args()
     print(f"using args: {args}")
     dataset = load_dataset(args.dataset, split=args.split)
@@ -446,19 +457,44 @@ if __name__ == "__main__":
         else "cuda" if th.cuda.is_available() else "cpu"
     )
     seeds = list(range(args.num_seeds))
-    crosscoder = load_crosscoder(args.crosscoder).to(device)
+    crosscoder = load_dictionary_model(args.crosscoder).to(device)
     percentages = args.percentage
-    fn_dict, infos = create_acl_half_fns(
-        crosscoder,
-        seeds,
-        args.crosscoder,
-        percentages,
-        args.columns,
-        skip_target_patch=args.skip_target_patch,
-        skip_vanilla=args.skip_vanilla,
-        skip_patching=args.skip_patching,
-        add_base_only_latents=args.add_base_only_latents,
-    )
+    # fn_dict, infos = create_acl_half_fns(
+    #     crosscoder,
+    #     seeds,
+    #     args.crosscoder,
+    #     percentages,
+    #     args.columns,
+    #     skip_target_patch=args.skip_target_patch,
+    #     skip_vanilla=args.skip_vanilla,
+    #     skip_patching=args.skip_patching,
+    #     add_base_only_latents=args.add_base_only_latents,
+    # )
+    if args.df_path is not None:
+        print(f"Loading df from {args.df_path}")
+        df = load_latent_df(args.df_path)
+    else:
+        print(f"Loading df from crosscoder {args.crosscoder}")
+        df = load_latent_df(args.crosscoder)
+    if args.chat_only_indices is not None:
+        chat_only_indices = th.load(args.chat_only_indices).tolist()
+        df = df.iloc[chat_only_indices]
+        df["tag"] = "Chat only"
+
+
+    print(f"len df: {len(df)}")
+    if isinstance(crosscoder, Dictionary):
+        fn_dict, infos = sae_steering_half_fns(
+            crosscoder,
+            seeds,
+            df,
+        )
+    else:
+        fn_dict, infos = arxiv_paper_half_fns(
+            crosscoder,
+            df,
+            add_base_only_latents=args.add_base_only_latents,
+        )
     if args.test:
         fn_dict = create_acl_vanilla_half_fns()
         fn_dict.update(create_acl_patching_half_fns())

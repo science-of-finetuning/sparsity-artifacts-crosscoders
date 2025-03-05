@@ -1,17 +1,20 @@
 import torch as th
 import numpy as np
-from dictionary_learning.dictionary import CrossCoder
+import pandas as pd
+from dictionary_learning.dictionary import CrossCoder, Dictionary
 from tools.halfway_interventions import (
     HalfStepPreprocessFn,
     IdentityPreprocessFn,
     SwitchPreprocessFn,
     CrossCoderSteeringLatent,
     CrossCoderReconstruction,
+    CrossCoderAdditiveSteering,
     PatchCtrl,
     PatchKFirstPredictions,
     PatchKFirstAndCtrl,
     SteeringVector,
     PatchProjectionFromDiff,
+    SAEAdditiveSteering,
 )
 from tools.cc_utils import load_latent_df
 
@@ -348,3 +351,210 @@ def baseline_diffs_half_fns(
         )
         half_fns[f"add_diff-pca_proj_:{i}"]
     return half_fns
+
+
+def arxiv_paper_half_fns(
+    crosscoder: CrossCoder,
+    full_df: pd.DataFrame,
+    crosscoder_name: str | None = None,
+    add_base_only_latents: bool = False,
+) -> dict[str, HalfStepPreprocessFn]:
+    """Creates the half functions used in the arxiv paper:
+    - Top 50% and flop 50% using norm diff and latent scaling
+    - Configurations: base -> chat, base, chat, chat/base error patching
+    """
+    if add_base_only_latents:
+        raise NotImplementedError("Base only latents not implemented for arxiv paper")
+    half_fns = {}
+    infos = {}
+    # --- Vanilla configurations ---
+    half_fns.update(
+        {
+            "vanilla_base": IdentityPreprocessFn(continue_with="base"),
+            "vanilla_chat": IdentityPreprocessFn(continue_with="chat"),
+            "vanilla_base2chat": SwitchPreprocessFn(continue_with="chat"),
+        }
+    )
+    # --- Error and all ----
+    for error_from in ["base", "chat"]:
+        add_reconstruction_of = "base" if error_from == "chat" else "chat"
+        preprocess_fn = CrossCoderSteeringLatent(
+            crosscoder,
+            steer_activations_of=error_from,
+            steer_with_latents_from=add_reconstruction_of,
+            continue_with="chat",
+            latents_to_steer=None,  # all latents
+        )
+        half_fns[f"patch_{error_from}-error_cchat"] = preprocess_fn
+
+    # Load and prepare data
+    if "lmsys_dead" in full_df.columns:
+        full_df = full_df.query("lmsys_dead == False")
+    df = (
+        full_df[
+            [
+                "beta_ratio_reconstruction",
+                "beta_ratio_error",
+                "tag",
+                "dec_norm_diff",
+            ]
+        ]
+        .dropna()
+        .query("tag in ['Chat only', 'IT only']")
+        .query("-0.1 <= beta_ratio_reconstruction <= 2")
+        .query("-0.1 <= beta_ratio_error <= 2")
+    )
+    print(f"len df: {len(df)}")
+    base_only_latents = full_df.query("tag == 'Base only'").index.values
+
+    # Get top/flop 50% based on norm diff
+    sorted_by_norm = df.sort_values(by="dec_norm_diff", ascending=True)
+    num_latents = len(df) // 2
+    top_norm_latents = sorted_by_norm.index.values[:num_latents]
+    flop_norm_latents = sorted_by_norm.index.values[-num_latents:]
+
+    # Get top/flop 50% based on rank sum
+    rank_sum = df["beta_ratio_reconstruction"].rank() + df["beta_ratio_error"].rank()
+    df["rank_sum"] = rank_sum
+    sorted_by_ratios = df.sort_values(by="rank_sum", ascending=True)
+    full_df["rank_sum"] = np.nan
+    full_df.loc[df.index.values, "rank_sum"] = rank_sum
+    top_ratios_latents = sorted_by_ratios.index.values[:num_latents]
+    flop_ratios_latents = sorted_by_ratios.index.values[-num_latents:]
+    rnd_latents_dict = {}
+    infos = {
+        "rnd latents": rnd_latents_dict,
+        "base only latents": base_only_latents.tolist(),
+    }
+
+    for column, pareto_50, antipareto_50 in [
+        ("dec_norm_diff", top_norm_latents, flop_norm_latents),
+        ("rank_sum", top_ratios_latents, flop_ratios_latents),
+    ]:
+        infos[column] = {
+            "pareto_latents": pareto_50.tolist(),
+            "antipareto_latents": antipareto_50.tolist(),
+            "pareto_values": df.loc[pareto_50][column].values.tolist(),
+            "antipareto_values": df.loc[antipareto_50][column].values.tolist(),
+        }
+        latents_setups = [
+            pareto_50,
+            antipareto_50,
+        ]
+        latents_types = ["pareto", "antipareto"]
+
+        print(f"len pareto: {len(pareto_50)}")
+        print(f"len antipareto: {len(antipareto_50)}")
+        print("================\n")
+        for latents, latents_type in zip(latents_setups, latents_types):
+            name = f"{column}-{latents_type}-50pct-cchat"
+            half_fns[f"patch_all_{name}"] = CrossCoderSteeringLatent(
+                crosscoder,
+                steer_activations_of="base",
+                steer_with_latents_from="chat",
+                continue_with="chat",
+                latents_to_steer=latents,
+            )
+            half_fns[f"patch_all_add_{name}"] = CrossCoderAdditiveSteering(
+                crosscoder,
+                steer_activations_of="base",
+                steer_with_latents_from="chat",
+                continue_with="chat",
+                latents_to_steer=latents,
+            )
+    return half_fns, infos
+
+
+def sae_steering_half_fns(
+    sae: Dictionary,
+    seeds: list[int],
+    full_df: pd.DataFrame,
+    num_latents: int = 1420,
+) -> dict[str, HalfStepPreprocessFn]:
+    half_fns = {}
+    infos = {"num_latents": num_latents, "random latents": {}}
+    full_df["beta_activation_ratio_abs"] = full_df["beta_activation_ratio"].abs()
+    for seed in seeds:
+        np.random.seed(seed)
+        random_latents = np.random.permutation(full_df.index.values)[:num_latents]
+        # Sort random latents by beta_activation_ratio
+        random_latents = random_latents[
+            np.argsort(full_df.loc[random_latents]["beta_activation_ratio_abs"].values)
+        ]
+        half_fns[f"patch_all_sae_random{seed}_cchat"] = SAEAdditiveSteering(
+            sae,
+            steer_activations_of="base",
+            steer_with_latents_from="chat",
+            continue_with="chat",
+            latents_to_steer=random_latents,
+        )
+
+        infos["random latents"][f"random{seed}"] = {
+            "latents": random_latents.tolist(),
+            "values": full_df.loc[random_latents][
+                "beta_activation_ratio"
+            ].values.tolist(),
+        }
+    filtered_df = full_df.query("-0.1 <= beta_activation_ratio <= 2")
+    best_latents = filtered_df.sort_values(
+        by="beta_activation_ratio", ascending=True
+    ).index.values[:num_latents]
+    half_fns["patch_all_sae_pareto_cchat"] = SAEAdditiveSteering(
+        sae,
+        steer_activations_of="base",
+        steer_with_latents_from="chat",
+        continue_with="chat",
+        latents_to_steer=best_latents,
+    )
+    infos["best latents"] = {
+        "latents": best_latents.tolist(),
+        "values": full_df.loc[best_latents]["beta_activation_ratio"].values.tolist(),
+    }
+    worst_latents = filtered_df.sort_values(
+        by="beta_activation_ratio", ascending=False
+    ).index.values[:num_latents]
+    half_fns["patch_all_sae_antipareto_cchat"] = SAEAdditiveSteering(
+        sae,
+        steer_activations_of="base",
+        steer_with_latents_from="chat",
+        continue_with="chat",
+        latents_to_steer=worst_latents,
+    )
+    infos["worst latents"] = {
+        "latents": worst_latents.tolist(),
+        "values": full_df.loc[worst_latents]["beta_activation_ratio"].values.tolist(),
+    }
+    best_nofilter_latents = full_df.sort_values(
+        by="beta_activation_ratio_abs", ascending=True
+    ).index.values[:num_latents]
+    half_fns["patch_all_sae_pareto_nofilter_cchat"] = SAEAdditiveSteering(
+        sae,
+        steer_activations_of="base",
+        steer_with_latents_from="chat",
+        continue_with="chat",
+        latents_to_steer=best_nofilter_latents,
+    )
+    infos["best nofilter latents"] = {
+        "latents": best_nofilter_latents.tolist(),
+        "values": full_df.loc[best_nofilter_latents][
+            "beta_activation_ratio"
+        ].values.tolist(),
+    }
+
+    worst_nofilter_latents = full_df.sort_values(
+        by="beta_activation_ratio_abs", ascending=False
+    ).index.values[:num_latents]
+    half_fns["patch_all_sae_antipareto_nofilter_cchat"] = SAEAdditiveSteering(
+        sae,
+        steer_activations_of="base",
+        steer_with_latents_from="chat",
+        continue_with="chat",
+        latents_to_steer=worst_nofilter_latents,
+    )
+    infos["worst nofilter latents"] = {
+        "latents": worst_nofilter_latents.tolist(),
+        "values": full_df.loc[worst_nofilter_latents][
+            "beta_activation_ratio"
+        ].values.tolist(),
+    }
+    return half_fns, infos
