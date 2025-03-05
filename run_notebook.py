@@ -36,8 +36,9 @@ if __name__ == "__main__":
     exp_id = ((str(int(time())) + "_") if gen_id else "") + (
         kwargs.get("exp_id", None) or (generate_slug(2) if gen_id else "")
     )
+    assert args.crosscoder is not None, "crosscoder must be provided"
     target_notebook_path = save_path / (
-        args.crosscoder + (f"_{exp_id}" if exp_id else "") + ".ipynb"
+        args.crosscoder + (f"_{exp_id}" if exp_id else "") + f"_{notebook}.ipynb"
     )
     kwargs["exp_id"] = exp_id
     print(f"Saving to {target_notebook_path}")
