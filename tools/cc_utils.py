@@ -213,23 +213,18 @@ def push_dictionary_model(model_path: Path):
     repo_id = f"science-of-finetuning/{model_name}"
     model_dir = model_path.parent
     config_path = model_dir / "config.json"
-    
+
+
+    model = load_dictionary_model(model_path)
     # Upload files to the hub
     try:
-        # Upload model weights
-        hf_api.upload_file(
-            repo_id=repo_id,
-            path_or_fileobj=model_path,
-            path_in_repo="model.pt",
-            repo_type="model",
-            commit_message=f"Upload {model_name} dictionary model",
-        )
+        model.push_to_hub(repo_id)
         
         # Upload config
         hf_api.upload_file(
             repo_id=repo_id,
             path_or_fileobj=config_path,
-            path_in_repo="config.json",
+            path_in_repo="trainer_config.json",
             repo_type="model",
             commit_message=f"Upload {model_name} dictionary model",
         )
@@ -248,18 +243,12 @@ def push_dictionary_model(model_path: Path):
             )
             
             # Try uploading again
-            hf_api.upload_file(
-                repo_id=repo_id,
-                path_or_fileobj=model_path,
-                path_in_repo="model.pt",
-                repo_type="model",
-                commit_message=f"Initial upload {model_name} dictionary model",
-            )
+            model.push_to_hub(repo_id)
             
             hf_api.upload_file(
                 repo_id=repo_id,
                 path_or_fileobj=config_path,
-                path_in_repo="config.json",
+                path_in_repo="trainer_config.json",
                 repo_type="model",
                 commit_message=f"Initial upload of {model_name} dictionary model",
             )
@@ -421,15 +410,15 @@ def load_dictionary_model(model_name: str | Path):
         The loaded dictionary model
     """
     # Check if it's a HuggingFace Hub model
-    if "/" in model_name and not Path(model_name).exists():
+    if "/" not in str(model_name) or not Path(model_name).exists():
         # Legacy model
-        if model_name in df_hf_repo_legacy:
-            model_name = df_hf_repo_legacy[model_name]
-
-        model_id = "science-of-finetuning/" + model_name
-        # Download config to determine model type
+        if str(model_name) in df_hf_repo_legacy:
+            model_name = df_hf_repo_legacy[str(model_name)]
+        else:
+            model_id = "science-of-finetuning/" + str(model_name)
+            # Download config to determine model type
         try:
-            config_path = hf_hub_download(repo_id=model_id, filename="config.json")
+            config_path = hf_hub_download(repo_id=model_id, filename="trainer_config.json")
             with open(config_path, "r") as f:
                 config = json.load(f)["trainer"]
 
@@ -439,11 +428,12 @@ def load_dictionary_model(model_name: str | Path):
             else:
                 raise ValueError(f"Unknown model type: {config['dict_class']}")
         except Exception as e:
-                # If no model_type in config, try to infer from other fields
-                if "k" in config and "dict_size" in config:
-                    return BatchTopKSAE.from_pretrained(model_name, from_hub=True)
-                else:
-                    return CrossCoder.from_pretrained(model_name, from_hub=True)
+            print(f"Error loading model from hub: {e}")
+            # If no model_type in config, try to infer from other fields
+            if "k" in config and "dict_size" in config:
+                return BatchTopKSAE.from_pretrained(model_name, from_hub=True)
+            else:
+                return CrossCoder.from_pretrained(model_name, from_hub=True)
         except Exception as e:
             raise e
     else:
