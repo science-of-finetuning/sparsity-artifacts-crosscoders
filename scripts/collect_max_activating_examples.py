@@ -8,12 +8,13 @@ import gc
 import sqlite3
 import sys
 import random
+from collections import defaultdict
 import numpy as np
-
 import torch as th
 from tqdm import tqdm
 import wandb
 from huggingface_hub import hf_api
+import time
 
 sys.path.append(".")
 
@@ -22,12 +23,15 @@ from tools.cache_utils import LatentActivationCache
 th.set_grad_enabled(False)
 
 
-def quantile_examples_to_db(quantile_examples, all_sequences, db_path: Path):
+def quantile_examples_to_db(
+    quantile_examples, all_sequences, activation_details, db_path: Path
+):
     """Convert quantile examples to a database with binary blob storage for token IDs.
 
     Args:
         quantile_examples: Dictionary mapping quantile_idx -> feature_idx -> list of (activation_value, sequence_idx)
         all_sequences: List of all sequences used in the examples
+        activation_details: Dictionary mapping feature_idx -> sequence_idx -> list of (position, value) pairs
         db_path: Path to save the database
     """
     if db_path.exists():
@@ -49,7 +53,6 @@ def quantile_examples_to_db(quantile_examples, all_sequences, db_path: Path):
                 quantile_idx INTEGER,
                 activation REAL,
                 sequence_idx INTEGER,
-                max_position INTEGER,
                 PRIMARY KEY (feature_idx, sequence_idx),
                 FOREIGN KEY (sequence_idx) REFERENCES sequences(sequence_idx)
             )"""
@@ -77,20 +80,66 @@ def quantile_examples_to_db(quantile_examples, all_sequences, db_path: Path):
                     # If not, we'd need to modify the compute_quantile_activating_examples function
                     # to also track positions along with activations
 
-                    # For now, using a placeholder of 0 for max_position
-                    max_position = 0
-
                     cursor.execute(
-                        "INSERT INTO quantile_examples VALUES (?, ?, ?, ?, ?)",
+                        "INSERT INTO quantile_examples VALUES (?, ?, ?, ?)",
                         (
                             int(feature_idx),
                             int(q_idx),
                             float(activation),
                             int(sequence_idx),
-                            int(max_position),
                         ),
                     )
+
+        # Create a table for storing activation details
+        cursor.execute(
+            """CREATE TABLE IF NOT EXISTS activation_details (
+                feature_idx INTEGER,
+                sequence_idx INTEGER,
+                positions BLOB,
+                activation_values BLOB,
+                PRIMARY KEY (feature_idx, sequence_idx),
+                FOREIGN KEY (sequence_idx) REFERENCES sequences(sequence_idx),
+                FOREIGN KEY (feature_idx, sequence_idx) REFERENCES quantile_examples(feature_idx, sequence_idx)
+            )"""
+        )
+
+        # After storing all quantile examples
+        # Store activation details
+        for feature_idx, sequences in tqdm(
+            activation_details.items(), desc="Storing activation details"
+        ):
+            for sequence_idx, pos_val_pairs in sequences.items():
+                if len(pos_val_pairs) == 0:
+                    continue
+
+                positions_blob = pos_val_pairs[:, 0].tobytes()
+                values_blob = pos_val_pairs[:, 1].tobytes()
+
+                cursor.execute(
+                    "INSERT INTO activation_details VALUES (?, ?, ?, ?)",
+                    (
+                        int(feature_idx),
+                        int(sequence_idx),
+                        positions_blob,
+                        values_blob,
+                    ),
+                )
+
         conn.commit()
+
+
+def fix_activations_details(activation_details):
+    """Convert activation details from int32 arrays to tuples of (positions, values) with proper types."""
+    converted = {}
+    for feat_idx, sequences in activation_details.items():
+        converted[feat_idx] = {}
+        for seq_idx, arr in sequences.items():
+            # arr is a Nx2 array where first column is positions (int) and second column is values (float as int32)
+            positions = arr[:, 0].astype(np.int32)
+            # Convert back the int32 values to float32
+            values = arr[:, 1].view(np.float32)
+            converted[feat_idx][seq_idx] = (positions, values)
+    return converted
 
 
 def sort_quantile_examples(quantile_examples):
@@ -112,9 +161,10 @@ def compute_quantile_activating_examples(
     min_threshold=1e-4,
     n=100,
     save_path=None,
-    name="quantile_examples",
     gc_collect_every=1000,
     test=False,
+    log_time=False,
+    use_random_replacement=True,
 ) -> dict:
     """Compute examples that activate features at different quantile levels.
 
@@ -124,7 +174,6 @@ def compute_quantile_activating_examples(
         min_threshold: Minimum activation threshold to consider
         n: Number of examples to collect per feature per quantile
         save_path: Path to save results
-        name: Name for saving results
         gc_collect_every: How often to run garbage collection
 
     Returns:
@@ -132,18 +181,15 @@ def compute_quantile_activating_examples(
             - quantile_examples: Dictionary mapping quantile_idx -> feature_idx -> list of (activation_value, sequence_idx, position)
             - all_sequences: List of all token sequences used in the examples
     """
+    log_time = log_time or test
     device = th.device("cuda" if th.cuda.is_available() else "cpu")
 
     # Move max_activations and quantiles to GPU
-    max_activations = latent_activation_cache.max_activations.to(device)
+    max_activations = latent_activation_cache.max_activations
     quantiles_tensor = th.tensor(quantiles, device=device)
 
     # Calculate quantile thresholds for each feature on GPU
     thresholds = th.einsum("f,q->fq", max_activations, quantiles_tensor)
-
-    if save_path is not None:
-        save_path = save_path / name
-        save_path.mkdir(parents=True, exist_ok=True)
 
     # Initialize collections for each quantile
     quantile_examples = {
@@ -160,86 +206,185 @@ def compute_quantile_activating_examples(
     # Store all unique sequences
     sequences_set = set()
     all_sequences = []
-    current_idx = 0
+
+    # Dictionary to store feature activation details: {feature_idx: {sequence_idx: [(position, value), ...]}}
+    activation_details = defaultdict(dict)
+
+    timings = defaultdict(list)  # Changed to list to store all iterations
+
+    def _log_time(section, start_time, add=False):
+        if not log_time:
+            return None
+        elapsed = time.time() - start_time
+        if add:
+            timings[section][-1] += elapsed
+        else:
+            timings[section].append(elapsed)
+        return time.time()
 
     next_gb = gc_collect_every
+    current_seq_idx = 0
     for tokens, (indices, values) in tqdm(latent_activation_cache):
+        iter_start = time.time() if log_time else None
+
+        # GC and device transfer timing
         next_gb -= 1
         if next_gb <= 0:
             gc.collect()
             next_gb = gc_collect_every
-            if test:
-                break
-        # Move sparse tensors to GPU
-        indices = indices.to(device)
-        values = values.to(device)
+        if test and next_gb <= 800:
+            break
+        current = _log_time("1. GC and device transfer", iter_start)
 
         token_tuple = tuple(tokens.tolist())
         if token_tuple in sequences_set:
             continue
         sequences_set.add(token_tuple)
         all_sequences.append(token_tuple)
+        current = _log_time("2. Sequence processing", current)
 
-        # Group activations by feature (on GPU)
-        features = indices[:, 1]  # feature indices
-        # Use scatter_reduce to find max activations
-        max_acts = th.zeros(max_activations.size(0), device=device)
-        max_acts.scatter_reduce_(0, features, values, reduce="amax", include_self=False)
-
-        # Get active features and find quantile indices
-        active_features = (max_acts >= min_threshold).nonzero().squeeze(-1)
-        active_max_vals = max_acts[active_features]
-
-        # Find quantile indices for all active features at once
-        thresholds_dense = thresholds[active_features]  # shape: [n_active, n_quantiles]
-
-        # Find quantile indices using searchsorted
-        quantile_indices = th.searchsorted(
-            thresholds_dense, active_max_vals.unsqueeze(-1)
+        # Core computation timing
+        features, sort_indices = th.sort(indices[:, 1])
+        token_indices = indices[:, 0][sort_indices]
+        values = values[sort_indices]
+        active_features, inverse_indices, counts = features.unique(
+            return_inverse=True, return_counts=True
         )
+        max_vals = th.zeros_like(active_features, dtype=values.dtype)
+        max_vals = th.scatter_reduce(
+            max_vals, 0, inverse_indices, values, reduce="amax"
+        )
+        # sorted_values = values[sorted_feature_indices]
+        # quantile_indices = th.searchsorted(all_tresholds, sorted_values)
+        active_thresholds = thresholds[active_features]
+        # assert sorted_values.dim() == 1, "batching not supported yet"
+        # cum_count = th.cumsum(counts, dim=0)
+        # max_vals = th.zeros_like(active_features, dtype=values.dtype)
+        # _, inverse_indices = th.unique(sorted_features, return_inverse=True)
+        # max_vals = th.scatter_reduce(
+        #     max_vals, 0, inverse_indices, values, reduce="amax"
+        # )
+        # cum_max_values = th.cummax(sorted_values, dim=0)[0]
+        # max_vals = cum_max_values[cum_count - 1]
+        q_idxs = th.searchsorted(active_thresholds, max_vals.unsqueeze(-1)).squeeze()
 
-        # Move to CPU
-        active_features = active_features.cpu()
-        active_max_vals = active_max_vals.cpu()
-        quantile_indices = quantile_indices.cpu().squeeze(-1)
+        current_preloop = _log_time("3. Core computation", current)
 
-        # Update quantile examples
-        for feat, max_val, q_idx in zip(
-            active_features.tolist(),
-            active_max_vals.tolist(),
-            quantile_indices.tolist(),
+        active_features = active_features.tolist()
+        counts = counts.tolist()
+        max_vals = max_vals.tolist()
+        q_idxs = q_idxs.tolist()
+        # max_values =
+        # Example collection timing
+        current_idx = 0
+        latent_details = (
+            th.stack(
+                [token_indices.int(), values.float().view(th.int32)],
+                dim=1,
+            )
+            .cpu()
+            .numpy()
+        )
+        # inverse_indices = inverse_indices.cpu().numpy()
+        # print(inverse_indices)
+        # input()
+        current = _log_time("4. move and convert to numpy", current)
+        if log_time:
+            for times in [
+                "loop1",
+                "loop2",
+                "loop3",
+                "update_details",
+            ]:
+                timings[times].append(0)
+        for feat, count, max_val, q_idx in zip(
+            active_features,
+            counts,
+            # inverse_indices,
+            max_vals,
+            q_idxs,
         ):
+            current = time.time() if log_time else None
             example_counts[q_idx][feat] += 1
-            count = example_counts[q_idx][feat]
+            total_count = example_counts[q_idx][feat]
 
-            if count <= n:
-                quantile_examples[q_idx][feat].append((max_val, current_idx))
-            else:
-                if random.random() < n / count:
+            if total_count <= n:
+                quantile_examples[q_idx][feat].append((max_val, current_seq_idx))
+                current = _log_time("loop1", current, add=True)
+                # Time the activation details collection
+                activation_details[feat][current_seq_idx] = latent_details[
+                    current_idx : current_idx + count
+                ]
+                _log_time("update_details", current, add=True)
+            elif use_random_replacement:
+                if random.random() < n / total_count:
                     replace_idx = random.randint(0, n - 1)
-                    quantile_examples[q_idx][feat][replace_idx] = (max_val, current_idx)
+                    replaced_seq_idx = quantile_examples[q_idx][feat][replace_idx][1]
+                    quantile_examples[q_idx][feat][replace_idx] = (
+                        max_val,
+                        current_seq_idx,
+                    )
+                    current = _log_time("loop2", current, add=True)
+                    if (
+                        feat in activation_details
+                        and replaced_seq_idx in activation_details[feat]
+                    ):
+                        del activation_details[feat][replaced_seq_idx]
+                    current = _log_time("loop3", current, add=True)
+                    activation_details[feat][current_seq_idx] = latent_details[
+                        current_idx : current_idx + count
+                    ]
+                    _log_time("update_details", current, add=True)
+            current_idx += count
 
-        current_idx += 1
+        current = _log_time(
+            "5. Example collection and activation details", current_preloop
+        )
+        if (
+            len(timings["5. Example collection and activation details"]) % 10 == 0
+            and log_time
+        ):  # Print periodically
+            print("\nCurrent mean timings per iteration:")
+            for section, times in timings.items():
+                mean_time = sum(times) / len(times)
+                print(f"{section}: {mean_time:.4f}s")
+        current_seq_idx += 1
+
+    if log_time:
+        print("\nFinal timings:")
+        for section, times in timings.items():
+            mean_time = sum(times) / len(times)
+            print(f"{section}: {mean_time:.4f}s")
 
     # Sort and finalize results
     print(f"Sorting {len(quantile_examples)} quantiles")
     quantile_examples = sort_quantile_examples(quantile_examples)
-    if test:
-        name = f"test_{name}"
+    name = "test_examples" if test else "examples"
     # Save to database
-    if save_path:
-        print(f"Saving to {save_path / f'{name}_final.db'}")
+    if save_path is not None:
+        print(f"Saving to {save_path / f'{name}.db'}")
         quantile_examples_to_db(
-            quantile_examples, all_sequences, save_path / f"{name}_final.db"
+            quantile_examples,
+            all_sequences,
+            activation_details,
+            save_path / f"{name}.db",
         )
-        print(f"Saving to {save_path / f'{name}_final.pt'}")
+        print(f"Saving to {save_path / f'{name}.pt'}")
         # Also save as PyTorch file for compatibility
-        th.save((quantile_examples, all_sequences), save_path / f"{name}_final.pt")
 
-    return quantile_examples, all_sequences
+    activation_details = fix_activations_details(activation_details)
+    if save_path is not None:
+        th.save(
+            (quantile_examples, all_sequences, activation_details),
+            save_path / f"{name}.pt",
+        )
+
+    return quantile_examples, all_sequences, activation_details
 
 
-# python scripts/collect_max_activating_examples.py gemma-2-2b-L13-k100-lr1e-04-local-shuffling-CCLoss --latent-activation-cache-path /workspace/data/latent_activations --test
+# python scripts/collect_max_activating_examples.py gemma-2-2b-L13-k100-lr1e-04-local-shuffling-CCLoss --latent-activation-cache-path /workspace/data/latent_activations
+# python scripts/collect_max_activating_examples.py  diffing-stats-gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04 --latent-activation-cache-path /workspace/data/latent_activations
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("crosscoder", type=str)
@@ -260,7 +405,7 @@ def main():
     save_path = args.save_path / args.crosscoder
 
     if not args.only_upload:
-
+        device = "cuda" if th.cuda.is_available() else "cpu"
         # Initialize wandb
         project = "quantile-activating-examples"
         if args.test:
@@ -270,20 +415,19 @@ def main():
         # Load latent activation cache
         latent_activation_cache = LatentActivationCache(
             args.latent_activation_cache_path / args.crosscoder, expand=False
-        )
+        ).to(device)
 
         # Create save directory if it doesn't exist
         save_path.mkdir(parents=True, exist_ok=True)
 
         # Generate and save quantile examples
         print("Generating quantile examples...")
-        quantile_examples, all_sequences = compute_quantile_activating_examples(
+        compute_quantile_activating_examples(
             latent_activation_cache=latent_activation_cache,
             quantiles=args.quantiles,
             min_threshold=args.min_threshold,
             n=args.n,
             save_path=save_path,
-            name="quantile_examples",
             test=args.test,
         )
 
@@ -294,13 +438,15 @@ def main():
     if not args.test:
         print(f"Uploading to HuggingFace Hub: {repo}")
         for ftype in ["pt", "db"]:
-            file_path = save_path / f"quantile_examples_final.{ftype}"
+            name = "test_examples" if args.test else "examples"
+            file_path = save_path / f"{name}.{ftype}"
+            print(f"Uploading {file_path} to {repo}")
             if file_path.exists():
                 hf_api.upload_file(
                     repo_id=repo,
                     repo_type="dataset",
                     path_or_fileobj=file_path,
-                    path_in_repo=f"quantile_examples.{ftype}",
+                    path_in_repo=f"{name}.{ftype}",
                 )
 
 
