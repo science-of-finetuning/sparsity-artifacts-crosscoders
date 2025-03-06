@@ -23,7 +23,12 @@ import plotly.express as px
 from transformers import AutoTokenizer
 
 sys.path.append(".")
-from tools.utils import tokenize_with_ctrl_ids, patch_tokenizer, gemma_tokens_to_conv, load_latent_df
+from tools.utils import (
+    tokenize_with_ctrl_ids,
+    patch_tokenizer,
+    gemma_tokens_to_conv,
+    load_latent_df,
+)
 from tools.cache_utils import LatentActivationCache
 
 
@@ -313,6 +318,7 @@ class ActivationStats:
         sorted_latents = sorted_latents[mask]
         activations = activations[sorted_indices][mask]
         rel_acts = activations / self.max_activations[sorted_latents]
+        self.token_counts[group_name] += mask.sum().item()
         if len(rel_acts) == 0:
             return
         assert mask.dim() == 1, "mask must be 1D, batching not supported yet"
@@ -344,7 +350,7 @@ class ActivationStats:
         self._means[group_idx][active_latents] = th.where(
             nonzero_mask,
             self._means[group_idx][active_latents] / counts,
-            self._means[group_idx][active_latents]
+            self._means[group_idx][active_latents],
         )
         # self._means[group_idx][active_latents][counts != 0] /= counts[counts != 0]
         # add 1 for each sorted_latent, bucket index
@@ -382,6 +388,7 @@ class ActivationStats:
             return self.update_sparse(activations, group_mask, group_name)
         if len(group_activations) == 0:
             return
+        self.token_counts[group_name] += len(group_activations)
 
         # Compute buckets on GPU
         rel_activations = group_activations / self.max_activations
@@ -549,7 +556,9 @@ def main(
     return computed_stats
 
 
-def process_stats(stats: ComputedActivationStats, crosscoder: str, verbose=1):
+def process_stats(
+    stats: ComputedActivationStats, crosscoder: str, save_path, verbose=1
+):
     if verbose:
         # compute simple statistics, like bucket frequency
         bucket_freq = stats.stats.groupby("bucket")["nonzero count"].sum()
@@ -604,11 +613,11 @@ def process_stats(stats: ComputedActivationStats, crosscoder: str, verbose=1):
                 ratio = high_acts / low_acts
                 print(f"{group}: {ratio:.2f}")
     latent_stats = stats.compute_latent_stats()
-    latent_stats.to_csv("results/per_token_stats/latent_stats.csv")
+    latent_stats.to_csv(save_path / "latent_stats.csv")
     # plot histograms of different stats
     # Plot histograms of different stats
     # Create directory for plots
-    plot_dir = Path("results/per_token_stats/plots") / crosscoder
+    plot_dir = save_path / "plots"
     plot_dir.mkdir(exist_ok=True, parents=True)
 
     # Plot ctrl frequency distribution
@@ -696,10 +705,12 @@ def process_stats(stats: ComputedActivationStats, crosscoder: str, verbose=1):
     # fmt: on
     new_stats = new_stats[all_cols]
     # # add enc base norm latent
-    new_stats.to_csv("results/per_token_stats/latent_stats_global.csv")
+    new_stats.to_csv(save_path / "latent_stats_global.csv")
 
 
 # python scripts/per_token_stats.py gemma-2-2b-L13-k100-lr1e-04-local-shuffling-CCLoss --latent-activation-cache-path /workspace/data/latent_activations
+# python scripts/per_token_stats.py gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04 --latent-activation-cache-path /workspace/data/latent_activations
+
 if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("crosscoder", type=str)
@@ -714,7 +725,9 @@ if __name__ == "__main__":
         exit()
 
     # Create output directory
-    output_dir = Path("results/per_token_stats")
+    output_dir = Path("results/per_token_stats") / args.crosscoder
+    if args.test:
+        output_dir = output_dir / "test"
     output_dir.mkdir(exist_ok=True, parents=True)
 
     # Load tokenizer and patch it
@@ -735,4 +748,4 @@ if __name__ == "__main__":
         test=args.test,
     )
 
-    process_stats(stats, args.crosscoder, verbose=1)
+    process_stats(stats, args.crosscoder, output_dir, verbose=1)
