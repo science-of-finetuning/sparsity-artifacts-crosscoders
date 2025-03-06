@@ -1,5 +1,5 @@
 """
-This script compute the frequency of all features on different kind of tokens, and the rate at which they are activated on each token group.
+This script compute the frequency of all latents on different kind of tokens, and the rate at which they are activated on each token group.
 Token groups are:
 - Control tokens
 - Control tokens 1...10
@@ -15,20 +15,16 @@ from pathlib import Path
 import json
 from dataclasses import dataclass
 
-from nnterp import load_model
-from nnterp.nnsight_utils import get_layer_output, get_layer
 import torch as th
-from huggingface_hub import hf_hub_download
 import pandas as pd
-import einops
-from dictionary_learning import CrossCoder
 import numpy as np
 from tqdm import tqdm, trange
-from datasets import load_dataset
 import plotly.express as px
+from transformers import AutoTokenizer
 
 sys.path.append(".")
-from tools.utils import tokenize_with_ctrl_ids, patch_tokenizer
+from tools.utils import tokenize_with_ctrl_ids, patch_tokenizer, gemma_tokens_to_conv, load_latent_df
+from tools.cache_utils import LatentActivationCache
 
 
 def remove_bos(mask):
@@ -38,7 +34,7 @@ def remove_bos(mask):
 
 # Define bucket boundaries
 BUCKET_EDGES = [0.1, 0.4, 0.7]
-EPSILON = 1e-8
+EPSILON = 1e-3
 TOKEN_GROUPS = (
     ["ctrl_tokens"]
     + [f"ctrl_token_{i}" for i in range(1, 11)]
@@ -52,7 +48,7 @@ class ComputedActivationStats:
     token_counts: dict
 
     @classmethod
-    def load(cls, path, index_cols=["token_group", "feature", "bucket"]):
+    def load(cls, path, index_cols=["token_group", "latent", "bucket"]):
         """Load stats from a CSV file with the specified index columns"""
         stats_df = pd.read_csv(path / "stats.csv", index_col=index_cols)
         with open(path / "counts.json", "r") as f:
@@ -74,14 +70,14 @@ class ComputedActivationStats:
         group_stats["weighted_mean"] = group_stats["weighted_mean"].fillna(0)
         # Now we can use fast sum aggregation
         means = (
-            group_stats.groupby(["feature", "bucket"])["weighted_mean"]
+            group_stats.groupby(["latent", "bucket"])["weighted_mean"]
             .agg("sum")
             .unstack(level="bucket")
             .values
         ).sum(axis=1)
 
         counts = (
-            group_stats.groupby(["feature", "bucket"])["nonzero count"]
+            group_stats.groupby(["latent", "bucket"])["nonzero count"]
             .agg("sum")
             .unstack(level="bucket")
             .values
@@ -96,7 +92,7 @@ class ComputedActivationStats:
             means[counts == 0] = np.nan
         group_stats.drop(columns=["weighted_mean"], inplace=True)
         maxs = (
-            group_stats.groupby(["feature", "bucket"])["max"]
+            group_stats.groupby(["latent", "bucket"])["max"]
             .agg("max")
             .unstack(level="bucket")
             .values
@@ -115,7 +111,7 @@ class ComputedActivationStats:
         }
 
     @pd.option_context("mode.copy_on_write", True)
-    def compute_feature_stats(self):
+    def compute_latent_stats(self):
         """
         Compute statistics for different token groups and their interactions.
         """
@@ -189,7 +185,7 @@ class ComputedActivationStats:
                 bucket_stats[f"{name}_max"] = bucket_data[name]["max"]
 
             bucket_df = pd.DataFrame(bucket_stats)
-            bucket_df.index.name = "feature"
+            bucket_df.index.name = "latent"
             results.append(bucket_df)
 
         # Combine all buckets
@@ -245,11 +241,19 @@ class ComputedActivationStats:
                 ctrl_counts[ctrl_counts == 0] = np.nan
                 global_stats[f"lmsys_{name}_%"] = global_counts / ctrl_counts
 
+        # Compute total frequency by summing raw counts and dividing by total count
+        total_count = (
+            groups_data["ctrl"]["total_count"] + groups_data["non_ctrl"]["total_count"]
+        )
+        total_raw_counts = (
+            groups_data["ctrl"]["count"] + groups_data["non_ctrl"]["count"]
+        )
+        global_stats["lmsys_freq"] = total_raw_counts / total_count
         # Create global stats dataframe
         global_stats = pd.DataFrame(global_stats)
-        global_stats.index.name = "feature"
+        global_stats.index.name = "latent"
         global_stats["bucket"] = -1
-        global_stats = global_stats.reset_index().set_index(["bucket", "feature"])
+        global_stats = global_stats.reset_index().set_index(["bucket", "latent"])
 
         # Combine per-bucket and global stats
         all_stats = pd.concat([per_bucket_stats, global_stats])
@@ -259,7 +263,7 @@ class ComputedActivationStats:
 class ActivationStats:
     def __init__(
         self,
-        num_features,
+        num_latents,
         max_activations,
         device,
         token_groups=TOKEN_GROUPS,
@@ -274,17 +278,17 @@ class ActivationStats:
 
         # Pre-allocate tensors on GPU
         self._counts = th.zeros(
-            (len(token_groups), num_features, self.num_buckets),
+            (len(token_groups), num_latents, self.num_buckets),
             dtype=th.int64,
             device=device,
         )
         self._means = th.zeros(
-            (len(token_groups), num_features, self.num_buckets),
+            (len(token_groups), num_latents, self.num_buckets),
             dtype=th.float64,
             device=device,
         )
         self._maxs = th.zeros(
-            (len(token_groups), num_features, self.num_buckets),
+            (len(token_groups), num_latents, self.num_buckets),
             dtype=th.float32,
             device=device,
         )
@@ -292,15 +296,90 @@ class ActivationStats:
         self.token_counts = {t: 0 for t in token_groups}
 
     @th.no_grad()
-    def update(self, activations, group_mask, group_name):
-        # activations: tensor of shape (batch, seq, features)
-        # group_mask: boolean tensor of shape (batch, seq)
-        assert activations.shape[0] == group_mask.shape[0]
-        assert activations.shape[1] == group_mask.shape[1]
-        assert group_mask.dim() == 2
-        group_activations = activations[group_mask]  # shape: (n_tokens, features)
-        self.token_counts[group_name] += len(group_activations)
+    def update_sparse(self, sparse_acts, group_mask, group_name):
+        (indices, activations) = sparse_acts
+        noise_mask = activations > EPSILON
+        indices = indices[noise_mask]
+        activations = activations[noise_mask]
+        assert indices.dim() == 2, "batching not supported yet"
+        group_mask = group_mask.squeeze(0)
+        assert group_mask.dtype == th.bool
+        assert (
+            group_mask.dim() == 1
+        ), "group mask must be 1D, batching not supported yet"
+        sorted_latents, sorted_indices = th.sort(indices[:, 1])
+        sorted_token_indices = indices[sorted_indices, 0]
+        mask = group_mask[sorted_token_indices]
+        sorted_latents = sorted_latents[mask]
+        activations = activations[sorted_indices][mask]
+        rel_acts = activations / self.max_activations[sorted_latents]
+        if len(rel_acts) == 0:
+            return
+        assert mask.dim() == 1, "mask must be 1D, batching not supported yet"
+        assert (
+            mask.sum().item() == rel_acts.shape[0]
+        ), f"Shape mismatch: {mask.sum().item()} <> {rel_acts.shape[0]}"
+        active_latents, counts = th.unique_consecutive(
+            sorted_latents, return_counts=True
+        )
+        assert len(active_latents) == len(sorted_latents.unique())
+        buckets = th.bucketize(rel_acts, self.bucket_edges)
+        group_idx = self._group_to_idx[group_name]
+        self._maxs[group_idx, sorted_latents, buckets] = th.maximum(
+            self._maxs[group_idx, sorted_latents, buckets], activations
+        )
+        self._means[group_idx][active_latents] *= self._counts[group_idx][
+            active_latents
+        ]
+        incr_indices = [sorted_latents, buckets]
+        self._counts[group_idx].index_put_(
+            incr_indices, th.ones_like(sorted_latents), accumulate=True
+        )
+        assert activations.shape == sorted_latents.shape
+        self._means[group_idx].index_put_(
+            incr_indices, activations.double(), accumulate=True
+        )
+        counts = self._counts[group_idx][active_latents]
+        nonzero_mask = counts != 0
+        self._means[group_idx][active_latents] = th.where(
+            nonzero_mask,
+            self._means[group_idx][active_latents] / counts,
+            self._means[group_idx][active_latents]
+        )
+        # self._means[group_idx][active_latents][counts != 0] /= counts[counts != 0]
+        # add 1 for each sorted_latent, bucket index
+        # create a sum of act values that is filled in the same way using values
+        # update means with the new counts and sum of act values
 
+    @th.no_grad()
+    def update(self, activations, group_mask, group_name):
+        # activations can be either:
+        # - a dense tensor of shape (batch, seq, latents)
+        # - a tuple (indices, values) where:
+        #   - indices is a tensor of shape (batch, N, 2) containing (token_idx, latent_idx) pairs
+        #   - values is a tensor of shape (batch, N) containing activation values
+        # group_mask: boolean tensor of shape (batch, seq)
+
+        if isinstance(activations, th.Tensor):
+            # Dense case
+            assert (
+                activations.shape[0] == group_mask.shape[0]
+            ), f"Shape 0 mismatch: {activations.shape} <> {group_mask.shape}"
+            assert (
+                activations.shape[1] == group_mask.shape[1]
+            ), f"Shape 1 mismatch: {activations.shape} <> {group_mask.shape}"
+            assert (
+                group_mask.dim() == 2
+            ), f"Group mask has no batch dim? {group_mask.shape}"
+            assert (
+                activations.dim() == 3
+            ), f"Activations has no batch dim? {activations.shape}"
+            group_activations = activations[group_mask]  # shape: (n_tokens, latents)
+        else:
+            assert isinstance(
+                activations, tuple
+            ), f"Unknown activations type: {type(activations)}\n{activations}"
+            return self.update_sparse(activations, group_mask, group_name)
         if len(group_activations) == 0:
             return
 
@@ -312,9 +391,9 @@ class ActivationStats:
         group_idx = self._group_to_idx[group_name]
 
         for bucket_idx in range(self.num_buckets):
-            bucket_mask = buckets == bucket_idx  # shape: (n_tokens, features)
+            bucket_mask = buckets == bucket_idx  # shape: (n_tokens, latents)
             assert bucket_mask.shape == group_activations.shape
-            counts = bucket_mask.sum(dim=0)  # shape: (features,)
+            counts = bucket_mask.sum(dim=0)  # shape: (latents,)
             update_mask = counts > 0
             counts = counts[update_mask]  # shape: (ft_to_update,)
             if not update_mask.any():
@@ -360,7 +439,7 @@ class ActivationStats:
             "token_group": np.repeat(
                 list(self._group_to_idx.keys()), self._counts[0].numel()
             ),
-            "feature": np.tile(
+            "latent": np.tile(
                 np.repeat(range(self._counts.shape[1]), self._counts.shape[2]),
                 len(self._group_to_idx),
             ),
@@ -373,67 +452,61 @@ class ActivationStats:
             "max": self._maxs.cpu().numpy().flatten(),
         }
 
-        stats = pd.DataFrame(data).set_index(["token_group", "feature", "bucket"])
+        stats = pd.DataFrame(data).set_index(["token_group", "latent", "bucket"])
         return ComputedActivationStats(stats, self.token_counts)
 
 
 @th.no_grad()
 def main(
-    base_model,
-    it_model,
-    crosscoder: CrossCoder,
-    crosscoder_device,
-    dataset,
+    tokenizer,
+    latent_activation_cache: LatentActivationCache,
     max_activations,
     save_path,
-    layer=13,
     max_num_tokens=1_000_000_000,
-    batch_size=8,
     test=False,
 ):
+    device = "cuda" if th.cuda.is_available() else "cpu"
+    latent_activation_cache.to(device)
     stats = ActivationStats(
-        crosscoder.dict_size,
+        latent_activation_cache.dict_size,
         max_activations,
-        device=crosscoder_device,
+        device=device,
     )
-
-    def get_feature(batch):
-        with base_model.trace(batch):
-            base_acts = (
-                get_layer_output(base_model, layer).to(crosscoder_device).save()
-            )  # (batch, seq_len, d_model)
-            get_layer_output(base_model, layer).stop()
-        with it_model.trace(batch):
-            it_acts = (
-                get_layer_output(it_model, layer).to(crosscoder_device).save()
-            )  # (batch, seq_len, d_model)
-            get_layer_output(it_model, layer).stop()
-        cc_input = th.stack([base_acts, it_acts], dim=2).float()  # b, seq, 2, d
-        cc_input = einops.rearrange(cc_input, "b s m d -> (b s) m d")
-        cc_acts = crosscoder.get_activations(cc_input)
-        cc_acts = einops.rearrange(cc_acts, "(b s) f -> b s f", b=it_acts.shape[0])
-        del cc_input, base_acts, it_acts
-        th.cuda.empty_cache()
-        return cc_acts
 
     num_tokens = 0
     max_num_tokens = max_num_tokens if not test else 100_000
-    pbar = tqdm(total=max_num_tokens, desc="Processing tokens")
-    if test:
-        dataset = dataset[:8]
+    for i in range(len(latent_activation_cache)):
+        if tokenizer.start_of_turn_token in latent_activation_cache.get_sequence(i)[:2]:
+            latent_activation_cache.offset = latent_activation_cache.offset + i
+            break
+    print(f"Using offset {latent_activation_cache.offset}")
     try:
-        for i in trange(0, len(dataset), batch_size):
-            conv_batch = dataset[i : min(i + batch_size, len(dataset))]
+        # dataloader = DataLoader(
+        #     latent_activation_cache,
+        #     batch_size=batch_size,
+        #     shuffle=False,
+        #     # num_workers=16,
+        # )
+        dataloader = latent_activation_cache
+        pbar = trange(len(dataloader), desc="Processing batches")
+        for i in pbar:
+            tokens = latent_activation_cache.get_sequence(i)
+            # Convert tokens to conversation using gemma_tokens_to_conv
+            tokens, cc_acts = dataloader[i]
+            # convs = [
+            #     gemma_tokens_to_conv(sample.tolist(), tokenizer) for sample in tokens
+            # ]
+            convs = [gemma_tokens_to_conv(tokens.tolist(), tokenizer)]
             batch = tokenize_with_ctrl_ids(
-                conv_batch,
-                it_model.tokenizer,
+                convs,
+                tokenizer,
                 return_dict=True,
                 return_assistant_tokens_mask=True,
                 return_tensors="pt",
                 padding=True,
                 truncation=True,
                 max_length=1024,
-            )
+            ).to(device)
             ctrl_mask = batch["ctrl_mask"]
             ctrl_ids = batch["ctrl_ids"]
             assistant_mask = batch["assistant_masks"]
@@ -449,12 +522,24 @@ def main(
                 "user_tokens": user_tokens_mask,
                 "bos": bos_mask,
             }
-            cc_acts = get_feature(batch)
+            # assert (
+            #     attn_mask.shape == cc_acts.shape[:-1]
+            # ), f"Shape mismatch: {attn_mask.shape} <> {cc_acts.shape[:-1]}"
+            # assert (
+            #     ctrl_mask.shape == cc_acts.shape[:-1]
+            # ), f"Shape mismatch: {ctrl_mask.shape} <> {cc_acts.shape[:-1]}"
+            # assert (
+            #     assistant_mask.shape == cc_acts.shape[:-1]
+            # ), f"Shape mismatch: {assistant_mask.shape} <> {cc_acts.shape[:-1]}"
+            # assert (
+            #     all_masks["ctrl_token_1"].shape == cc_acts.shape[:-1]
+            # ), f"Shape mismatch: {all_masks['ctrl_token_1'].shape} <> {cc_acts.shape[:-1]}"
             for group_name, mask in all_masks.items():
                 stats.update(cc_acts, mask, group_name)
+
             num_new_tokens = attn_mask.sum().item()
             num_tokens += num_new_tokens
-            pbar.update(num_new_tokens)
+            pbar.set_postfix_str(f"Tokens: {num_tokens}")
             if num_tokens >= max_num_tokens:
                 break
     finally:
@@ -464,7 +549,7 @@ def main(
     return computed_stats
 
 
-def process_stats(stats: ComputedActivationStats, verbose=1):
+def process_stats(stats: ComputedActivationStats, crosscoder: str, verbose=1):
     if verbose:
         # compute simple statistics, like bucket frequency
         bucket_freq = stats.stats.groupby("bucket")["nonzero count"].sum()
@@ -518,24 +603,24 @@ def process_stats(stats: ComputedActivationStats, verbose=1):
             if low_acts > 0:
                 ratio = high_acts / low_acts
                 print(f"{group}: {ratio:.2f}")
-    feature_stats = stats.compute_feature_stats()
-    feature_stats.to_csv("results/per_token_stats/feature_stats.csv")
+    latent_stats = stats.compute_latent_stats()
+    latent_stats.to_csv("results/per_token_stats/latent_stats.csv")
     # plot histograms of different stats
     # Plot histograms of different stats
     # Create directory for plots
-    plot_dir = Path("results/per_token_stats/plots")
+    plot_dir = Path("results/per_token_stats/plots") / crosscoder
     plot_dir.mkdir(exist_ok=True, parents=True)
 
     # Plot ctrl frequency distribution
     fig = px.histogram(
-        feature_stats.reset_index(),
+        latent_stats.reset_index(),
         x="lmsys_ctrl_freq",
         color="bucket",
         barmode="overlay",
         title="Distribution of Control Token Frequencies",
         labels={
             "lmsys_ctrl_freq": "Control Token Frequency",
-            "count": "Number of Features",
+            "count": "Number of latents",
             "bucket": "Activation Bucket",
         },
         log_y=True,
@@ -545,14 +630,14 @@ def process_stats(stats: ComputedActivationStats, verbose=1):
 
     # Plot non-ctrl frequency distribution
     fig = px.histogram(
-        feature_stats.reset_index(),
+        latent_stats.reset_index(),
         x="lmsys_non_ctrl_freq",
         color="bucket",
         barmode="overlay",
         title="Distribution of Non-Control Token Frequencies",
         labels={
             "lmsys_non_ctrl_freq": "Non-Control Token Frequency",
-            "count": "Number of Features",
+            "count": "Number of latents",
             "bucket": "Activation Bucket",
         },
         log_y=True,
@@ -562,14 +647,14 @@ def process_stats(stats: ComputedActivationStats, verbose=1):
 
     # Plot ctrl percentage distribution
     fig = px.histogram(
-        feature_stats.reset_index(),
+        latent_stats.reset_index(),
         x="lmsys_ctrl_%",
         color="bucket",
         barmode="overlay",
         title="Distribution of Control Token Percentages",
         labels={
             "lmsys_ctrl_%": "Control Token Percentage",
-            "count": "Number of Features",
+            "count": "Number of latents",
             "bucket": "Activation Bucket",
         },
         log_y=True,
@@ -577,24 +662,19 @@ def process_stats(stats: ComputedActivationStats, verbose=1):
     fig.write_html(plot_dir / "ctrl_percentage_dist.html")
     fig.write_image(plot_dir / "ctrl_percentage_dist.png", scale=3)
 
-    df_path = hf_hub_download(
-        repo_id="Butanium/max-activating-examples-gemma-2-2b-l13-mu4.1e-02-lr1e-04",
-        filename="feature_df.csv",
-        repo_type="dataset",
-    )
-    feature_df = pd.read_csv(df_path, index_col=0)
-    new_stats = feature_stats.xs(-1, level="bucket")
-    intersection_columns = set(new_stats.columns) & set(feature_df.columns)
+    latent_df = load_latent_df(crosscoder)
+    new_stats = latent_stats.xs(-1, level="bucket")
+    intersection_columns = set(new_stats.columns) & set(latent_df.columns)
     for col in intersection_columns:
         try:
-            pd.testing.assert_series_equal(new_stats[col], feature_df[col])
+            pd.testing.assert_series_equal(new_stats[col], latent_df[col])
         except Exception as e:
             print(f"Mismatch in {col}: {e}")
-    feature_df = feature_df[
-        [c for c in feature_df.columns if c not in intersection_columns]
+    latent_df = latent_df[
+        [c for c in latent_df.columns if c not in intersection_columns]
     ]
     # select stats for bucket -1
-    new_stats = new_stats.merge(feature_df, left_index=True, right_index=True)
+    new_stats = new_stats.merge(latent_df, left_index=True, right_index=True)
     # Reorder columns to group related metrics
     # fmt: off
     ordered_cols = [  
@@ -611,62 +691,48 @@ def process_stats(stats: ComputedActivationStats, verbose=1):
         # Norm differences
         "enc_norm_diff","dec_base_norm", "dec_instruct_norm", "enc_base_norm", "enc_instruct_norm", 
     ]
+    all_cols =  ordered_cols + [col for col in new_stats.columns if col not in ordered_cols]
+    all_cols = [col for col in all_cols if col in new_stats.columns]
     # fmt: on
-    new_stats = new_stats[
-        ordered_cols + [col for col in new_stats.columns if col not in ordered_cols]
-    ]
-    # # add enc base norm feature
-    new_stats.to_csv("results/per_token_stats/feature_stats_global.csv")
+    new_stats = new_stats[all_cols]
+    # # add enc base norm latent
+    new_stats.to_csv("results/per_token_stats/latent_stats_global.csv")
 
 
+# python scripts/per_token_stats.py gemma-2-2b-L13-k100-lr1e-04-local-shuffling-CCLoss --latent-activation-cache-path /workspace/data/latent_activations
 if __name__ == "__main__":
     parser = ArgumentParser()
-    parser.add_argument("--base-device", "-b", type=str, default="auto")
-    parser.add_argument("--it-device", "-i", type=str, default="auto")
-    parser.add_argument("--crosscoder-device", "-c", type=str, default="cpu")
+    parser.add_argument("crosscoder", type=str)
+    parser.add_argument("--latent-activation-cache-path", type=Path, required=True)
     parser.add_argument("--test", "-t", action="store_true")
-    parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--use-precomputed-stats", "--skip", action="store_true")
     args = parser.parse_args()
+
     if args.use_precomputed_stats:
         stats = ComputedActivationStats.load(Path("results/per_token_stats"))
         process_stats(stats, verbose=0)
         exit()
+
     # Create output directory
     output_dir = Path("results/per_token_stats")
     output_dir.mkdir(exist_ok=True, parents=True)
 
-    repo_id = "Butanium/max-activating-examples-gemma-2-2b-l13-mu4.1e-02-lr1e-04"
-    df_path = hf_hub_download(
-        repo_id=repo_id, filename="feature_df.csv", repo_type="dataset"
+    # Load tokenizer and patch it
+    tokenizer = AutoTokenizer.from_pretrained("google/gemma-2-2b-it")
+    patch_tokenizer(tokenizer, "gemma-2-2b-it")
+
+    # Load latent activation cache and max activations
+    latent_activation_cache = LatentActivationCache(
+        args.latent_activation_cache_path / args.crosscoder, expand=False
     )
-    df = pd.read_csv(df_path, index_col=0)
-    max_activations = th.from_numpy(df["max_activation_lmsys"].values)
-    base_model = load_model("google/gemma-2-2b", device_map=args.base_device)
-    it_model = load_model(
-        "google/gemma-2-2b-it",
-        tokenizer_kwargs={"padding_side": "right"},
-        device_map=args.it_device,
-    )
-    patch_tokenizer(it_model.tokenizer, "gemma-2-2b-it")
-    crosscoder = CrossCoder.from_pretrained(
-        "Butanium/gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04",
-        from_hub=True,
-        device=args.crosscoder_device,
-    )
-    dataset = load_dataset(
-        "jkminder/lmsys-chat-1m-gemma-formatted", split="validation"
-    )["conversation"]
+    max_activations = latent_activation_cache.max_activations
+
     stats = main(
-        base_model,
-        it_model,
-        crosscoder,
-        args.crosscoder_device,
-        dataset,
+        tokenizer,
+        latent_activation_cache,
         max_activations,
         save_path=output_dir,
-        batch_size=args.batch_size,
         test=args.test,
     )
 
-    process_stats(stats, verbose=1)
+    process_stats(stats, args.crosscoder, verbose=1)

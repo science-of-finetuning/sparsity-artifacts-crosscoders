@@ -481,7 +481,7 @@ class SAEAdditiveSteering(IdentityPreprocessFn):
         assert (
             self.sae.decoder.weight.shape[0] < self.sae.decoder.weight.shape[1]
         ), "sae decoder has shape (dict_size, d_model), while assumed to be (d_model, dict_size)"
-        weights = self.sae.decoder.weight[:, self.latents_to_steer].T # 1, L, d
+        weights = self.sae.decoder.weight[:, self.latents_to_steer].T  # 1, L, d
         assert weights.shape == (
             len(self.latents_to_steer),
             self.sae.decoder.weight.shape[0],

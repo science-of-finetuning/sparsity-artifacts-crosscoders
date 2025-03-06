@@ -4,6 +4,7 @@ from collections import defaultdict
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Literal
+import sqlite3
 
 import pandas as pd
 import numpy as np
@@ -30,6 +31,10 @@ df_hf_repo_legacy = {
 }
 
 
+def stats_repo_id(crosscoder):
+    return f"science-of-finetuning/diffing-stats-{crosscoder}"
+
+
 def load_latent_df(crosscoder_or_path=None):
     """Load the latent_df for the given crosscoder."""
     if crosscoder_or_path is None:
@@ -44,7 +49,7 @@ def load_latent_df(crosscoder_or_path=None):
     elif Path(crosscoder_or_path).exists():
         # Local model
         df_path = Path(crosscoder_or_path)
-    else: 
+    else:
         repo_id = f"science-of-finetuning/diffing-stats-{crosscoder_or_path}"
         try:
             df_path = hf_hub_download(
@@ -53,7 +58,9 @@ def load_latent_df(crosscoder_or_path=None):
                 repo_type="dataset",
             )
         except Exception as e:
-            raise ValueError(f"Failed to download latent_df for {crosscoder_or_path}: {e}")
+            raise ValueError(
+                f"Failed to download latent_df for {crosscoder_or_path}: {e}"
+            )
     df = pd.read_csv(df_path, index_col=0)
     return df
 
@@ -129,7 +136,9 @@ def push_latent_df(
                 else:
                     equal = original_df[column].equals(df[column])
                 if not equal:
-                    print(f"Column {column} has different values in original and new df:")
+                    print(
+                        f"Column {column} has different values in original and new df:"
+                    )
                     if "float" in str(original_df[column].dtype):
                         diff_ratio = (
                             ~np.isclose(
@@ -150,18 +159,20 @@ def push_latent_df(
                 raise e
             print(f"Failed to load original df: {e}")
             print("Will create a new repository.")
-            
+
     if confirm:
         print(f"Commit message: {commit_message}")
         r = input("Would you like to push the df to the hub? y/(n)")
         if r != "y":
             raise ValueError("User cancelled")
-            
+
     # Get the repository ID
-    repo_id = df_hf_repo_legacy.get(crosscoder) if hasattr(df_hf_repo_legacy, 'get') else None
+    repo_id = (
+        df_hf_repo_legacy.get(crosscoder) if hasattr(df_hf_repo_legacy, "get") else None
+    )
     if repo_id is None:
         repo_id = f"science-of-finetuning/diffing-stats-{crosscoder}"
-        
+
     with TemporaryDirectory() as tmpdir:
         df.to_csv(Path(tmpdir) / "feature_df.csv")
         try:
@@ -175,16 +186,16 @@ def push_latent_df(
         except Exception as e:
             if not create_repo_if_missing:
                 raise e
-                
+
             print(f"Repository {repo_id} doesn't exist. Creating it...")
-            
+
             # Create the repository
             hf_api.create_repo(
                 repo_id=repo_id,
                 repo_type="dataset",
                 private=False,
             )
-            
+
             # Try uploading again
             hf_api.upload_file(
                 repo_id=repo_id,
@@ -196,6 +207,7 @@ def push_latent_df(
             print(f"Successfully created repository {repo_id} and uploaded data.")
     return repo_id
 
+
 def model_path_to_name(model_path: Path):
     """Convert a model path to a name."""
     if str(model_path).endswith(".pt"):
@@ -203,9 +215,10 @@ def model_path_to_name(model_path: Path):
     else:
         return model_path.name
 
+
 def push_dictionary_model(model_path: Path):
     """Push a dictionary model to the Hugging Face Hub.
-    
+
     Args:
         model_path: The path to the model to push
     """
@@ -214,12 +227,11 @@ def push_dictionary_model(model_path: Path):
     model_dir = model_path.parent
     config_path = model_dir / "config.json"
 
-
     model = load_dictionary_model(model_path)
     # Upload files to the hub
     try:
         model.push_to_hub(repo_id)
-        
+
         # Upload config
         hf_api.upload_file(
             repo_id=repo_id,
@@ -228,11 +240,11 @@ def push_dictionary_model(model_path: Path):
             repo_type="model",
             commit_message=f"Upload {model_name} dictionary model",
         )
-        
+
         print(f"Successfully uploaded model to {repo_id}")
     except Exception as e:
         print(f"Error uploading model to hub: {e}")
-        
+
         # Try creating the repository
         try:
             print(f"Repository {repo_id} doesn't exist. Creating it...")
@@ -241,10 +253,10 @@ def push_dictionary_model(model_path: Path):
                 repo_type="model",
                 private=False,
             )
-            
+
             # Try uploading again
             model.push_to_hub(repo_id)
-            
+
             hf_api.upload_file(
                 repo_id=repo_id,
                 path_or_fileobj=config_path,
@@ -252,12 +264,13 @@ def push_dictionary_model(model_path: Path):
                 repo_type="model",
                 commit_message=f"Initial upload of {model_name} dictionary model",
             )
-            
+
             print(f"Successfully created repository {repo_id} and uploaded model.")
         except Exception as e2:
             print(f"Failed to create repository and upload model: {e2}")
             raise e2
     return repo_id
+
 
 def _latent_df(crosscoder=None):
     if crosscoder is None:
@@ -385,11 +398,17 @@ def load_connor_crosscoder():
 def load_crosscoder(crosscoder=None):
     if crosscoder is None:
         crosscoder = "l13_crosscoder"
-    if crosscoder == "l13_crosscoder" or crosscoder == "Butanium/gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04" or crosscoder == "science-of-finetuning/gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04":
+    if (
+        crosscoder == "l13_crosscoder"
+        or crosscoder == "Butanium/gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04"
+    ):
         return CrossCoder.from_pretrained(
             "Butanium/gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04", from_hub=True
         )
-    elif crosscoder == "connor" or crosscoder == "ckkissane/crosscoder-gemma-2-2b-model-diff":
+    elif (
+        crosscoder == "connor"
+        or crosscoder == "ckkissane/crosscoder-gemma-2-2b-model-diff"
+    ):
         return load_connor_crosscoder()
     elif "-k" in crosscoder:
         return BatchTopKCrossCoder.from_pretrained(crosscoder)
@@ -400,12 +419,13 @@ def load_crosscoder(crosscoder=None):
         else:
             raise ValueError(f"Unknown crosscoder: {crosscoder}")
 
+
 def load_dictionary_model(model_name: str | Path):
     """Load a dictionary model from a local path or HuggingFace Hub.
-    
+
     Args:
         model_name: Name or path of the model to load
-        
+
     Returns:
         The loaded dictionary model
     """
@@ -416,13 +436,21 @@ def load_dictionary_model(model_name: str | Path):
         model_id = "science-of-finetuning/" + str(model_name)
         # Download config to determine model type
         try:
-            config_path = hf_hub_download(repo_id=model_id, filename="trainer_config.json")
+            config_path = hf_hub_download(
+                repo_id=model_id, filename="trainer_config.json"
+            )
             with open(config_path, "r") as f:
                 config = json.load(f)["trainer"]
 
             # Determine model class based on config
-            if "dict_class" in config and config["dict_class"] in ["BatchTopKSAE", "CrossCoder", "BatchTopKCrossCoder"]:
-                return eval(f"{config['dict_class']}.from_pretrained(model_id, from_hub=True)")
+            if "dict_class" in config and config["dict_class"] in [
+                "BatchTopKSAE",
+                "CrossCoder",
+                "BatchTopKCrossCoder",
+            ]:
+                return eval(
+                    f"{config['dict_class']}.from_pretrained(model_id, from_hub=True)"
+                )
             else:
                 raise ValueError(f"Unknown model type: {config['dict_class']}")
         except Exception as e:
@@ -439,13 +467,17 @@ def load_dictionary_model(model_name: str | Path):
         model_path = Path(model_name)
         if not model_path.exists():
             raise ValueError(f"Local model {model_name} does not exist")
-        
+
         # Load the config
         with open(model_path.parent / "config.json", "r") as f:
             config = json.load(f)["trainer"]
 
         # Determine model class based on config
-        if "dict_class" in config and config["dict_class"] in ["BatchTopKSAE", "CrossCoder", "BatchTopKCrossCoder"]:
+        if "dict_class" in config and config["dict_class"] in [
+            "BatchTopKSAE",
+            "CrossCoder",
+            "BatchTopKCrossCoder",
+        ]:
             return eval(f"{config['dict_class']}.from_pretrained(model_path)")
         else:
             raise ValueError(f"Unknown model type: {config['dict_class']}")
@@ -547,7 +579,7 @@ def load_max_activating_examples(
             )
 
 
-def offline_dashboard(
+def legacy_offline_dashboard(
     crosscoder=None,
     act_type: Literal["chat", "base", "both"] = "chat",
     max_num_examples=50,
@@ -566,3 +598,150 @@ def offline_dashboard(
         tokenizer=AutoTokenizer.from_pretrained("google/gemma-2-2b-it"),
         max_examples=max_num_examples,
     )
+
+
+class QuantileExamplesDB:
+    """A persistent, read-only dictionary-like interface for quantile examples database."""
+
+    def __init__(self, db_path, tokenizer, max_example_per_quantile=20):
+        """Initialize the database connection.
+
+        Args:
+            db_path: Path to the SQLite database
+        """
+        # Use URI format with read-only mode for better concurrent access
+        self.db_path = f"file:{db_path}?mode=ro"
+        # Create connection with URI mode enabled
+        self.conn = sqlite3.connect(self.db_path, uri=True)
+
+        # Cache the feature indices for faster access
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT DISTINCT feature_idx FROM quantile_examples")
+        self._feature_indices = frozenset(row[0] for row in cursor.fetchall())
+
+        cursor.execute("SELECT COUNT(DISTINCT quantile_idx) FROM quantile_examples")
+        self.num_quantiles = cursor.fetchone()[0]
+        cursor.close()
+        self.max_example_per_quantile = max_example_per_quantile
+        self.tokenizer = tokenizer
+
+    def __getitem__(self, feature_idx):
+        """Get examples for a specific feature index.
+
+        Returns:
+            List of tuples (max_activation_value, token_ids, activation_values)
+        """
+        return self.get_examples(feature_idx)
+
+    def get_examples(self, feature_idx, quantile=None):
+        """Get examples for a specific feature index.
+
+        Args:
+            feature_idx: The feature index to get examples for
+            quantile: The quantile to get examples for (default is all)
+
+        Returns:
+            List of tuples (max_activation_value, token_ids, activation_values)
+        """
+        if feature_idx not in self._feature_indices:
+            raise KeyError(f"Feature index {feature_idx} not found in database")
+
+        cursor = self.conn.cursor()
+        if quantile is None:
+            quantile = list(range(self.num_quantiles))[::-1]
+        if isinstance(quantile, list):
+            res = []
+            for q in quantile:
+                res.extend(self.get_examples(feature_idx, q))
+            return res
+        else:
+            # If quantile is specified as an integer, filter by that quantile
+            cursor.execute(
+                """
+                SELECT q.activation, q.sequence_idx, s.token_ids, a.positions, a.activation_values
+                FROM quantile_examples q
+                JOIN sequences s ON q.sequence_idx = s.sequence_idx
+                JOIN activation_details a ON q.feature_idx = a.feature_idx AND q.sequence_idx = a.sequence_idx
+                WHERE q.feature_idx = ? AND q.quantile_idx = ?
+                ORDER BY q.activation DESC
+                """,
+                (feature_idx, int(quantile)),
+            )
+
+        results = []
+        fetch = (
+            cursor.fetchmany(self.max_example_per_quantile)
+            if self.max_example_per_quantile is not None
+            else cursor.fetchall()
+        )
+        for (
+            activation,
+            sequence_idx,
+            token_ids_blob,
+            positions_blob,
+            values_blob,
+        ) in fetch:
+            token_ids = np.frombuffer(token_ids_blob, dtype=np.int32).tolist()
+            positions = np.frombuffer(positions_blob, dtype=np.int32).tolist()
+            values = np.frombuffer(values_blob, dtype=np.float32).tolist()
+
+            # Initialize activation values with zeros
+            activation_values = [0.0] * len(token_ids)
+
+            # Fill in the non-zero activations
+            for pos, val in zip(positions, values):
+                activation_values[pos] = val
+
+            results.append(
+                (
+                    activation,
+                    self.tokenizer.convert_ids_to_tokens(token_ids),
+                    activation_values,
+                )
+            )
+
+        cursor.close()
+        return results
+
+    def keys(self):
+        """Get all feature indices in the database."""
+        return self._feature_indices
+
+    def __iter__(self):
+        """Iterate over feature indices."""
+        return iter(self._feature_indices)
+
+    def __len__(self):
+        """Get the number of unique features."""
+        return len(self._feature_indices)
+
+    def __contains__(self, feature_idx):
+        """Check if a feature index exists in the database."""
+        return feature_idx in self._feature_indices
+
+
+def offline_dashboard(crosscoder, max_example_per_quantile=20, tokenizer=None):
+    """
+    Returns an offline_dashboard showing activations from different quantile
+
+    Args:
+      crosscoder: The crosscoder to take the max activating examples
+      max_example_per_quantile: the maximimum number of examples per quantile
+    """
+    db_path = hf_hub_download(
+        repo_id=stats_repo_id(crosscoder),
+        repo_type="dataset",
+        filename="examples.db",
+    )
+    if tokenizer is None:
+        tokenizer = AutoTokenizer.from_pretrained("google/gemma-2-2b-it")
+    activation_examples = QuantileExamplesDB(
+        db_path, tokenizer, max_example_per_quantile=max_example_per_quantile
+    )
+    dashboard = OfflineFeatureCentricDashboard(
+        activation_examples,
+        tokenizer,
+        max_examples=activation_examples.num_quantiles * max_example_per_quantile,
+    )
+    dashboard.display()
+    return dashboard
