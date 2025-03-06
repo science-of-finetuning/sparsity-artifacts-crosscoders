@@ -23,10 +23,10 @@ dfs = defaultdict(lambda: None)
 df_hf_repo_legacy = {
     "l13_crosscoder": "science-of-finetuning/max-activating-examples-gemma-2-2b-l13-mu4.1e-02-lr1e-04",
     "Butanium/gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04": "science-of-finetuning/max-activating-examples-gemma-2-2b-l13-mu4.1e-02-lr1e-04",
-    "science-of-finetuning/diffing-stats-gemma-2-2b-l13-mu4.1e-02-lr1e-04": "science-of-finetuning/max-activating-examples-gemma-2-2b-l13-mu4.1e-02-lr1e-04",
     "connor": "science-of-finetuning/max-activating-examples-gemma-2-2b-l13-ckissane",
     "ckkissane/crosscoder-gemma-2-2b-model-diff": "science-of-finetuning/max-activating-examples-gemma-2-2b-l13-ckissane",
-    "science-of-finetuning/diffing-stats-gemma-2-2b-l13-mu4.1e-02-lr1e-04": "science-of-finetuning/max-activating-examples-gemma-2-2b-l13-mu4.1e-02-lr1e-04",
+    "gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04": "science-of-finetuning/max-activating-examples-gemma-2-2b-l13-mu4.1e-02-lr1e-04",
+    "science-of-finetuning/diffing-stats-gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04": "science-of-finetuning/max-activating-examples-gemma-2-2b-l13-mu4.1e-02-lr1e-04",
 }
 
 
@@ -412,11 +412,7 @@ def load_dictionary_model(model_name: str | Path):
     config = None
     # Check if it's a HuggingFace Hub model
     if "/" not in str(model_name) or not Path(model_name).exists():
-        # Legacy model
-        if str(model_name) in df_hf_repo_legacy:
-            model_name = df_hf_repo_legacy[str(model_name)]
-        else:
-            model_name = str(model_name)
+        model_name = str(model_name)
         model_id = "science-of-finetuning/" + str(model_name)
         # Download config to determine model type
         try:
