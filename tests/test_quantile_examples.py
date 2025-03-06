@@ -253,6 +253,9 @@ def test_edge_cases():
     )
     compare_results(result_old, result_new)
 
+class DummyTokenizer:
+    def convert_ids_to_tokens(self, tokens):
+        return tokens
 
 def test_db_vs_pt_storage(tmp_path):
     """Test that DB and PT storage methods preserve the same information."""
@@ -283,9 +286,9 @@ def test_db_vs_pt_storage(tmp_path):
     db_path = tmp_path / "examples.db"
     # Load PT data
     pt_data, pt_sequences, pt_activation_details = th.load(pt_path, weights_only=False)
-
+    tokenizer = DummyTokenizer()
     # Load DB data
-    db = QuantileExamplesDB(db_path)
+    db = QuantileExamplesDB(db_path, tokenizer, None)
 
     # Compare basic statistics
     pt_features = set()

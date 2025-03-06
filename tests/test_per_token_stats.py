@@ -81,7 +81,7 @@ def compare_stats(stats1, stats2, rtol=1e-5):
     "num_values,num_tokens,num_latents",
     [(800, 500, 20), (1000, 10, 500), (10, 700, 400)],
 )
-def test(num_values, num_tokens, num_latents, seed, device="cpu"):
+def test_sparse(num_values, num_tokens, num_latents, seed, device="cpu"):
     if seed is None:
         seed = th.randint(0, 10000, ()).to(device)
         # seed = 8308
