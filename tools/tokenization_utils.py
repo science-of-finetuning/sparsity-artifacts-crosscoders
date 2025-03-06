@@ -3,15 +3,27 @@ import warnings
 import torch as th
 import re
 
+from transformers import AutoTokenizer
 
-class TokenizerNoCtrlTemplateProxy:
+
+class IncompleteTokenizerProxy:
     def __init__(self, tokenizer):
         self.tokenizer = tokenizer
 
     def __getattr__(self, name):
-        if name == "ctrl_template":
+        if name == "ctrl_template" and self.tokenizer.ctrl_template is None:
             raise AttributeError(
-                "Tokenizer was not patched with a control template, so can't be used to compute a control mask"
+                "Tokenizer was not patched using tools.tokenization_utils.patch_tokenizer with a control template, so can't be used to compute a control mask"
+            )
+        elif (
+            name == "start_of_turn_token" and self.tokenizer.start_of_turn_token is None
+        ):
+            raise AttributeError(
+                "Tokenizer was not patched using tools.tokenization_utils.patch_tokenizer with a start of turn token, so can't be used to compute a start of turn mask"
+            )
+        elif name == "end_of_turn_token" and self.tokenizer.end_of_turn_token is None:
+            raise AttributeError(
+                "Tokenizer was not patched using tools.tokenization_utils.patch_tokenizer with an end of turn token, so can't be used to compute an end of turn mask"
             )
         return getattr(self.tokenizer, name)
 
@@ -28,6 +40,21 @@ with open(
     template_path / "customizable_gemma_chat_template_ctrl_tokens.jinja", "r"
 ) as f:
     CUSTOMIZABLE_CTRL_TEMPLATE = f.read()
+GEMMA_TOKENIZER = AutoTokenizer.from_pretrained("google/gemma-2-2b-it")
+GEMMA_START_OF_TURN_TOKEN = GEMMA_TOKENIZER.encode(
+    "<start_of_turn>", add_special_tokens=False
+)
+assert (
+    len(GEMMA_START_OF_TURN_TOKEN) == 1
+), f"start of turn token must be a single token: {GEMMA_START_OF_TURN_TOKEN}"
+GEMMA_START_OF_TURN_TOKEN = GEMMA_START_OF_TURN_TOKEN[0]
+GEMMA_END_OF_TURN_TOKEN = GEMMA_TOKENIZER.encode(
+    "<end_of_turn>", add_special_tokens=False
+)
+assert (
+    len(GEMMA_END_OF_TURN_TOKEN) == 1
+), f"end of turn token must be a single token: {GEMMA_END_OF_TURN_TOKEN}"
+GEMMA_END_OF_TURN_TOKEN = GEMMA_END_OF_TURN_TOKEN[0]
 
 sample_batch = [
     [
@@ -48,19 +75,28 @@ sample_batch = [
 
 
 def patch_tokenizer(
-    tokenizer, model_name: str, ctrl_template: str = None, chat_template: str = None
+    tokenizer,
+    model_name: str,
+    ctrl_template: str = None,
+    chat_template: str = None,
+    end_of_turn_token: int = None,
+    start_of_turn_token: int = None,
 ):
-    if model_name in ("google/gemma-2-2b-it", "gemma-2"):
+    if "gemma-2" in model_name:
         tokenizer.chat_template = GEMMA_CHAT_TEMPLATE
         tokenizer.ctrl_template = CTRL_TEMPLATE
+        tokenizer.start_of_turn_token = GEMMA_START_OF_TURN_TOKEN
+        tokenizer.end_of_turn_token = GEMMA_END_OF_TURN_TOKEN
     else:
+        use_proxy = False
         if chat_template is not None:
             tokenizer.chat_template = chat_template
         if ctrl_template is None:
             warnings.warn(
                 f"No control template provided, you won't be able to use the control token mask for {model_name}"
             )
-            tokenizer = TokenizerNoCtrlTemplateProxy(tokenizer)
+            tokenizer.ctrl_template = None
+            use_proxy = True
         else:
             tokenizer.ctrl_template = ctrl_template
         if tokenizer.chat_template is None:
@@ -73,6 +109,20 @@ def patch_tokenizer(
                 f"Chat template for {model_name}"
                 " does not contain {% generation %} keyword"
             )
+        tokenizer.end_of_turn_token = end_of_turn_token
+        if end_of_turn_token is None:
+            warnings.warn(
+                "No end of turn token provided, you won't be able to use tokenizer.end_of_turn_token"
+            )
+            use_proxy = True
+        tokenizer.start_of_turn_token = start_of_turn_token
+        if start_of_turn_token is None:
+            warnings.warn(
+                "No start of turn token provided, you won't be able to use tokenizer.start_of_turn_token"
+            )
+            use_proxy = True
+        if use_proxy:
+            tokenizer = IncompleteTokenizerProxy(tokenizer)
 
 
 def sanitize(tok):
@@ -227,3 +277,127 @@ def custom_chat_template(
             tokenized["assistant_masks"] == custom_tokenized["assistant_masks"]
         ), f"assistant_masks are not the same: {tokenized['assistant_masks']} != {custom_tokenized['assistant_masks']}"
     return template
+
+
+def tokens_to_conv(
+    tokens: list[int],
+    tokenizer: AutoTokenizer,
+    start_of_turn_token: int,
+    end_of_turn_token: int,
+    skip_n_after_sot: int = 0,
+    skip_n_after_eot: int = 0,
+) -> list[dict[str, str]]:
+    """
+    Convert a list of tokens to a conversation.
+
+    Assumes:
+    - No system prompt
+    - First message is user
+    - Tokens are tokenized with the tokenizer.apply_chat_template method
+    """
+    original_tokens = tokens
+    if tokens[0] == tokenizer.bos_token_id:
+        tokens = tokens[1:]
+    assert (
+        tokens[0] == start_of_turn_token
+    ), f"Expected start of turn token after bos token, got {tokens[0]}: {tokenizer.convert_ids_to_tokens(tokens[0])} of\n```{tokenizer.decode(tokens)}```"
+    conversation = []
+    role = "user"
+    role_switch = {"user": "assistant", "assistant": "user"}
+    eot_indexs = [i for i, t in enumerate(tokens) if t == end_of_turn_token]
+    last_index = 1 + skip_n_after_sot  # skip the first start of turn tokens
+    for i, eot_index in enumerate(eot_indexs):
+        if last_index == eot_index:
+            conversation.append({"role": role, "content": ""})
+        else:
+            assert (
+                last_index < eot_index
+            ), f"last_index {last_index} is after eot_index {eot_index}"
+            turn_tokens = tokens[last_index:eot_index]
+            conversation.append(
+                {"role": role, "content": tokenizer.decode(turn_tokens)}
+            )
+        last_index = eot_index + skip_n_after_eot + 1
+        if last_index < len(tokens):
+            assert (
+                tokens[last_index] == start_of_turn_token
+            ), f"Expected start of turn token after end of turn token, got {tokens[last_index]}: {tokenizer.convert_ids_to_tokens(tokens[last_index])}"
+        last_index += skip_n_after_sot + 1
+        role = role_switch[role]
+    if tokens[-1] != end_of_turn_token:
+        conversation.append(
+            {
+                "role": role,
+                "content": tokenizer.decode(tokens[last_index:])
+                + tokenizer.convert_ids_to_tokens(tokenizer.end_of_turn_token),
+            }
+        )  # add <end_of_turn> to protect \n from being trimmed when applying the chat template
+    assert (
+        len(conversation) > 0
+    ), f"Conversation is empty for tokens {tokenizer.decode(original_tokens)}"
+    if tokenizer.apply_chat_template(conversation, tokenize=False) != tokenizer.decode(
+        original_tokens
+    ):
+        # Compare strings char by char and show context when they differ
+        str1 = tokenizer.apply_chat_template(conversation, tokenize=False)
+        str2 = tokenizer.decode(original_tokens)
+        for i, (c1, c2) in enumerate(zip(str1, str2)):
+            if c1 != c2:
+                start = max(0, i - 20)
+                end = min(len(str1), i + 20)
+                context = str1[start:end]
+                print(f"Strings differ at position {i}")
+                print(
+                    f"Context: {context[:i-start]}\033[91m{c1}\033[0m{context[i-start+1:]}"
+                )
+                print(f"Expected: {str2[start:i]}\033[91m{c2}\033[0m{str2[i+1:end]}")
+                raise ValueError("Decoded conversation does not match original string")
+    tokens1 = tokenizer.apply_chat_template(conversation)
+    if len(tokens1) < len(original_tokens):
+        # Show missing tokens in red
+        print("Tokenized chat is shorter than original")
+        print("Missing tokens:")
+        print(
+            "\033[91m"
+            + " ".join(tokenizer.convert_ids_to_tokens(original_tokens[len(tokens1) :]))
+            + "\033[0m"
+        )
+        raise ValueError("Tokenized chat is shorter than original")
+
+    if tokens1[: len(original_tokens)] != original_tokens:
+        # Compare tokens one by one and show context when they differ
+        tokens2 = original_tokens
+        for i, (t1, t2) in enumerate(zip(tokens1, tokens2)):
+            if t1 != t2:
+                start = max(0, i - 5)
+                end = min(len(tokens1), i + 5)
+                context1 = tokenizer.convert_ids_to_tokens(tokens1[start:end])
+                context2 = tokenizer.convert_ids_to_tokens(tokens2[start:end])
+                print(f"Tokens differ at position {i}")
+                print(
+                    f"Context: {context1[:i-start]}\033[91m{tokenizer.convert_ids_to_tokens([t1])[0]}\033[0m{context1[i-start+1:]}"
+                )
+                print(
+                    f"Expected: {context2[:i-start]}\033[91m{tokenizer.convert_ids_to_tokens([t2])[0]}\033[0m{context2[i-start+1:]}"
+                )
+                raise ValueError(
+                    "Tokenized conversation does not match original tokens"
+                )
+        raise ValueError("Conversation does not match tokens")
+    return conversation
+
+
+def gemma_tokens_to_conv(
+    tokens: list[int],
+    tokenizer: AutoTokenizer | None = None,
+):
+    if tokenizer is None:
+        tokenizer = AutoTokenizer.from_pretrained("google/gemma-2-2b-it")
+    return tokens_to_conv(
+        tokens,
+        tokenizer,
+        GEMMA_START_OF_TURN_TOKEN,
+        GEMMA_END_OF_TURN_TOKEN,
+        skip_n_after_sot=2,
+        skip_n_after_eot=1,
+    )
