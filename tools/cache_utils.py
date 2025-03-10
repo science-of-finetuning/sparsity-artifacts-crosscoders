@@ -1,6 +1,7 @@
 from dictionary_learning.cache import PairedActivationCache, ActivationCache
 import torch as th
 from pathlib import Path
+from tqdm.auto import tqdm
 
 
 class DifferenceCache:
@@ -276,31 +277,59 @@ class SampleCache:
 
 
 class LatentActivationCache:
-    def __init__(self, latent_activations_dir: Path, expand=True):
+    def __init__(self, latent_activations_dir: Path, expand=True, offset=0):
         if isinstance(latent_activations_dir, str):
             latent_activations_dir = Path(latent_activations_dir)
+
+        # Create progress bar for 7 files to load
+        pbar = tqdm(total=7, desc="Loading cache files")
+
+        pbar.set_postfix_str("Loading out_acts.pt")
         self.acts = th.load(latent_activations_dir / "out_acts.pt", weights_only=True)
+        pbar.update(1)
+
+        pbar.set_postfix_str("Loading out_ids.pt")
         self.ids = th.load(latent_activations_dir / "out_ids.pt", weights_only=True)
+        pbar.update(1)
+
+        pbar.set_postfix_str("Loading max_activations.pt")
         self.max_activations = th.load(
             latent_activations_dir / "max_activations.pt", weights_only=True
         )
+        pbar.update(1)
+
+        pbar.set_postfix_str("Loading latent_ids.pt")
         self.latent_ids = th.load(
             latent_activations_dir / "latent_ids.pt", weights_only=True
         )
+        pbar.update(1)
+
+        pbar.set_postfix_str("Loading padded_sequences.pt")
         self.padded_sequences = th.load(
             latent_activations_dir / "padded_sequences.pt", weights_only=True
         )
+        pbar.update(1)
+
         self.dict_size = self.max_activations.shape[0]
+
+        pbar.set_postfix_str("Loading seq_lengths.pt")
         self.sequence_lengths = th.load(
             latent_activations_dir / "seq_lengths.pt", weights_only=True
         )
+        pbar.update(1)
+
+        pbar.set_postfix_str("Loading seq_ranges.pt")
         self.sequence_ranges = th.load(
             latent_activations_dir / "seq_ranges.pt", weights_only=True
         )
+        pbar.update(1)
+        pbar.close()
+
         self.expand = expand
+        self.offset = offset
 
     def __len__(self):
-        return len(self.padded_sequences)
+        return len(self.padded_sequences) - self.offset
 
     def __getitem__(self, index: int):
         """
@@ -319,18 +348,41 @@ class LatentActivationCache:
                     - indices: Tensor of shape (N, 2) containing (token_idx, dict_idx) pairs
                     - values: Tensor of shape (N,) containing activation values
         """
-        start_index = self.sequence_ranges[index]
-        end_index = self.sequence_ranges[index + 1]
-        seq_indices = self.ids[start_index:end_index]
-        assert th.all(seq_indices[:, 0] == index), f"Was supposed to find {index} but found {seq_indices[:, 0].unique()}"
-        seq_indices = seq_indices[:, 1:]  # remove seq_idx column
-        sequence = self.padded_sequences[index][: self.sequence_lengths[index]]
+        return self.get_sequence(index), self.get_latent_activations(
+            index, expand=self.expand
+        )
 
-        if self.expand:
-            latent_activations = th.zeros(self.sequence_lengths[index], self.dict_size)
+    def get_sequence(self, index: int):
+        return self.padded_sequences[index + self.offset][
+            : self.sequence_lengths[index + self.offset]
+        ]
+
+    def get_latent_activations(self, index: int, expand: bool = True):
+        start_index = self.sequence_ranges[index + self.offset]
+        end_index = self.sequence_ranges[index + self.offset + 1]
+        seq_indices = self.ids[start_index:end_index]
+        assert th.all(
+            seq_indices[:, 0] == index + self.offset
+        ), f"Was supposed to find {index + self.offset} but found {seq_indices[:, 0].unique()}"
+        seq_indices = seq_indices[:, 1:]  # remove seq_idx column
+
+        if expand:
+            latent_activations = th.zeros(
+                self.sequence_lengths[index + self.offset],
+                self.dict_size,
+                device=self.acts.device,
+            )
             latent_activations[seq_indices[:, 0], seq_indices[:, 1]] = self.acts[
                 start_index:end_index
             ]
-            return sequence, latent_activations
+            return latent_activations
         else:
-            return sequence, (seq_indices, self.acts[start_index:end_index])
+            return (seq_indices, self.acts[start_index:end_index])
+
+    def to(self, device: th.device):
+        self.acts = self.acts.to(device)
+        self.ids = self.ids.to(device)
+        self.max_activations = self.max_activations.to(device)
+        self.latent_ids = self.latent_ids.to(device)
+        self.padded_sequences = self.padded_sequences.to(device)
+        return self

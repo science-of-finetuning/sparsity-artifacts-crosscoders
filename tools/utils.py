@@ -5,10 +5,11 @@ import torch as th
 from datasets import load_dataset
 from dictionary_learning.cache import PairedActivationCache
 
-from tools.compute_utils import *  # pylint: disable=unused-wildcard-import,wildcard-import
-from tools.cc_utils import *  # pylint: disable=unused-wildcard-import,wildcard-import
-from tools.plotting_utils import *  # pylint: disable=unused-wildcard-import,wildcard-import
-from tools.tokenization_utils import *  # pylint: disable=unused-wildcard-import,wildcard-import
+from tools.compute_utils import *
+from tools.cc_utils import *
+from tools.plotting_utils import *
+from tools.tokenization_utils import *
+
 
 def apply_masks(values: th.Tensor, masks: List[th.Tensor]) -> th.Tensor:
     """
@@ -19,8 +20,6 @@ def apply_masks(values: th.Tensor, masks: List[th.Tensor]) -> th.Tensor:
     for mask in masks:
         values = values[mask]
     return values
-
-
 
 
 def load_activation_dataset(
@@ -62,7 +61,9 @@ def load_activation_dataset(
         instruct_model_dir_lmsys = activation_store_dir / instruct_model
     else:
         base_model_dir_lmsys = activation_store_dir / lmsys_subfolder / base_model
-        instruct_model_dir_lmsys = activation_store_dir / lmsys_subfolder / instruct_model
+        instruct_model_dir_lmsys = (
+            activation_store_dir / lmsys_subfolder / instruct_model
+        )
 
     if fineweb_subfolder is None:
         base_model_dir_fineweb = activation_store_dir / base_model
@@ -76,15 +77,19 @@ def load_activation_dataset(
     # Load validation caches
     base_model_fineweb = base_model_dir_fineweb / fineweb_name / fineweb_split
     instruct_model_fineweb = instruct_model_dir_fineweb / fineweb_name / fineweb_split
-    
+
     base_model_lmsys = base_model_dir_lmsys / lmsys_name / lmsys_split
     instruct_model_lmsys = instruct_model_dir_lmsys / lmsys_name / lmsys_split
-    
-    print(f"Loading fineweb cache from {base_model_fineweb / submodule_name} and {instruct_model_fineweb / submodule_name}")
+
+    print(
+        f"Loading fineweb cache from {base_model_fineweb / submodule_name} and {instruct_model_fineweb / submodule_name}"
+    )
     fineweb_cache = PairedActivationCache(
         base_model_fineweb / submodule_name, instruct_model_fineweb / submodule_name
     )
-    print(f"Loading lmsys cache from {base_model_lmsys / submodule_name} and {instruct_model_lmsys / submodule_name}")
+    print(
+        f"Loading lmsys cache from {base_model_lmsys / submodule_name} and {instruct_model_lmsys / submodule_name}"
+    )
 
     lmsys_cache = PairedActivationCache(
         base_model_lmsys / submodule_name, instruct_model_lmsys / submodule_name

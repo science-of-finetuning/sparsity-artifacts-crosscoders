@@ -1,440 +1,453 @@
 """
-Script to collect max activating examples for a base and chat only latents of a CrossCoder.
+Script to collect examples at different activation quantiles for a CrossCoder.
 """
 
 from pathlib import Path
-from multiprocessing import Process, Queue, cpu_count
-import heapq
 import argparse
 import gc
 import sqlite3
-import json
 import sys
-
+import random
+from collections import defaultdict
+import numpy as np
 import torch as th
-from torch.utils.data import DataLoader
-from dictionary_learning import CrossCoder
-from datasets import load_dataset
-from nnterp.nnsight_utils import get_layer_output, get_layer
-from nnterp import load_model
 from tqdm import tqdm
 import wandb
 from huggingface_hub import hf_api
+import time
 
 sys.path.append(".")
 
-from tools.utils import load_crosscoder, load_latent_df, df_hf_repo
+from tools.cache_utils import LatentActivationCache
+
+th.set_grad_enabled(False)
 
 
-def max_act_exs_to_db(max_activating_examples, db_path: Path):
-    """Convert max activating examples to a database."""
-    if not db_path.exists():
-        with sqlite3.connect(db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                """CREATE TABLE IF NOT EXISTS data_table (
-                    key INTEGER PRIMARY KEY,
-                    examples TEXT
-                )"""
-            )
-            for key, examples in max_activating_examples.items():
-                cursor.execute(
-                    "INSERT INTO data_table (key, examples) VALUES (?, ?)",
-                    (key, json.dumps(examples)),
-                )
-            conn.commit()
+def quantile_examples_to_db(
+    quantile_examples, all_sequences, activation_details, db_path: Path
+):
+    """Convert quantile examples to a database with binary blob storage for token IDs.
 
+    Args:
+        quantile_examples: Dictionary mapping quantile_idx -> feature_idx -> list of (activation_value, sequence_idx)
+        all_sequences: List of all sequences used in the examples
+        activation_details: Dictionary mapping feature_idx -> sequence_idx -> list of (position, value) pairs
+        db_path: Path to save the database
+    """
+    if db_path.exists():
+        db_path.unlink()
+    with sqlite3.connect(db_path) as conn:
+        cursor = conn.cursor()
 
-def sort_max_act_exs(max_activating_examples):
-    """Sort max activating examples by activation value."""
-    for feature_idx in max_activating_examples:
-        max_activating_examples[feature_idx] = sorted(
-            [(t[0], t[2], t[3]) for t in max_activating_examples[feature_idx]],
-            key=lambda x: x[0],
-            reverse=True,
+        # Create tables
+        cursor.execute(
+            """CREATE TABLE IF NOT EXISTS sequences (
+                sequence_idx INTEGER PRIMARY KEY,
+                token_ids BLOB
+            )"""
         )
-    return max_activating_examples
 
+        cursor.execute(
+            """CREATE TABLE IF NOT EXISTS quantile_examples (
+                feature_idx INTEGER,
+                quantile_idx INTEGER,
+                activation REAL,
+                sequence_idx INTEGER,
+                PRIMARY KEY (feature_idx, sequence_idx),
+                FOREIGN KEY (sequence_idx) REFERENCES sequences(sequence_idx)
+            )"""
+        )
 
-def cleanup_max_act_exs(max_activating, tokenizer, max_seq_len):
-    """Clean up max activating examples by removing padding values and truncating sequences."""
-    for feature_idx, examples in tqdm(max_activating.items()):
-        for i, (ex_val, ex_str, ex_act) in enumerate(examples):
-            # Remove padding values (-1) from the beginning of ex_act
-            while ex_act and ex_act[0] == -1:
-                ex_act.pop(0)
-            examples[i] = (ex_val, ex_str, ex_act)
-            # Truncate the end of ex_str to match the length of ex_act
-            tokens = tokenizer.tokenize(ex_str, add_special_tokens=True)[:max_seq_len]
-            tokens = [s.replace("▁", " ") for s in tokens]
-            if len(tokens) != len(ex_act):
-                print(
-                    f"Warning: length of tokens {len(tokens)} does not match length of activation values {len(ex_act)} for example {i} of feature {feature_idx}"
+        # First, store all sequences
+        for seq_idx, token_ids in tqdm(
+            enumerate(all_sequences), desc="Storing sequences"
+        ):
+            # Convert token IDs to binary blob
+            binary_data = np.array(token_ids, dtype=np.int32).tobytes()
+            cursor.execute(
+                "INSERT INTO sequences VALUES (?, ?)",
+                (int(seq_idx), binary_data),
+            )
+
+        # Then store the quantile examples with references to sequences
+        for q_idx, q_data in tqdm(
+            quantile_examples.items(), desc="Storing quantile examples"
+        ):
+            for feature_idx, examples in q_data.items():
+                for activation, sequence_idx in examples:
+                    # Get the max position from the original sequence
+                    # This assumes we're still tracking max positions somewhere
+                    # If not, we'd need to modify the compute_quantile_activating_examples function
+                    # to also track positions along with activations
+
+                    cursor.execute(
+                        "INSERT INTO quantile_examples VALUES (?, ?, ?, ?)",
+                        (
+                            int(feature_idx),
+                            int(q_idx),
+                            float(activation),
+                            int(sequence_idx),
+                        ),
+                    )
+
+        # Create a table for storing activation details
+        cursor.execute(
+            """CREATE TABLE IF NOT EXISTS activation_details (
+                feature_idx INTEGER,
+                sequence_idx INTEGER,
+                positions BLOB,
+                activation_values BLOB,
+                PRIMARY KEY (feature_idx, sequence_idx),
+                FOREIGN KEY (sequence_idx) REFERENCES sequences(sequence_idx),
+                FOREIGN KEY (feature_idx, sequence_idx) REFERENCES quantile_examples(feature_idx, sequence_idx)
+            )"""
+        )
+
+        # After storing all quantile examples
+        # Store activation details
+        for feature_idx, sequences in tqdm(
+            activation_details.items(), desc="Storing activation details"
+        ):
+            for sequence_idx, pos_val_pairs in sequences.items():
+                if len(pos_val_pairs) == 0:
+                    continue
+
+                positions_blob = pos_val_pairs[:, 0].tobytes()
+                values_blob = pos_val_pairs[:, 1].tobytes()
+
+                cursor.execute(
+                    "INSERT INTO activation_details VALUES (?, ?, ?, ?)",
+                    (
+                        int(feature_idx),
+                        int(sequence_idx),
+                        positions_blob,
+                        values_blob,
+                    ),
                 )
-            examples[i] = (ex_val, tokens, ex_act)
-    return max_activating
+
+        conn.commit()
 
 
-def merge_max_examples(*max_dicts):
-    """Merge max activating examples from multiple dictionaries."""
-    merged_dict = {}
-    for d in max_dicts:
-        for k, v in d.items():
-            merged_dict[k] = merged_dict.get(k, []) + v
-    # sort each list
-    for k in merged_dict:
-        merged_dict[k] = sorted(merged_dict[k], key=lambda x: x[0], reverse=True)
-    return merged_dict
+def fix_activations_details(activation_details):
+    """Convert activation details from int32 arrays to tuples of (positions, values) with proper types."""
+    converted = {}
+    for feat_idx, sequences in activation_details.items():
+        converted[feat_idx] = {}
+        for seq_idx, arr in sequences.items():
+            # arr is a Nx2 array where first column is positions (int) and second column is values (float as int32)
+            positions = arr[:, 0].astype(np.int32)
+            # Convert back the int32 values to float32
+            values = arr[:, 1].view(np.float32)
+            converted[feat_idx][seq_idx] = (positions, values)
+    return converted
+
+
+def sort_quantile_examples(quantile_examples):
+    """Sort quantile examples by activation value."""
+    for q_idx in quantile_examples:
+        for feature_idx in quantile_examples[q_idx]:
+            quantile_examples[q_idx][feature_idx] = sorted(
+                quantile_examples[q_idx][feature_idx],
+                key=lambda x: x[0],
+                reverse=True,
+            )
+    return quantile_examples
 
 
 @th.no_grad()
-def compute_max_activating_examples(
-    dataset,
-    feature_indices,
-    crosscoder: CrossCoder,
-    *,
-    base_model,
-    chat_model,
-    save_path: Path,
-    model_batch_size=64,
-    crosscoder_batch_size=2048,
+def compute_quantile_activating_examples(
+    latent_activation_cache,
+    quantiles=[0.25, 0.5, 0.75, 0.95],
+    min_threshold=1e-4,
     n=100,
-    layer=13,
-    cc_device="cuda",
-    workers=12,
-    max_seq_len=1024,
-    name="max_activating_examples",
+    save_path=None,
     gc_collect_every=1000,
-    checkpoint_every=1000,
-) -> None:
-    """Compute examples that maximally activate each feature in a CrossCoder model.
+    test=False,
+    log_time=False,
+    use_random_replacement=True,
+) -> dict:
+    """Compute examples that activate features at different quantile levels.
 
     Args:
-        dataset: Dataset to search through for examples
-        feature_indices: List of feature indices to find max activating examples for
-        crosscoder: CrossCoder model to use for computing feature activations
-        base_model: Base language model to get activations from
-        chat_model: Chation-tuned model to get activations from
-        save_path: Path to save results to
-        model_batch_size: Batch size for running examples through base/chat models
-        crosscoder_batch_size: Batch size for running activations through CrossCoder
-        n: Number of max activating examples to find per feature
-        layer: Which model layer to get activations from
-        device: Device to run models on
-        workers: Number of worker processes for data loading
-        max_seq_len: Maximum sequence length to consider
-        name: Name for saving results
+        latent_activation_cache: Pre-computed latent activation cache
+        quantiles: List of quantile thresholds (as fractions of max activation)
+        min_threshold: Minimum activation threshold to consider
+        n: Number of examples to collect per feature per quantile
+        save_path: Path to save results
         gc_collect_every: How often to run garbage collection
-        checkpoint_every: How often to save checkpoints
 
     Returns:
-        None. Results are saved to save_path/name.
+        Tuple of (quantile_examples, all_sequences) where:
+            - quantile_examples: Dictionary mapping quantile_idx -> feature_idx -> list of (activation_value, sequence_idx, position)
+            - all_sequences: List of all token sequences used in the examples
     """
-    if save_path is not None:
-        save_path = save_path / name
-        save_path.mkdir(parents=True, exist_ok=True)
+    log_time = log_time or test
+    device = th.device("cuda" if th.cuda.is_available() else "cpu")
 
-    def dict_update_worker(
-        queue, n, feature_indices, save_path, name, tokenizer, max_seq_len
-    ):
-        entry_id = 0  # entry id ensures we never compare the feat_act
-        max_activating_examples = {k: [] for k in feature_indices}
-        next_gb = gc_collect_every
-        next_checkpoint = checkpoint_every
-        num_samples = 0
-        while True:
-            item = queue.get()
-            if item is None:  # Poison pill to stop the worker
-                break
-            max_activations, batch, feature_activations = item
-            next_checkpoint -= 1
-            next_gb -= 1
-            num_samples += len(batch)
-            if next_checkpoint <= 0 and save_path is not None:
-                th.save(max_activating_examples, save_path / f"{num_samples}.pt")
-                next_checkpoint = checkpoint_every
-            if next_gb <= 0:
-                gc.collect()
-                next_gb = gc_collect_every
-            # Dictionary update logic (runs in separate process)
-            for idx, feature_idx in enumerate(feature_indices):
-                batch_values = max_activations[:, idx]
-                entries = list(
-                    zip(
-                        batch_values.tolist(),
-                        batch,
-                        [feat_act[:, idx] for feat_act in feature_activations],
-                    )
-                )
+    # Move max_activations and quantiles to GPU
+    max_activations = latent_activation_cache.max_activations
+    quantiles_tensor = th.tensor(quantiles, device=device)
 
-                if len(max_activating_examples[feature_idx]) < n:
-                    threshold = float("-inf")
-                else:
-                    threshold = max_activating_examples[feature_idx][0][0]
+    # Calculate quantile thresholds for each feature on GPU
+    thresholds = th.einsum("f,q->fq", max_activations, quantiles_tensor)
 
-                potential_entries = [entry for entry in entries if entry[0] > threshold]
+    # Initialize collections for each quantile
+    quantile_examples = {
+        q_idx: {feat_idx: [] for feat_idx in range(len(max_activations))}
+        for q_idx in range(len(quantiles) + 1)
+    }
 
-                for entry in potential_entries:
-                    if len(max_activating_examples[feature_idx]) < n:
-                        heapq.heappush(
-                            max_activating_examples[feature_idx],
-                            (entry[0], entry_id, entry[1], entry[2].tolist()),
-                        )
-                        entry_id += 1
-                    else:
-                        heapq.heappushpop(
-                            max_activating_examples[feature_idx],
-                            (entry[0], entry_id, entry[1], entry[2].tolist()),
-                        )
-                        entry_id += 1
+    # Keep track of how many examples we've seen for each feature and quantile
+    example_counts = {
+        q_idx: {feat_idx: 0 for feat_idx in range(len(max_activations))}
+        for q_idx in range(len(quantiles) + 1)
+    }
 
-        max_activating_examples = sort_max_act_exs(max_activating_examples)
-        max_activating_examples = cleanup_max_act_exs(
-            max_activating_examples, tokenizer, max_seq_len
+    # Store all unique sequences
+    sequences_set = set()
+    all_sequences = []
+
+    # Dictionary to store feature activation details: {feature_idx: {sequence_idx: [(position, value), ...]}}
+    activation_details = defaultdict(dict)
+
+    timings = defaultdict(list)  # Changed to list to store all iterations
+
+    def _log_time(section, start_time, add=False):
+        if not log_time:
+            return None
+        elapsed = time.time() - start_time
+        if add:
+            timings[section][-1] += elapsed
+        else:
+            timings[section].append(elapsed)
+        return time.time()
+
+    next_gb = gc_collect_every
+    current_seq_idx = 0
+    for tokens, (indices, values) in tqdm(latent_activation_cache):
+        iter_start = time.time() if log_time else None
+
+        # GC and device transfer timing
+        next_gb -= 1
+        if next_gb <= 0:
+            gc.collect()
+            next_gb = gc_collect_every
+        if test and next_gb <= 800:
+            break
+        current = _log_time("1. GC and device transfer", iter_start)
+
+        token_tuple = tuple(tokens.tolist())
+        if token_tuple in sequences_set:
+            continue
+        sequences_set.add(token_tuple)
+        all_sequences.append(token_tuple)
+        current = _log_time("2. Sequence processing", current)
+
+        # Core computation timing
+        features, sort_indices = th.sort(indices[:, 1])
+        token_indices = indices[:, 0][sort_indices]
+        values = values[sort_indices]
+        active_features, inverse_indices, counts = features.unique(
+            return_inverse=True, return_counts=True
         )
-        th.save(max_activating_examples, save_path / f"{name}_final.pt")
-        # convert to db
-        db_path = save_path / f"{name}_final.db"
-        max_act_exs_to_db(max_activating_examples, db_path)
+        max_vals = th.zeros_like(active_features, dtype=values.dtype)
+        max_vals = th.scatter_reduce(
+            max_vals, 0, inverse_indices, values, reduce="amax"
+        )
+        # sorted_values = values[sorted_feature_indices]
+        # quantile_indices = th.searchsorted(all_tresholds, sorted_values)
+        active_thresholds = thresholds[active_features]
+        # assert sorted_values.dim() == 1, "batching not supported yet"
+        # cum_count = th.cumsum(counts, dim=0)
+        # max_vals = th.zeros_like(active_features, dtype=values.dtype)
+        # _, inverse_indices = th.unique(sorted_features, return_inverse=True)
+        # max_vals = th.scatter_reduce(
+        #     max_vals, 0, inverse_indices, values, reduce="amax"
+        # )
+        # cum_max_values = th.cummax(sorted_values, dim=0)[0]
+        # max_vals = cum_max_values[cum_count - 1]
+        q_idxs = th.searchsorted(active_thresholds, max_vals.unsqueeze(-1)).squeeze()
 
-    # Setup multiprocessing with bounded queue
-    queue = Queue(maxsize=10)
-    update_process = Process(
-        target=dict_update_worker,
-        args=(
-            queue,
-            n,
-            feature_indices,
-            save_path,
-            name,
-            chat_model.tokenizer,
-            max_seq_len,
-        ),
-    )
-    update_process.start()
+        current_preloop = _log_time("3. Core computation", current)
 
-    crosscoder.encoder.to(cc_device)
-    dataloader = DataLoader(dataset, batch_size=model_batch_size, num_workers=workers)
-    dec_weight = (
-        crosscoder.decoder.weight.norm(dim=2).sum(dim=0, keepdim=True).to(cc_device)
-    )
-    num_tokens = 0
-
-    # Main loop - now just collecting activations and queuing updates
-    for batch_idx, batch in enumerate(tqdm(dataloader)):
-        # Check if the worker process is still alive
-        if not update_process.is_alive():
-            raise RuntimeError("dict_update_worker process crashed unexpectedly.")
-
-        bs = len(batch)
-        tokens = base_model.tokenizer(
-            batch,
-            max_length=max_seq_len,
-            truncation=True,
-            return_tensors="pt",
-            padding=True,
-        ).to(base_model.device)
-        attention_mask = tokens["attention_mask"]
-
-        with base_model.trace(tokens):
-            base_activations = get_layer_output(base_model, layer).to(cc_device).save()
-            get_layer(base_model, layer).output.stop()
-        with chat_model.trace(tokens):
-            chat_activations = get_layer_output(chat_model, layer).to(cc_device).save()
-            get_layer(chat_model, layer).output.stop()
-
-        base_activations = base_activations.reshape(-1, base_activations.shape[-1])
-        chat_activations = chat_activations.reshape(-1, chat_activations.shape[-1])
-        merged_activations = th.stack([base_activations, chat_activations], dim=1)
-
-        feature_activations = []
-        for act_batch in merged_activations.split(crosscoder_batch_size):
-            feature_activations.append(
-                (crosscoder.encoder(act_batch.float()) * dec_weight)[:, feature_indices]
+        active_features = active_features.tolist()
+        counts = counts.tolist()
+        max_vals = max_vals.tolist()
+        q_idxs = q_idxs.tolist()
+        # max_values =
+        # Example collection timing
+        current_idx = 0
+        latent_details = (
+            th.stack(
+                [token_indices.int(), values.float().view(th.int32)],
+                dim=1,
             )
-        feature_activations = th.cat(feature_activations, dim=0)
-        feature_activations = feature_activations.reshape(bs, -1, len(feature_indices))
-        feature_activations = feature_activations.masked_fill(
-            ~attention_mask.bool().unsqueeze(-1), -1
+            .cpu()
+            .numpy()
+        )
+        # inverse_indices = inverse_indices.cpu().numpy()
+        # print(inverse_indices)
+        # input()
+        current = _log_time("4. move and convert to numpy", current)
+        if log_time:
+            for times in [
+                "loop1",
+                "loop2",
+                "loop3",
+                "update_details",
+            ]:
+                timings[times].append(0)
+        for feat, count, max_val, q_idx in zip(
+            active_features,
+            counts,
+            # inverse_indices,
+            max_vals,
+            q_idxs,
+        ):
+            current = time.time() if log_time else None
+            example_counts[q_idx][feat] += 1
+            total_count = example_counts[q_idx][feat]
+
+            if total_count <= n:
+                quantile_examples[q_idx][feat].append((max_val, current_seq_idx))
+                current = _log_time("loop1", current, add=True)
+                # Time the activation details collection
+                activation_details[feat][current_seq_idx] = latent_details[
+                    current_idx : current_idx + count
+                ]
+                _log_time("update_details", current, add=True)
+            elif use_random_replacement:
+                if random.random() < n / total_count:
+                    replace_idx = random.randint(0, n - 1)
+                    replaced_seq_idx = quantile_examples[q_idx][feat][replace_idx][1]
+                    quantile_examples[q_idx][feat][replace_idx] = (
+                        max_val,
+                        current_seq_idx,
+                    )
+                    current = _log_time("loop2", current, add=True)
+                    if (
+                        feat in activation_details
+                        and replaced_seq_idx in activation_details[feat]
+                    ):
+                        del activation_details[feat][replaced_seq_idx]
+                    current = _log_time("loop3", current, add=True)
+                    activation_details[feat][current_seq_idx] = latent_details[
+                        current_idx : current_idx + count
+                    ]
+                    _log_time("update_details", current, add=True)
+            current_idx += count
+
+        current = _log_time(
+            "5. Example collection and activation details", current_preloop
+        )
+        if (
+            len(timings["5. Example collection and activation details"]) % 10 == 0
+            and log_time
+        ):  # Print periodically
+            print("\nCurrent mean timings per iteration:")
+            for section, times in timings.items():
+                mean_time = sum(times) / len(times)
+                print(f"{section}: {mean_time:.4f}s")
+        current_seq_idx += 1
+
+    if log_time:
+        print("\nFinal timings:")
+        for section, times in timings.items():
+            mean_time = sum(times) / len(times)
+            print(f"{section}: {mean_time:.4f}s")
+
+    # Sort and finalize results
+    print(f"Sorting {len(quantile_examples)} quantiles")
+    quantile_examples = sort_quantile_examples(quantile_examples)
+    name = "test_examples" if test else "examples"
+    # Save to database
+    if save_path is not None:
+        print(f"Saving to {save_path / f'{name}.db'}")
+        quantile_examples_to_db(
+            quantile_examples,
+            all_sequences,
+            activation_details,
+            save_path / f"{name}.db",
+        )
+        print(f"Saving to {save_path / f'{name}.pt'}")
+        # Also save as PyTorch file for compatibility
+
+    activation_details = fix_activations_details(activation_details)
+    if save_path is not None:
+        th.save(
+            (quantile_examples, all_sequences, activation_details),
+            save_path / f"{name}.pt",
         )
 
-        max_activations, _ = feature_activations.max(dim=1)
-        num_tokens += attention_mask.sum().item()
-        # Log metrics to wandb
-        wandb.log(
-            {
-                "batch": batch_idx,
-                "mean_activation": max_activations.mean().item(),
-                "max_activation": max_activations.max().item(),
-                "min_activation": max_activations.min().item(),
-                "queue_size": queue.qsize(),
-                "num_tokens": num_tokens,
-            }
-        )
-
-        # Queue the data for processing
-        queue.put((max_activations.cpu(), batch, feature_activations.cpu()))
-
-    # Signal the worker to finish and get results
-    queue.put(None)
-    update_process.join()
-
-    # Check if the worker process crashed
-    if update_process.exitcode != 0:
-        raise RuntimeError(
-            "dict_update_worker process crashed with exit code: "
-            f"{update_process.exitcode}"
-        )
-
-    return
+    return quantile_examples, all_sequences, activation_details
 
 
-# python scripts/collect_max_activating_examples.py connor --base-device "cuda:0" --chat-device "cuda:1" --lmsys-format base  --crosscoder-batch-size 512 --model-batch-size 16
+# python scripts/collect_max_activating_examples.py gemma-2-2b-L13-k100-lr1e-04-local-shuffling-CCLoss --latent-activation-cache-path /workspace/data/latent_activations
+# python scripts/collect_max_activating_examples.py  gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04 --latent-activation-cache-path /workspace/data/latent_activations
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("crosscoder", type=str)
-    parser.add_argument("--base-model", type=str, default="google/gemma-2-2b")
-    parser.add_argument("--chat-model", type=str, default="google/gemma-2-2b-it")
-    parser.add_argument("--layer", type=int, default=13)
-    parser.add_argument("--cc-device", type=str, default="cuda")
-    parser.add_argument("--base-device", type=str, default="cuda")
-    parser.add_argument("--chat-device", type=str, default="cuda")
-    parser.add_argument("--validation-size", type=int, default=10**6)
-    parser.add_argument("--model-batch-size", type=int, default=64)
-    parser.add_argument("--crosscoder-batch-size", type=int, default=2048)
-    parser.add_argument("--workers", type=int, default=None)
-    parser.add_argument("--seq-len", type=int, default=1024)
+    parser.add_argument("--latent-activation-cache-path", type=Path, required=True)
+    parser.add_argument("--bos-token-id", type=int, default=2)
     parser.add_argument("--n", type=int, default=100)
-    parser.add_argument("--only-upload", action="store_true")
+    parser.add_argument("--min-threshold", type=float, default=1e-4)
     parser.add_argument(
-        "--save-path",
-        type=Path,
-        default=Path("results/max_activating_examples"),
+        "--quantiles", type=float, nargs="+", default=[0.25, 0.5, 0.75, 0.95, 1.0]
     )
-    parser.add_argument("--lmsys-format", default="chat", choices=["chat", "base"])
+    parser.add_argument(
+        "--save-path", type=Path, default=Path("results/quantile_examples")
+    )
+    parser.add_argument("--only-upload", action="store_true")
+    parser.add_argument("--test", action="store_true")
     args = parser.parse_args()
+
     save_path = args.save_path / args.crosscoder
 
     if not args.only_upload:
-        if args.workers is None:
-            args.workers = cpu_count()
-
+        device = "cuda" if th.cuda.is_available() else "cpu"
         # Initialize wandb
-        wandb.init(project="max-activating-examples", config=vars(args))
+        project = "quantile-activating-examples"
+        if args.test:
+            project = "test-" + project
+        wandb.init(project=project, config=vars(args))
 
-        crosscoder = load_crosscoder(args.crosscoder)
-        df = load_latent_df(args.crosscoder)
-        selected_features = df[(df["tag"].isin(["IT only", "Base only", "Chat only"]))]
-        selected_indices = selected_features.index.tolist()
-
-        # Load datasets
-        test_set_base = load_dataset(
-            "science-of-finetuning/fineweb-1m-sample", split="validation"
-        )["text"]
-        lmsys_column = "text" if args.lmsys_format == "chat" else "text_base_format"
-        test_set_chat = load_dataset(
-            "science-of-finetuning/lmsys-chat-1m-gemma-formatted",
-            split="validation",
-        )[lmsys_column]
-        test_set_base = test_set_base[: len(test_set_base) // 2]
-        test_set_chat = test_set_chat[: len(test_set_chat) // 2]
-
-        # Load models
-        base_model = load_model(
-            args.base_model,
-            torch_dtype=th.bfloat16,
-            attn_implementation="eager",
-            dispatch=True,
-            device_map=args.base_device,
-        )
-        chat_model = load_model(
-            args.chat_model,
-            torch_dtype=th.bfloat16,
-            attn_implementation="eager",
-            dispatch=True,
-            device_map=args.chat_device,
-        )
+        # Load latent activation cache
+        latent_activation_cache = LatentActivationCache(
+            args.latent_activation_cache_path / args.crosscoder, expand=False
+        ).to(device)
 
         # Create save directory if it doesn't exist
         save_path.mkdir(parents=True, exist_ok=True)
 
-        # Generate and save max activating examples
-        print("Generating mini examples...")
-        compute_max_activating_examples(
-            test_set_chat[:100],
-            selected_indices,
-            crosscoder,
-            model_batch_size=args.model_batch_size,
-            crosscoder_batch_size=args.crosscoder_batch_size,
+        # Generate and save quantile examples
+        print("Generating quantile examples...")
+        compute_quantile_activating_examples(
+            latent_activation_cache=latent_activation_cache,
+            quantiles=args.quantiles,
+            min_threshold=args.min_threshold,
             n=args.n,
-            base_model=base_model,
-            chat_model=chat_model,
-            layer=args.layer,
-            cc_device=args.cc_device,
-            workers=args.workers,
-            max_seq_len=args.seq_len,
             save_path=save_path,
-            checkpoint_every=1,
-            name="mini-chat",
-        )
-
-        print("Generating chat examples...")
-        compute_max_activating_examples(
-            test_set_chat,
-            selected_indices,
-            crosscoder,
-            model_batch_size=args.model_batch_size,
-            crosscoder_batch_size=args.crosscoder_batch_size,
-            n=args.n,
-            base_model=base_model,
-            chat_model=chat_model,
-            layer=args.layer,
-            cc_device=args.cc_device,
-            workers=args.workers,
-            max_seq_len=args.seq_len,
-            save_path=save_path,
-            name="chat",
-        )
-
-        print("Generating base examples...")
-        compute_max_activating_examples(
-            test_set_base,
-            selected_indices,
-            crosscoder,
-            model_batch_size=args.model_batch_size,
-            crosscoder_batch_size=args.crosscoder_batch_size,
-            n=args.n,
-            base_model=base_model,
-            chat_model=chat_model,
-            layer=args.layer,
-            cc_device=args.cc_device,
-            workers=args.workers,
-            max_seq_len=args.seq_len,
-            save_path=save_path,
-            name="base",
+            test=args.test,
         )
 
         wandb.finish()
-    repo = df_hf_repo[args.crosscoder]
-    # push to hub all the files in save_path but mini-chat
-    chat_examples = th.load(save_path / "chat/chat_final.pt")
-    base_examples = th.load(save_path / "base/base_final.pt")
-    chat_base_examples = merge_max_examples(chat_examples, base_examples)
-    th.save(chat_base_examples, save_path / "chat_base_examples.pt")
-    max_act_exs_to_db(chat_base_examples, save_path / "chat_base_examples.db")
-    for file, file_name in [
-        ("base/base_final", "base_examples"),
-        ("chat/chat_final", "chat_examples"),
-        ("chat_base_examples", "chat_base_examples"),
-    ]:
+
+    # Upload to HuggingFace Hub
+    repo = "science-of-finetuning/diffing-stats-" + args.crosscoder
+    if not args.test:
+        print(f"Uploading to HuggingFace Hub: {repo}")
         for ftype in ["pt", "db"]:
-            hf_api.upload_file(
-                repo_id=repo,
-                repo_type="dataset",
-                path_or_fileobj=save_path / f"{file}.{ftype}",
-                path_in_repo=f"{file_name}.{ftype}",
-            )
-    # create the chat_base_examples files
+            name = "test_examples" if args.test else "examples"
+            file_path = save_path / f"{name}.{ftype}"
+            print(f"Uploading {file_path} to {repo}")
+            if file_path.exists():
+                hf_api.upload_file(
+                    repo_id=repo,
+                    repo_type="dataset",
+                    path_or_fileobj=file_path,
+                    path_in_repo=f"{name}.{ftype}",
+                )
 
 
 if __name__ == "__main__":
