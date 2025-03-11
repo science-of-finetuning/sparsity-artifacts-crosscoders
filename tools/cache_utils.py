@@ -277,7 +277,7 @@ class SampleCache:
 
 
 class LatentActivationCache:
-    def __init__(self, latent_activations_dir: Path, expand=True, offset=0):
+    def __init__(self, latent_activations_dir: Path, expand=True, offset=0, use_sparse_tensor=False):
         if isinstance(latent_activations_dir, str):
             latent_activations_dir = Path(latent_activations_dir)
 
@@ -327,6 +327,7 @@ class LatentActivationCache:
 
         self.expand = expand
         self.offset = offset
+        self.use_sparse_tensor = use_sparse_tensor
 
     def __len__(self):
         return len(self.padded_sequences) - self.offset
@@ -342,14 +343,17 @@ class LatentActivationCache:
             tuple: A pair containing:
                 - The token sequence for the sample
                 - If self.expand is True:
-                    A dense tensor of shape (sequence_length, dict_size) containing the latent activations
+                    - If use_sparse_tensor is True:
+                        A sparse tensor of shape (sequence_length, dict_size) containing the latent activations
+                    - If use_sparse_tensor is False:
+                        A dense tensor of shape (sequence_length, dict_size) containing the latent activations
                 - If self.expand is False:
                     A tuple of (indices, values) representing sparse latent activations where:
                     - indices: Tensor of shape (N, 2) containing (token_idx, dict_idx) pairs
                     - values: Tensor of shape (N,) containing activation values
         """
         return self.get_sequence(index), self.get_latent_activations(
-            index, expand=self.expand
+            index, expand=self.expand, use_sparse_tensor=self.use_sparse_tensor
         )
 
     def get_sequence(self, index: int):
@@ -357,7 +361,7 @@ class LatentActivationCache:
             : self.sequence_lengths[index + self.offset]
         ]
 
-    def get_latent_activations(self, index: int, expand: bool = True):
+    def get_latent_activations(self, index: int, expand: bool = True, use_sparse_tensor: bool = False):
         start_index = self.sequence_ranges[index + self.offset]
         end_index = self.sequence_ranges[index + self.offset + 1]
         seq_indices = self.ids[start_index:end_index]
@@ -367,15 +371,23 @@ class LatentActivationCache:
         seq_indices = seq_indices[:, 1:]  # remove seq_idx column
 
         if expand:
-            latent_activations = th.zeros(
-                self.sequence_lengths[index + self.offset],
-                self.dict_size,
-                device=self.acts.device,
-            )
-            latent_activations[seq_indices[:, 0], seq_indices[:, 1]] = self.acts[
-                start_index:end_index
-            ]
-            return latent_activations
+            if use_sparse_tensor:
+                # Create sparse tensor directly
+                indices = seq_indices.t()  # Transpose to get 2xN format required by sparse tensors
+                values = self.acts[start_index:end_index]
+                sparse_shape = (self.sequence_lengths[index + self.offset], self.dict_size)
+                return th.sparse_coo_tensor(indices, values, sparse_shape)
+            else:
+                # Create dense tensor as before
+                latent_activations = th.zeros(
+                    self.sequence_lengths[index + self.offset],
+                    self.dict_size,
+                    device=self.acts.device,
+                )
+                latent_activations[seq_indices[:, 0], seq_indices[:, 1]] = self.acts[
+                    start_index:end_index
+                ]
+                return latent_activations
         else:
             return (seq_indices, self.acts[start_index:end_index])
 
