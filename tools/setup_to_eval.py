@@ -334,7 +334,7 @@ def baseline_diffs_half_fns(
     half_fns = {
         "steer_mean_diff": SteeringVector(
             continue_with="chat",
-            patch_target="base",
+            steer_activations_of="base",
             vector=mean_diff,
         )
     }
