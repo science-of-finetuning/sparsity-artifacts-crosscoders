@@ -1,6 +1,9 @@
 # %%
-%load_ext autoreload
-%autoreload 2
+from dotenv import load_dotenv
+load_dotenv("./.env")
+import IPython
+IPython.get_ipython().run_line_magic("load_ext", "autoreload")
+IPython.get_ipython().run_line_magic("autoreload", "2")
 import sys
 
 sys.path.append("..")
@@ -10,14 +13,16 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 import matplotlib as mpl
+
 df = load_latent_df()
 plt.rcParams["text.usetex"] = True
 plt.rcParams.update({"font.size": 20})
-mpl.rcParams['text.latex.preamble'] = r"\usepackage{amsmath}"
+mpl.rcParams["text.latex.preamble"] = r"\usepackage{amsmath}"
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from tools.utils import load_json
+
 # %%
 """
 ==========================
@@ -33,18 +38,20 @@ def plot_twin_activation_divergence(buckets, title, stitle):
     A_high = buckets[:, 3:, :].sum(axis=(1, 2))
     B_high = buckets[:, :, 3:].sum(axis=(1, 2))
 
-    exclusivity = (only_A_high + only_B_high) / (A_high + B_high - buckets[:, 3:, 3:].sum(axis=(1, 2)) + 1e-10)
+    exclusivity = (only_A_high + only_B_high) / (
+        A_high + B_high - buckets[:, 3:, 3:].sum(axis=(1, 2)) + 1e-10
+    )
 
     # Create the histogram with improved styling
     plt.figure(figsize=(8, 4))
-    plt.hist(exclusivity, bins=15, color='C3', alpha=0.8, edgecolor='black')
+    plt.hist(exclusivity, bins=15, color="C3", alpha=0.8, edgecolor="black")
 
     # Add grid for better readability
-    plt.grid(True, alpha=0.3, linestyle='--')
+    plt.grid(True, alpha=0.3, linestyle="--")
 
     # Customize axis labels with LaTeX formatting
-    plt.xlabel(r"Twin Activation Divergence")#, fontsize=12)
-    plt.ylabel(r"Pair Count")#, fontsize=12)
+    plt.xlabel(r"Twin Activation Divergence")  # , fontsize=12)
+    plt.ylabel(r"Pair Count")  # , fontsize=12)
 
     # Add title if desired
     # plt.title("Distribution of Twin Activation Divergence", pad=10)
@@ -55,18 +62,28 @@ def plot_twin_activation_divergence(buckets, title, stitle):
 
     # Optional: Add mean line
     mean_exclusivity = np.mean(exclusivity)
-    plt.axvline(mean_exclusivity, color='darkred', linestyle='--', alpha=0.5, 
-                label=f'Mean: {mean_exclusivity:.2f}')
+    plt.axvline(
+        mean_exclusivity,
+        color="darkred",
+        linestyle="--",
+        alpha=0.5,
+        label=f"Mean: {mean_exclusivity:.2f}",
+    )
     plt.legend()
     if stitle:
         plt.title(title)
-        
 
     # Adjust layout
     plt.tight_layout()
-    plt.savefig(Path("results") / f"twin_activation_divergence_{title}.pdf", bbox_inches="tight")
+    plt.savefig(
+        Path("results") / f"twin_activation_divergence_{title}.pdf", bbox_inches="tight"
+    )
     plt.show()
-val_results = load_json("../results/twin_stats/validation_twins-l13_crosscoder_stats_all.json")
+
+
+val_results = load_json(
+    "../results/twin_stats/validation_twins-l13_crosscoder_stats_all.json"
+)
 fw_buckets = val_results["fw_results"]["abs_max_act"]["buckets"]
 fw_buckets = np.array(fw_buckets)
 # plot_twin_activation_divergence(fw_buckets, "FineWeb", True)
@@ -83,14 +100,16 @@ Relative Norm Difference
 ========================
 """
 
-dec_df = load_latent_df() #pd.read_csv("/workspace/julian/repositories/representation-structure-comparison/results/eval_crosscoder/gemma-2-2b-L13-mu5.2e-02-lr1e-04-2x100M-local-shuffling-SAELoss/data/feature_df.csv")
+dec_df = (
+    load_latent_df()
+)  # pd.read_csv("/workspace/julian/repositories/representation-structure-comparison/results/eval_crosscoder/gemma-2-2b-L13-mu5.2e-02-lr1e-04-2x100M-local-shuffling-SAELoss/data/feature_df.csv")
 if "dead" not in dec_df.columns:
     print("no dead column")
     dec_df["dead"] = False
 green = "limegreen"
 dec_ratios = dec_df["dec_norm_diff"][dec_df["dead"] == False]
 values = 1 - dec_ratios
-plt.figure(figsize=(6, 4.))
+plt.figure(figsize=(6, 4.0))
 hist, bins, _ = plt.hist(values, bins=100, color="lightgray", label="Other", log=True)
 
 # Color specific regions
@@ -100,14 +119,19 @@ mask_right = (bins[:-1] >= 0.0) & (bins[:-1] < 0.1)
 
 plt.hist(values, bins=bins, color="lightgray", log=True)  # Base gray histogram
 plt.hist(
-    values[((values >= 0.4) & (values < 0.6))], bins=bins, color="C1", label="Shared", log=True
+    values[((values >= 0.4) & (values < 0.6))],
+    bins=bins,
+    color="C1",
+    label="Shared",
+    log=True,
 )
 plt.hist(values[((values >= 0.9))], bins=bins, color="C0", label="Chat-only", log=True)
 plt.hist(values[(values <= 0.1)], bins=bins, color=green, label="Base-only", log=True)
 
 # Update yticks for log scale
-plt.yticks([1, 10, 100, 1000, 4000], 
-           ["$10^0$", "$10^1$", "$10^2$", "$10^3$", r"$4\times10^3$"])
+plt.yticks(
+    [1, 10, 100, 1000, 4000], ["$10^0$", "$10^1$", "$10^2$", "$10^3$", r"$4\times10^3$"]
+)
 
 # Remove the original xticks call
 # plt.xticks([0, 0.5, 1]), #["0\n(Base only)", "0.5\n(Shared)", "1\n(Chat only)"])
@@ -152,6 +176,11 @@ plt.savefig(Path("results") / "decoder_norm_diff.pdf", bbox_inches="tight")
 
 plt.show()
 # %%
+"""
+========================
+Cosine Similarity
+========================
+"""
 cosims = df["dec_cos_sim"][df["dead"] == False]
 plt.figure(figsize=(6, 3.9))
 # Define masks for different regions
@@ -178,10 +207,11 @@ plt.savefig(Path("results") / "decoder_cos_sim.pdf", bbox_inches="tight")
 plt.show()
 
 # %%
-min(cosims)
-
-
-# %%
+"""
+========================
+L1 Gradients
+========================
+"""
 from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
@@ -199,11 +229,11 @@ f2 = np.sqrt(X**2 + Y**2)  # sqrt(x^2 + y^2)
 
 # Calculate gradients for -f1 and -f2
 def gradient_f1(x, y):
-    return -x/np.sqrt(x**2), -y/np.sqrt(y**2)
+    return -x / np.sqrt(x**2), -y / np.sqrt(y**2)
 
 
 def gradient_f2(x, y):
-    return -x/np.sqrt(x**2 + y**2), -y/np.sqrt(x**2 + y**2)
+    return -x / np.sqrt(x**2 + y**2), -y / np.sqrt(x**2 + y**2)
 
 
 # Create figure with two subplots
@@ -271,6 +301,11 @@ plt.savefig(Path("results") / "decoder_gradient_v2.pdf", bbox_inches="tight")
 plt.show()
 
 # %%
+"""
+========================
+Scatter of beta ratio error and reconstruction
+========================
+"""
 # fig = px.scatter(scatter_df, x="beta_ratio_error", y="beta_ratio_reconstruction", color="tag", text=scatter_df.index, hover_data=["lmsys_ctrl_%", "freq"], opacity=0.5)
 # fig.update_traces(marker=dict(size=10))
 # # Add blue outline for points with lmsys_ctrl_% > 0.5
@@ -327,87 +362,772 @@ fig.show()
 
 
 # %%
-
-# %%
-from tools.cc_utils import CCLatent
-
-CCLatent(57045)
-# %%
-df[df["tag"] == "Shared"]["lmsys_ctrl_%"].max()
-# %%
-[d["legendgroup"] for d in fig.data]
-# %%
-from sklearn.mixture import GaussianMixture
-from sklearn.cluster import KMeans
-algo = KMeans
-
-# filter for -0.1, 1.1
-gmm_df = scatter_df[
-    (scatter_df["beta_ratio_error"] >= -0.1)
-    & (scatter_df["beta_ratio_error"] <= 1.1)
-    & (scatter_df["beta_ratio_reconstruction"] >= -0.1)
-    & (scatter_df["beta_ratio_reconstruction"] <= 1.1)
-]
-kwargs = dict(n_components=2) if algo == GaussianMixture else dict(n_clusters=2)
-gmm = algo(**kwargs, random_state=42)
-gmm.fit(gmm_df[["beta_ratio_error", "beta_ratio_reconstruction"]].values)
-# %%
-import plotly.express as px
-clusters = gmm.predict(scatter_df[["beta_ratio_error", "beta_ratio_reconstruction"]].values).shape
-# %%
-# identify the Shared cluster
-predictions = gmm.predict(gmm_df[["beta_ratio_error", "beta_ratio_reconstruction"]].values)
-cluster_shared_counts = [
-    (gmm_df["tag"] == "Shared")[predictions == i].sum() for i in range(2)
-]
-minority_cluster = np.argmin(cluster_shared_counts)
-
-# Get indices of shared features in the minority cluster
-shared_indices = gmm_df[
-    (predictions == minority_cluster) & (gmm_df["tag"] == "Shared")
-].index.tolist()
-
-print(f"Cluster {minority_cluster} has {cluster_shared_counts[minority_cluster]} shared features")
-print("Indices of shared features in minority cluster:", shared_indices)
-fig = px.scatter(
-    gmm_df,
-    x="beta_ratio_error",
-    y="beta_ratio_reconstruction",
-    color=gmm.predict(gmm_df[["beta_ratio_error", "beta_ratio_reconstruction"]].values).astype(str),
-    hover_data=["lmsys_ctrl_%", "freq", gmm_df.index],
-    opacity=0.5,
+"""
+========================
+KL plots
+========================
+"""
+import plotly.graph_objects as go
+import numpy as np
+from display_metrics.shared import (
+    load_metrics,
+    build_complete_dataframe,
 )
-shared_beta_ratios = scatter_df.loc[shared_indices, ["beta_ratio_error", "beta_ratio_reconstruction", "lmsys_ctrl_%", "freq"]]
-fig2 = px.scatter(
-    shared_beta_ratios,
-    x="beta_ratio_error",
-    y="beta_ratio_reconstruction",
-    title="Scatter of Beta Ratios for Shared Indices",
-    hover_data=["lmsys_ctrl_%", "freq"],
-    opacity=1,
-)
-fig2.update_traces(
-    marker=dict(color="green", size=10)
-)
-fig.add_trace(fig2.data[0])
+import plotly.io as pio
 
-fig.update_traces(
-    marker=dict(
-        size=10,
-    )
-)
-fig.update_xaxes(range=[-0.1, 1.1])
-fig.update_yaxes(range=[-0.1, 1.1])
-fig.show()
+pio.kaleido.scope.mathjax = None
 
+data_l1 = load_metrics(
+    "../results/interv_effects/all_gemma_dogfish-bat-bison_merged_result.json"
+)
+data_batchtopk = load_metrics(
+    "../results/interv_effects/1741127183_ultrachat-gemma-batchtopk-CC_cornflower-caterpillar_result.json"
+)
 
 # %%
-import json
-with open("results/shared_not_shared_indices.json", "w") as f:
-    json.dump(shared_indices, f)
+def plot_kl_both_models(data_l1, data_batchtopk, metric_type="kl-instruct", category="k_first", 
+                        text_mode="above", output_file=None, show_legend=True):
+    """
+    Plot KL divergence for both L1 and BatchTopK models.
+    
+    Parameters:
+    -----------
+    data_l1 : dict
+        Metrics data for L1 model
+    data_batchtopk : dict
+        Metrics data for BatchTopK model
+    metric_type : str
+        Metric type to plot (default: "kl-instruct")
+    category : str
+        Category to plot (default: "k_first", alternative: "all")
+    text_mode : str
+        Text display mode: "in" (inside bars), "above" (above error bars), or "none" (no text)
+    output_file : str, optional
+        Path to save the plot (default: None, no saving)
+    show_legend : bool
+        Whether to display the legend (default: True)
+    """
+    categories = [category]  # Use the specified category
+
+    # Define setups based on the groups from the drawing
+    requested_setups = [
+        # Vanilla group
+        "vanilla base2chat",  # Base->Chat
+        "patch base error cchat",  # Base error + chat reconstruction
+        # Chat error
+        "patch chat error cchat",  # Chat error + chat reconstruction
+        # CrossCoder Both ratios group (50%)
+        "patch all rank sum pareto 50pct cchat",  # Best latents
+        "patch all rank sum antipareto 50pct cchat",  # Worst latents
+        # RND (Norm difference) group
+        "patch all dec norm diff pareto 50pct cchat",  # Best latents
+        "patch all dec norm diff antipareto 50pct cchat",  # Worst latents
+        # Ctrl group
+        # "patch base ctrl cchat",  # Control tokens replacement
+    ]
+
+    # Function to process data for a specific model
+    def process_model_data(data, model_name):
+        # Build dataframe for selected setups across categories
+        df = build_complete_dataframe(data)
+        if df is None:
+            print(f"No valid data available for any setup in {model_name}")
+            return None
+        
+        # Filter for requested metric and categories
+        df = df.loc[:, (categories, metric_type)]
+
+        # Find which setups are available in the data
+        valid_setups = [s for s in requested_setups if s in df.index]
+        missing_setups = [s for s in requested_setups if s not in df.index]
+
+        if missing_setups:
+            print(f"Warning: Missing data for setups in {model_name}:", missing_setups)
+
+        if not valid_setups:
+            print(f"No data available for any of the requested setups in {model_name}")
+            return None
+        
+        df = df.loc[valid_setups]
+        df = df.dropna(axis=1, how="all")
+        return df
+
+    # Process data for both models
+    df_l1 = process_model_data(data_l1, "L1")
+    df_batchtopk = process_model_data(data_batchtopk, "BatchTopK")
+
+    # Check if we have valid data for at least one model
+    if df_l1 is None and df_batchtopk is None:
+        print("No valid data available for any model")
+        return None
+    else:
+        # Define colors for different categories
+        COLOR_LOWEST_50PCT = "#59cd90"  # Dark green for best latents
+        COLOR_HIGHEST_50PCT = "#ee6352"  # Light red for worst latents
+        COLOR_ALL = "#7eb2dd"           # Light blue for "All" category
+        COLOR_NONE = "#445e93"          # Dark blue for "None" category
+        COLOR_CHAT_ERROR = "#9370db"    # Purple for chat error
+        
+        # Define hierarchical labels
+        group_labels = ["<b>None</b>", "<b>L1</b>", "<b>BatchTopK</b>"]
+        
+        fig = go.Figure()
+
+        # Calculate positions for grouped bars
+        n_groups = len(group_labels)
+        # Move groups closer together - make None much closer
+        group_positions = np.array([0, 0.6, 1.71])  # Further reduced spacing between groups
+        group_width = 0.8
+        
+        # Define positions for each bar
+        # For None: just one bar
+        # For L1: All, Chat Error, Latent Scaling (Best+Worst), ∆<sub>norm</sub> (Best+Worst)
+        # For BatchTopK: All, Chat Error, Latent Scaling (Best+Worst), ∆<sub>norm</sub> (Best+Worst)
+        
+        # Define method positions within each group (further increased spacing between methods)
+        method_positions = {
+            "None": 0,
+            "All": -0.32,  # Further increased spacing between subgroups
+            "Chat Error": -0.19,  # Between All and Latent Scaling
+            "Latent Scaling": 0.1,
+            "∆<sub>norm</sub>": 0.45   # Further increased spacing between subgroups
+        }
+        
+        # Define bar width for all bars (1.5x larger)
+        bar_width = group_width / 10 * 1.5
+        
+        # Define bar positions with exact positioning to avoid overlap
+        bar_positions = {
+            # None baseline
+            "vanilla base2chat": (group_positions[0], 0),
+            
+            # L1 group
+            "L1_patch base error cchat": (group_positions[1], method_positions["All"]),
+            # Chat Error
+            "L1_patch chat error cchat": (group_positions[1], method_positions["Chat Error"]),
+            # Latent Scaling pair (NO space but NO overlap between Best/Worst)
+            "L1_patch all rank sum pareto 50pct cchat": (group_positions[1], method_positions["Latent Scaling"] - bar_width/2),
+            "L1_patch all rank sum antipareto 50pct cchat": (group_positions[1], method_positions["Latent Scaling"] + bar_width/2),
+            # ∆<sub>norm</sub> pair (NO space but NO overlap between Best/Worst)
+            "L1_patch all dec norm diff pareto 50pct cchat": (group_positions[1], method_positions["∆<sub>norm</sub>"] - bar_width/2),
+            "L1_patch all dec norm diff antipareto 50pct cchat": (group_positions[1], method_positions["∆<sub>norm</sub>"] + bar_width/2),
+            
+            # BatchTopK group
+            "BatchTopK_patch base error cchat": (group_positions[2], method_positions["All"]),
+            # Chat Error
+            "BatchTopK_patch chat error cchat": (group_positions[2], method_positions["Chat Error"]),
+            # Latent Scaling pair (NO space but NO overlap between Best/Worst)
+            "BatchTopK_patch all rank sum pareto 50pct cchat": (group_positions[2], method_positions["Latent Scaling"] - bar_width/2),
+            "BatchTopK_patch all rank sum antipareto 50pct cchat": (group_positions[2], method_positions["Latent Scaling"] + bar_width/2),
+            # ∆<sub>norm</sub> pair (NO space but NO overlap between Best/Worst)
+            "BatchTopK_patch all dec norm diff pareto 50pct cchat": (group_positions[2], method_positions["∆<sub>norm</sub>"] - bar_width/2),
+            "BatchTopK_patch all dec norm diff antipareto 50pct cchat": (group_positions[2], method_positions["∆<sub>norm</sub>"] + bar_width/2),
+        }
+        
+        # Function to add text annotation based on mode
+        def add_text_annotation(x, y, error_val, text_value):
+            if text_mode == "none":
+                return  # No text annotation
+            
+            if text_mode == "in":
+                # Inside bar
+                fig.add_annotation(
+                    x=x,
+                    y=y / 2,
+                    text=f"{text_value:.3f}",
+                    showarrow=False,
+                    textangle=270,  # Vertical text
+                    font=dict(size=10, color="white"),
+                )
+            elif text_mode == "above":
+                # Above error bar with more space
+                fig.add_annotation(
+                    x=x,
+                    y=y + error_val + 0.05,  # Increased gap above error bar
+                    text=f"{text_value:.2f}",
+                    showarrow=False,
+                    textangle=0,  # Horizontal text
+                    font=dict(size=10, color="black"),
+                )
+        
+        # Function to calculate error value
+        def calculate_error(df, setup, category, metric_type):
+            return (
+                1.96
+                * (
+                    df.loc[setup, (category, metric_type)]["variance"]
+                    / df.loc[setup, (category, metric_type)]["n"]
+                )
+                ** 0.5
+            )
+        
+        # Add None baseline bar
+        if df_l1 is not None and "vanilla base2chat" in df_l1.index:
+            group_pos, offset = bar_positions["vanilla base2chat"]
+            mean_val = df_l1.loc["vanilla base2chat", (category, metric_type)]["mean"]
+            error_val = calculate_error(df_l1, "vanilla base2chat", category, metric_type)
+
+            fig.add_trace(
+                go.Bar(
+                    x=[group_pos + offset],
+                    y=[mean_val],
+                    width=bar_width,
+                    marker_color=COLOR_NONE,
+                    showlegend=False,  # Remove from legend
+                    name="None",
+                    error_y=dict(
+                        type="data",
+                        array=[error_val],
+                        visible=True,
+                        thickness=1.5,
+                        width=6,
+                    ),
+                )
+            )
+
+            # Add text annotation
+            add_text_annotation(group_pos + offset, mean_val, error_val, mean_val)
+        
+        # Add "All" bars for each crosscoder
+        # L1 All
+        if df_l1 is not None and "patch base error cchat" in df_l1.index:
+            group_pos, offset = bar_positions["L1_patch base error cchat"]
+            mean_val = df_l1.loc["patch base error cchat", (category, metric_type)]["mean"]
+            error_val = calculate_error(df_l1, "patch base error cchat", category, metric_type)
+
+            fig.add_trace(
+                go.Bar(
+                    x=[group_pos + offset],
+                    y=[mean_val],
+                    width=bar_width,
+                    marker_color=COLOR_ALL,
+                    showlegend=False,  # Remove from legend
+                    name="All",
+                    error_y=dict(
+                        type="data",
+                        array=[error_val],
+                        visible=True,
+                        thickness=1.5,
+                        width=6,
+                    ),
+                )
+            )
+
+            # Add text annotation
+            add_text_annotation(group_pos + offset, mean_val, error_val, mean_val)
+        
+        # BatchTopK All
+        if df_batchtopk is not None and "patch base error cchat" in df_batchtopk.index:
+            group_pos, offset = bar_positions["BatchTopK_patch base error cchat"]
+            mean_val = df_batchtopk.loc["patch base error cchat", (category, metric_type)]["mean"]
+            error_val = calculate_error(df_batchtopk, "patch base error cchat", category, metric_type)
+
+            fig.add_trace(
+                go.Bar(
+                    x=[group_pos + offset],
+                    y=[mean_val],
+                    width=bar_width,
+                    marker_color=COLOR_ALL,
+                    showlegend=False,  # Already in legend
+                    name="All",
+                    error_y=dict(
+                        type="data",
+                        array=[error_val],
+                        visible=True,
+                        thickness=1.5,
+                        width=6,
+                    ),
+                )
+            )
+
+            # Add text annotation
+            add_text_annotation(group_pos + offset, mean_val, error_val, mean_val)
+            
+        # Add Chat Error bar for L1
+        if df_l1 is not None and "patch chat error cchat" in df_l1.index:
+            group_pos, offset = bar_positions["L1_patch chat error cchat"]
+            mean_val = df_l1.loc["patch chat error cchat", (category, metric_type)]["mean"]
+            error_val = calculate_error(df_l1, "patch chat error cchat", category, metric_type)
+            
+            fig.add_trace(
+                go.Bar(
+                    x=[group_pos + offset],
+                    y=[mean_val],
+                    width=bar_width,
+                    marker_color=COLOR_CHAT_ERROR,
+                    showlegend=False,
+                    name="ε<sub>chat</sub>",
+                    error_y=dict(
+                        type="data",
+                        array=[error_val],
+                        visible=True,
+                        thickness=1.5,
+                        width=6,
+                    ),
+                )
+            )
+
+            # Add text annotation
+            add_text_annotation(group_pos + offset, mean_val, error_val, mean_val)
+            
+        # Add Chat Error bar for BatchTopK
+        if df_batchtopk is not None and "patch chat error cchat" in df_batchtopk.index:
+            group_pos, offset = bar_positions["BatchTopK_patch chat error cchat"]
+            mean_val = df_batchtopk.loc["patch chat error cchat", (category, metric_type)]["mean"]
+            error_val = calculate_error(df_batchtopk, "patch chat error cchat", category, metric_type)
+
+            fig.add_trace(
+                go.Bar(
+                    x=[group_pos + offset],
+                    y=[mean_val],
+                    width=bar_width,
+                    marker_color=COLOR_CHAT_ERROR,
+                    showlegend=False,  # Already in legend
+                    name="ε<sub>chat</sub>",
+                    error_y=dict(
+                        type="data",
+                        array=[error_val],
+                        visible=True,
+                        thickness=1.5,
+                        width=6,
+                    ),
+                )
+            )
+
+            # Add text annotation
+            add_text_annotation(group_pos + offset, mean_val, error_val, mean_val)
+        
+        # Add L1 model bars for Best/Worst pairs
+        if df_l1 is not None:
+            for method in ["Latent Scaling", "∆<sub>norm</sub>"]:
+                best_setup = None
+                worst_setup = None
+                
+                if method == "Latent Scaling":
+                    best_setup = "patch all rank sum pareto 50pct cchat"
+                    worst_setup = "patch all rank sum antipareto 50pct cchat"
+                else:  # ∆<sub>norm</sub>
+                    best_setup = "patch all dec norm diff pareto 50pct cchat"
+                    worst_setup = "patch all dec norm diff antipareto 50pct cchat"
+                
+                # Add Best bar
+                if best_setup in df_l1.index:
+                    group_pos, offset = bar_positions[f"L1_{best_setup}"]
+                    mean_val = df_l1.loc[best_setup, (category, metric_type)]["mean"]
+                    error_val = calculate_error(df_l1, best_setup, category, metric_type)
+                    
+                    # Only add to legend if this is the first occurrence of Best and legend is enabled
+                    add_to_legend = show_legend and "Lowest 50%" not in [t.name for t in fig.data]
+
+                    fig.add_trace(
+                        go.Bar(
+                            x=[group_pos + offset],
+                            y=[mean_val],
+                            width=bar_width,
+                            marker_color=COLOR_LOWEST_50PCT,
+                            showlegend=add_to_legend,
+                            name="Lowest 50%",
+                            error_y=dict(
+                                type="data",
+                                array=[error_val],
+                                visible=True,
+                                thickness=1.5,
+                                width=6,
+                            ),
+                        )
+                    )
+
+                    # Add text annotation
+                    add_text_annotation(group_pos + offset, mean_val, error_val, mean_val)
+                
+                # Add Worst bar
+                if worst_setup in df_l1.index:
+                    group_pos, offset = bar_positions[f"L1_{worst_setup}"]
+                    mean_val = df_l1.loc[worst_setup, (category, metric_type)]["mean"]
+                    error_val = calculate_error(df_l1, worst_setup, category, metric_type)
+                    
+                    # Only add to legend if this is the first occurrence of Worst and legend is enabled
+                    add_to_legend = show_legend and "Highest 50%" not in [t.name for t in fig.data]
+
+                    fig.add_trace(
+                        go.Bar(
+                            x=[group_pos + offset],
+                            y=[mean_val],
+                            width=bar_width,
+                            marker_color=COLOR_HIGHEST_50PCT,
+                            showlegend=add_to_legend,
+                            name="Highest 50%",
+                            error_y=dict(
+                                type="data",
+                                array=[error_val],
+                                visible=True,
+                                thickness=1.5,
+                                width=6,
+                            ),
+                        )
+                    )
+
+                    # Add text annotation
+                    add_text_annotation(group_pos + offset, mean_val, error_val, mean_val)
+        
+        # Add BatchTopK model bars for Best/Worst pairs
+        if df_batchtopk is not None:
+            for method in ["Latent Scaling", "∆<sub>norm</sub>"]:
+                best_setup = None
+                worst_setup = None
+                
+                if method == "Latent Scaling":
+                    best_setup = "patch all rank sum pareto 50pct cchat"
+                    worst_setup = "patch all rank sum antipareto 50pct cchat"
+                else:  # ∆<sub>norm</sub>
+                    best_setup = "patch all dec norm diff pareto 50pct cchat"
+                    worst_setup = "patch all dec norm diff antipareto 50pct cchat"
+                
+                # Add Best bar
+                if best_setup in df_batchtopk.index:
+                    group_pos, offset = bar_positions[f"BatchTopK_{best_setup}"]
+                    mean_val = df_batchtopk.loc[best_setup, (category, metric_type)]["mean"]
+                    error_val = calculate_error(df_batchtopk, best_setup, category, metric_type)
+
+                    fig.add_trace(
+                        go.Bar(
+                            x=[group_pos + offset],
+                            y=[mean_val],
+                            width=bar_width,
+                            marker_color=COLOR_LOWEST_50PCT,
+                            showlegend=False,  # Already in legend
+                            name="Lowest 50%",
+                            error_y=dict(
+                                type="data",
+                                array=[error_val],
+                                visible=True,
+                                thickness=1.5,
+                                width=6,
+                            ),
+                        )
+                    )
+
+                    # Add text annotation
+                    add_text_annotation(group_pos + offset, mean_val, error_val, mean_val)
+                
+                # Add Worst bar
+                if worst_setup in df_batchtopk.index:
+                    group_pos, offset = bar_positions[f"BatchTopK_{worst_setup}"]
+                    mean_val = df_batchtopk.loc[worst_setup, (category, metric_type)]["mean"]
+                    error_val = calculate_error(df_batchtopk, worst_setup, category, metric_type)
+
+                    fig.add_trace(
+                        go.Bar(
+                            x=[group_pos + offset],
+                            y=[mean_val],
+                            width=bar_width,
+                            marker_color=COLOR_HIGHEST_50PCT,
+                            showlegend=False,  # Already in legend
+                            name="Highest 50%",
+                            error_y=dict(
+                                type="data",
+                                array=[error_val],
+                                visible=True,
+                                thickness=1.5,
+                                width=6,
+                            ),
+                        )
+                    )
+
+                    # Add text annotation
+                    add_text_annotation(group_pos + offset, mean_val, error_val, mean_val)
+
+        # Add method labels below each group
+        method_labels = {
+            1: ["All", "ε<sub>chat</sub>", "Latent Scaling", "∆<sub>norm</sub>"],  # L1 group
+            2: ["All", "ε<sub>chat</sub>", "Latent Scaling", "∆<sub>norm</sub>"],  # BatchTopK group
+        }
+        
+        for group_idx, labels in method_labels.items():
+            for i, label in enumerate(labels):
+                position = method_positions[label.replace("ε<sub>chat</sub>", "Chat Error")]
+                fig.add_annotation(
+                    x=group_positions[group_idx] + position,
+                    y=-0.01,
+                    text=label,
+                    showarrow=False,
+                    yshift=-10,
+                    font=dict(size=12),
+                )
+
+        # Update layout
+        fig.update_layout(
+            title=None,  # Remove title
+            height=400,
+            margin=dict(t=20, b=20, l=20, r=20),  # Reduce margins
+            xaxis=dict(
+                ticktext=group_labels,
+                tickvals=group_positions,
+                title="",
+                tickfont=dict(size=16),
+                showgrid=False,
+                showline=False,
+                linewidth=1,
+                linecolor="black",
+            ),
+            yaxis=dict(
+                title="KL divergence",
+                titlefont=dict(size=16),
+                tickfont=dict(size=16),
+                showgrid=True,
+                gridwidth=1,
+                gridcolor="lightgrey",
+                zeroline=True,
+                zerolinewidth=1,
+                zerolinecolor="grey",
+                showline=False,
+                linewidth=1,
+                linecolor="black",
+                # Add explicit tick values and make the last one bold
+                tickmode="array",
+                tickvals=[0, 0.2, 0.4, 0.6, 0.8, 1.0] if category == "k_first" else [0, 0.05, 0.1, 0.15, 0.2, 0.25],
+                ticktext=["0.0", "0.2", "0.4", "0.6", "0.8", "<b>1.0</b>"] if category == "k_first" else ["0.0", "0.05", "0.1", "0.15", "0.2", "<b>0.25</b>"],
+            ),
+            bargap=0,
+            plot_bgcolor="white",
+            bargroupgap=0.05,
+            # showlegend=show_legend,  # Control legend visibility
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=0.95,
+                xanchor="right",
+                x=1
+            )
+        )
+
+        # Adjust x-axis range to match group positioning
+        fig.update_xaxes(range=[-0.1, group_positions[-1] + 0.6])
+
+        fig.update_layout(
+            height=300,
+            width=600,  # Slightly wider to accommodate both models
+            margin=dict(t=30, b=0, l=0, r=0),  # Adjust top margin for legend
+        )
+
+        # Make the topmost y-axis tick bold
+        fig.update_yaxes(tickfont=dict(size=16))
+
+        fig.show()
+        
+        # Save the figure if output_file is provided
+        if output_file:
+            fig.write_image(output_file)
+        
+        return fig
+
+# Example usage with different options
+# Default: k_first category with text above bars
+fig = plot_kl_both_models(data_l1, data_batchtopk, text_mode="in", show_legend=True,
+                         output_file="results/first_k_kl_both_models.pdf")
+
+# Alternative: all category with text inside bars
+fig = plot_kl_both_models(data_l1, data_batchtopk, category="all", text_mode="in", show_legend=False,
+                         output_file="results/all_kl_both_models.pdf")
+
+# fig = plot_kl_both_models(data_l1, data_batchtopk, category="post_k_first", text_mode="in", show_legend=False,
+#                          output_file="results/post_k_first_kl_both_models.pdf")
+
+# No text labels and no legend
+# fig = plot_kl_both_models(data_l1, data_batchtopk, text_mode="none", show_legend=False,
+                        #  output_file="results/first_k_kl_instruct_both_models_no_text_no_legend.pdf")
 
 # %%
-# Plotting the scatter of beta ratios for the shared indices
-
 
 # %%
+def plot_kl_instruct(data):
+    
+    metric_type = "kl-instruct"
+    categories = ["k_first"]  # Only k_first category
+
+    # Define setups based on the groups from the drawing
+    requested_setups = [
+        # Vanilla group
+        "vanilla base2chat",  # Base->Chat
+        "patch base error cchat",  # Base error + chat reconstruction
+        # CrossCoder Both ratios group (50%)
+        "patch all rank sum pareto 50pct cchat",  # Best latents
+        "patch all rank sum antipareto 50pct cchat",  # Worst latents
+        # RND (Norm difference) group
+        "patch all dec norm diff pareto 50pct cchat",  # Best latents
+        "patch all dec norm diff antipareto 50pct cchat",  # Worst latents
+        # Ctrl group
+        # "patch base ctrl cchat",  # Control tokens replacement
+    ]
+
+    # Build dataframe for selected setups across categories
+    df = build_complete_dataframe(data)
+    if df is None:
+        print("No valid data available for any setup")
+    else:
+        # Filter for requested metric and categories
+        df = df.loc[:, (categories, metric_type)]
+
+        # Find which setups are available in the data
+        valid_setups = [s for s in requested_setups if s in df.index]
+        missing_setups = [s for s in requested_setups if s not in df.index]
+
+        if missing_setups:
+            print("Warning: Missing data for setups:", missing_setups)
+
+        if not valid_setups:
+            print("No data available for any of the requested setups")
+        else:
+            df = df.loc[valid_setups]
+            df = df.dropna(axis=1, how="all")
+
+            # Define color groups (using different shades for each group)
+            color_groups = {
+                # Vanilla group - blues
+                "vanilla base2chat": "#0d47a1",
+                "patch base error cchat": "#2196f3",
+                # Ours group (CrossCoder Both) - greens
+                "patch all rank sum pareto 50pct cchat": "#1b5e20",
+                "patch all rank sum antipareto 50pct cchat": "#4caf50",
+                # RND group - purples
+                "patch all dec norm diff pareto 50pct cchat": "#4a148c",
+                "patch all dec norm diff antipareto 50pct cchat": "#9c27b0",
+                # Ctrl group - orange
+                "patch base ctrl cchat": "#e65100",
+            }
+
+            # Define hierarchical labels
+            group_labels = ["Baselines", "Latent Scaling", "∆<sub>norm</sub>"]#, "Template"]
+            sub_labels = [["None", "All"], ["Lowest 50%", "Highest 50%"], ["Lowest 50%", "Highest 50%"]]#, ["", ""]]
+
+            fig = go.Figure()
+
+            # Calculate positions for grouped bars
+            n_groups = len(group_labels)
+            group_positions = np.arange(n_groups)
+            group_width = 0.75
+            bar_width = group_width / 2
+
+            for i, setup in enumerate(requested_setups):
+                group_idx = i // 2
+
+                # Modify offset calculation to center the single bar in the template group
+                if group_idx == 3:  # Template group
+                    offset = 0  # Center the bar
+                else:
+                    offset = -group_width / 4 if i % 2 == 0 else group_width / 4
+
+                current_width = bar_width
+
+                mean_val = df.loc[setup, ("k_first", metric_type)]["mean"]
+                error_val = (
+                    1.96
+                    * (
+                        df.loc[setup, ("k_first", metric_type)]["variance"]
+                        / df.loc[setup, ("k_first", metric_type)]["n"]
+                    )
+                    ** 0.5
+                )
+
+                fig.add_trace(
+                    go.Bar(
+                        x=[group_positions[group_idx] + offset],
+                        y=[mean_val],
+                        width=current_width,
+                        marker_color=color_groups[setup],
+                        showlegend=False,
+                        name=setup,
+                        error_y=dict(
+                            type="data",
+                            array=[error_val],
+                            visible=True,
+                            thickness=1.5,
+                            width=6,
+                        ),
+                    )
+                )
+
+                # Add value labels inside bars (vertical)
+                fig.add_annotation(
+                    x=group_positions[group_idx] + offset,
+                    y=mean_val / 2,  # Center of the bar
+                    text=f"{mean_val:.3f}",
+                    showarrow=False,
+                    textangle=270,  # Vertical text
+                    font=dict(size=14, color="white"),
+                )
+
+            # Update layout
+            fig.update_layout(
+                title=None,  # Remove title
+                showlegend=False,
+                height=400,
+                margin=dict(t=20, b=20, l=20, r=20),  # Reduce margins
+                xaxis=dict(
+                    ticktext=group_labels,
+                    tickvals=group_positions,
+                    title="",
+                    tickfont=dict(size=16),
+                    showgrid=False,
+                    showline=False,
+                    linewidth=1,
+                    linecolor="black",
+                ),
+                yaxis=dict(
+                    title="KL divergence",
+                    titlefont=dict(size=16),
+                    tickfont=dict(size=16),
+                    showgrid=True,
+                    gridwidth=1,
+                    gridcolor="lightgrey",
+                    zeroline=True,
+                    zerolinewidth=1,
+                    zerolinecolor="grey",
+                    showline=False,
+                    linewidth=1,
+                    linecolor="black",
+                    # Add explicit tick values and make the last one bold
+                    tickmode="array",
+                    tickvals=[0, 0.2, 0.4, 0.6, 0.8, 1.0],
+                    ticktext=["0.0", "0.2", "0.4", "0.6", "0.8", "<b>1.0</b>"],
+                ),
+                bargap=0,
+                plot_bgcolor="white",
+                bargroupgap=0.05,
+            )
+
+            # Add sub-labels (A/B) below each bar
+            for i in range(n_groups - 1):
+                for j, sub_label in enumerate(sub_labels[i]):
+                    fig.add_annotation(
+                        x=group_positions[i]
+                        + (-group_width / 4 if j == 0 else group_width / 4),
+                        y=-0.01,
+                        text=sub_label,
+                        showarrow=False,
+                        yshift=-10,
+                        font=dict(size=14),
+                    )
+
+            # Adjust x-axis range to match group positioning
+            fig.update_xaxes(range=[-0.5, len(group_positions) - 0.5])
+
+            fig.update_layout(
+                title=metric_type,
+                showlegend=False,
+                height=350,
+                width=500,
+                margin=dict(t=0, b=0, l=0, r=0),  # Reduce margins
+            )
+            # Remove title
+            fig.update_layout(title=None)
+
+            # Make the topmost y-axis tick bold
+            fig.update_yaxes(tickfont=dict(size=16))
+
+            fig.show()
+            # Get the current y-axis ticks
+            y_ticks = fig.layout.yaxis.ticktext
+
+            fig.write_image("results/first_k_kl_instruct.pdf")
+            # Show plot
