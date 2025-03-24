@@ -514,7 +514,7 @@ def online_dashboard(
         crosscoder: the crosscoder to use
         max_acts: a dictionary of max activations for each latent. If None, will be loaded from the latent_df of the crosscoder.
     """
-    coder = _crosscoder(crosscoder)
+    coder = load_dictionary_model(crosscoder)
     if crosscoder_device == "auto":
         crosscoder_device = "cuda:0" if th.cuda.is_available() else "cpu"
     coder = coder.to(crosscoder_device)
