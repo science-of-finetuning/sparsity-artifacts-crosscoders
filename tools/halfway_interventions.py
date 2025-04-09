@@ -3,6 +3,7 @@ from dictionary_learning.dictionary import CrossCoder, Dictionary
 from abc import ABC, abstractmethod
 import einops
 from typing import Literal
+import pandas as pd
 
 
 def ensure_model(arg: str):
@@ -13,6 +14,11 @@ def ensure_model(arg: str):
 
 class HalfStepPreprocessFn(ABC):
     """Base class for preprocessing functions that modify activations during model execution."""
+
+    can_edit_single_activation = False
+
+    def __init__(self, model_dtype: th.dtype = th.bfloat16):
+        self.model_dtype = model_dtype
 
     @abstractmethod
     def preprocess(
@@ -69,11 +75,35 @@ class HalfStepPreprocessFn(ABC):
         res = self(base_activations, chat_activations, **kwargs)
         return res[0] if res[0] is not None else res[1]
 
+    def _preprocess_single_activation(self, activation, **kwargs):
+        """
+        Edit a single activation
+        """
+        raise NotImplementedError
+
+    def process_single_activation(self, activation, **kwargs):
+        """
+        Edit a single activation
+        """
+        if self.can_edit_single_activation:
+            return self._preprocess_single_activation(activation, **kwargs)
+        else:
+            raise ValueError(
+                "This preprocess function does not support editing single activations. You need to use preprocess instead."
+            )
+
 
 class IdentityPreprocessFn(HalfStepPreprocessFn):
     """Simple preprocessing function that returns activations unchanged."""
 
-    def __init__(self, continue_with: Literal["base", "chat"]):
+    can_edit_single_activation = True
+
+    def __init__(
+        self,
+        continue_with: Literal["base", "chat"],
+        model_dtype: th.dtype = th.bfloat16,
+    ):
+        super().__init__(model_dtype)
         self.continue_with = ensure_model(continue_with)
 
     def continue_with_model(self, result):
@@ -86,11 +116,19 @@ class IdentityPreprocessFn(HalfStepPreprocessFn):
             else (None, chat_activations)
         )
 
+    def process_single_activation(self, activation, **kwargs):
+        return activation
+
 
 class SwitchPreprocessFn(HalfStepPreprocessFn):
     """Preprocessing function that swaps activations between base and chat models."""
 
-    def __init__(self, continue_with: Literal["base", "chat"]):
+    def __init__(
+        self,
+        continue_with: Literal["base", "chat"],
+        model_dtype: th.dtype = th.bfloat16,
+    ):
+        super().__init__(model_dtype)
         self.continue_with = ensure_model(continue_with)
 
     def preprocess(self, base_activations, chat_activations, **kwargs):
@@ -134,8 +172,9 @@ class PatchProjectionFromDiff(IdentityPreprocessFn):
         patch_target: Literal["base", "chat"],
         vectors_to_project: th.Tensor,
         scale_steering_latent: float = 1.0,
+        model_dtype: th.dtype = th.bfloat16,
     ):
-        super().__init__(continue_with)
+        super().__init__(continue_with, model_dtype)
         if vectors_to_project.ndim == 1:
             vectors_to_project = vectors_to_project.unsqueeze(0)
         self.patch_target = ensure_model(patch_target)
@@ -166,21 +205,80 @@ class PatchProjectionFromDiff(IdentityPreprocessFn):
 class SteeringVector(IdentityPreprocessFn):
     """Preprocessing function that steers activations using a steering vector."""
 
+    can_edit_single_activation = True
+
     def __init__(
         self,
         continue_with: Literal["base", "chat"],
-        patch_target: Literal["base", "chat"],
+        steer_activations_of: Literal["base", "chat"],
         vector: th.Tensor,
+        model_dtype: th.dtype = th.bfloat16,
     ):
-        super().__init__(continue_with)
-        self.patch_target = ensure_model(patch_target)
-        self.vector = vector
+        super().__init__(continue_with, model_dtype)
+        self.steer_activations_of = ensure_model(steer_activations_of)
+        self.vector = vector.to(model_dtype)
 
     def preprocess(self, base_activations, chat_activations, **kwargs):
-        target_acts = (
-            base_activations if self.patch_target == "base" else chat_activations
+        acts = (
+            base_activations
+            if self.steer_activations_of == "base"
+            else chat_activations
         )
-        return self.continue_with_model(target_acts + self.vector)
+        return self.continue_with_model(acts + self.vector)
+
+    def process_single_activation(self, activation, **kwargs):
+        return activation + self.vector
+
+
+class SteerWithCrosscoderLatent(SteeringVector):
+    """Preprocessing function that steers activations using a steering vector."""
+
+    def __init__(
+        self,
+        crosscoder: CrossCoder,
+        latent_df: pd.DataFrame,
+        steer_activations_of: Literal["base", "chat"],
+        steer_with_latents_from: Literal["base", "chat"],
+        latents_to_steer: list[int] | int | None = None,
+        continue_with: Literal["base", "chat"] = "chat",
+        scale_steering_latent: float = 1.0,
+        model_dtype: th.dtype = th.bfloat16,
+    ):
+        """Preprocessing function that steers activations using latents from a CrossCoder model.
+
+        Args:
+            crosscoder: The CrossCoder model to use for steering
+            latent_df: DataFrame containing latent information, including max activation values
+            steer_activations_of: Which model's activations to steer ("base" or "chat")
+            steer_with_latents_from: Which decoder's latents to use for steering ("base" or "chat")
+            latents_to_steer: List of latent indices to use for steering, or a single latent index,
+                              or None to use all latents
+            continue_with: Which model should complete generation ("base" or "chat")
+            scale_steering_latent: Scaling factor to apply to the steering vector
+        """
+        if ensure_model(steer_with_latents_from) == "chat":
+            weight_idx = 1
+        else:
+            weight_idx = 0
+        if latents_to_steer is None:
+            latents_to_steer = list(range(crosscoder.decoder.weight.shape[1]))
+        elif isinstance(latents_to_steer, int):
+            latents_to_steer = [latents_to_steer]
+        latents = crosscoder.decoder.weight[weight_idx, latents_to_steer]
+        column = (
+            "max_act_train" if "max_act_train" in latent_df.columns else "max_act_val"
+        )
+        max_acts = th.from_numpy(latent_df[column].values)[latents_to_steer].to(
+            latents.device
+        )
+        assert max_acts.shape == (latents.shape[0],)
+        vector = (latents / latents.norm(p=2, dim=1) * max_acts).sum(
+            dim=0
+        ) * scale_steering_latent
+        assert vector.shape == (
+            crosscoder.activation_dim,
+        ), f"vector.shape: {vector.shape}, crosscoder.activation_dim: {crosscoder.activation_dim}"
+        super().__init__(continue_with, steer_activations_of, vector, model_dtype)
 
 
 class CrossCoderReconstruction(IdentityPreprocessFn):
@@ -191,8 +289,9 @@ class CrossCoderReconstruction(IdentityPreprocessFn):
         crosscoder: CrossCoder,
         reconstruct_with: Literal["base", "chat"],
         continue_with: Literal["base", "chat"],
+        model_dtype: th.dtype = th.bfloat16,
     ):
-        super().__init__(continue_with)
+        super().__init__(continue_with, model_dtype)
         self.crosscoder = crosscoder
         self.reconstruct_with = ensure_model(reconstruct_with)
 
@@ -213,7 +312,7 @@ class CrossCoderReconstruction(IdentityPreprocessFn):
             )
             + self.crosscoder.decoder.bias[0 if self.reconstruct_with == "base" else 1]
         )
-        return self.continue_with_model(reconstruction.bfloat16())
+        return self.continue_with_model(reconstruction.to(self.model_dtype))
 
 
 class CrossCoderSteeringLatent(IdentityPreprocessFn):
@@ -247,12 +346,13 @@ class CrossCoderSteeringLatent(IdentityPreprocessFn):
         filter_treshold: float | None = None,
         scale_steering_latent: float = 1.0,
         ignore_encoder: bool = False,
+        model_dtype: th.dtype = th.bfloat16,
     ):
         if filter_treshold is not None and ignore_encoder:
             raise ValueError(
                 "Cannot filter latents and ignore encoder at the same time"
             )
-        super().__init__(continue_with)
+        super().__init__(continue_with, model_dtype)
         if latents_to_steer is None:
             latents_to_steer = list(range(crosscoder.decoder.weight.shape[1]))
         self.decoder_weight = crosscoder.decoder.weight[:, latents_to_steer]  # lfd
@@ -283,7 +383,7 @@ class CrossCoderSteeringLatent(IdentityPreprocessFn):
             ) * self.scale_steering_latent
             if self.steer_with_latents_from == "base":
                 steering = -steering
-            return self.continue_with_model((act + steering).bfloat16())
+            return self.continue_with_model((act + steering).to(self.model_dtype))
         cc_input = th.stack(
             [base_activations, chat_activations], dim=-2
         ).float()  # b, seq, 2, d
@@ -329,7 +429,7 @@ class CrossCoderSteeringLatent(IdentityPreprocessFn):
         res = act + steering_latent
         # TODO: Improve this, this is a hack to get the steering latent for all layers
         self.last_steering_latent = steering_latent
-        return *self.continue_with_model(res.bfloat16()), mask
+        return *self.continue_with_model(res.to(self.model_dtype)), mask
 
     def all_layers(self, act):
         assert (
@@ -389,8 +489,9 @@ class CrossCoderOutProjection(IdentityPreprocessFn):
         latents_to_steer: list[int] | None,
         continue_with: Literal["base", "chat"],
         scale_steering_latent: float = 1.0,
+        model_dtype: th.dtype = th.bfloat16,
     ):
-        super().__init__(continue_with)
+        super().__init__(continue_with, model_dtype)
         self.crosscoder = crosscoder
         if latents_to_steer is None:
             latents_to_steer = list(range(crosscoder.decoder.weight.shape[1]))
@@ -455,8 +556,9 @@ class SAEAdditiveSteering(IdentityPreprocessFn):
         # filter_treshold: float | None = None,
         scale_steering_latent: float = 1.0,
         # ignore_encoder: bool = False,
+        model_dtype: th.dtype = th.bfloat16,
     ):
-        super().__init__(continue_with)
+        super().__init__(continue_with, model_dtype)
         self.sae = sae
         self.steer_activations_of = ensure_model(steer_activations_of)
         self.steer_with_latents_from = ensure_model(steer_with_latents_from)
@@ -497,7 +599,7 @@ class SAEAdditiveSteering(IdentityPreprocessFn):
             steered = base_activations + steering_vects
         else:
             steered = chat_activations + steering_vects
-        return self.continue_with_model(steered.bfloat16())
+        return self.continue_with_model(steered.to(self.model_dtype))
 
 
 class BasePatchIntervention(IdentityPreprocessFn):
@@ -517,8 +619,9 @@ class BasePatchIntervention(IdentityPreprocessFn):
         continue_with: Literal["base", "chat"],
         patch_target: Literal["base", "chat"],
         activation_processor: IdentityPreprocessFn | None = None,
+        model_dtype: th.dtype = th.bfloat16,
     ):
-        super().__init__(continue_with)
+        super().__init__(continue_with, model_dtype)
         self.patch_target = ensure_model(patch_target)
         if activation_processor is None:
             self.activation_processor = IdentityPreprocessFn(

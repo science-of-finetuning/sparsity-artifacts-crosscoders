@@ -12,6 +12,8 @@ from pandas.io.formats.printing import pprint_thing
 import torch as th
 from transformers import AutoTokenizer
 from huggingface_hub import hf_hub_download, hf_api
+from huggingface_hub import HfApi
+
 from dictionary_learning.dictionary import Dictionary
 
 from dictionary_learning.dictionary import BatchTopKCrossCoder, CrossCoder
@@ -512,7 +514,7 @@ def online_dashboard(
         crosscoder: the crosscoder to use
         max_acts: a dictionary of max activations for each latent. If None, will be loaded from the latent_df of the crosscoder.
     """
-    coder = _crosscoder(crosscoder)
+    coder = load_dictionary_model(crosscoder)
     if crosscoder_device == "auto":
         crosscoder_device = "cuda:0" if th.cuda.is_available() else "cpu"
     coder = coder.to(crosscoder_device)
@@ -748,3 +750,22 @@ def offline_dashboard(crosscoder, max_example_per_quantile=20, tokenizer=None):
     )
     dashboard.display()
     return dashboard
+
+
+def get_available_models():
+    """Fetch CrossCoder models from Hugging Face"""
+    try:
+        # Initialize the Hugging Face API
+        api = HfApi()
+
+        # Get models from the science-of-finetuning organization
+        models = api.list_models(author="science-of-finetuning")
+
+        # Filter for CrossCoder models (you may need to adjust this filter)
+        crosscoder_models = [model.id.split("/")[-1] for model in models]
+
+        return crosscoder_models
+    except Exception as e:
+        # If there's an error fetching models, return just the dummy option
+        print(f"Error fetching CrossCoder models: {e}")
+        return []

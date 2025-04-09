@@ -12,6 +12,7 @@ __all__ = [
     "compute_entropy",
     "RunningMeanStd",
     "chunked_kl",
+    "chunked_max_cosim",
 ]
 
 
