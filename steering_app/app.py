@@ -160,9 +160,9 @@ if "enabled_interventions" not in st.session_state:
 
 
 @st.cache_data
-def create_cached_intervention(intervention_type, params, crosscoder_dict, cc_device):
+def create_cached_intervention(intervention_type, params, _crosscoder_dict, cc_device):
     """Cache intervention creation to avoid recreating the same interventions repeatedly"""
-    return create_intervention(intervention_type, params, crosscoder_dict, cc_device)
+    return create_intervention(intervention_type, params, _crosscoder_dict, cc_device)
 
 
 def intervention_ui(sidebar):
@@ -432,7 +432,6 @@ def get_available_cached_models():
     return get_available_models()
 
 
-@st.cache_data
 def generate_cached_text(
     _base_model,
     _chat_model,
