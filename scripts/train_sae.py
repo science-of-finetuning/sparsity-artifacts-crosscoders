@@ -10,7 +10,7 @@ from dictionary_learning.cache import PairedActivationCache
 from dictionary_learning import ActivationBuffer, CrossCoder
 from dictionary_learning.trainers import CrossCoderTrainer
 from dictionary_learning.training import trainSAE
-from dictionary_learning.dictionary import LossType
+from dictionary_learning.dictionary import CodeNormalization
 
 from dictionary_learning.trainers import BatchTopKTrainer, BatchTopKSAE
 import os
