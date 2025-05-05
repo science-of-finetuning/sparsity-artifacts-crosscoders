@@ -109,6 +109,8 @@ if __name__ == "__main__":
         attn_implementation=MODEL_CONFIGS[args.model]["attn_implementation"],
     )
     tokenizer = AutoTokenizer.from_pretrained(args.model)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
     nnmodel = LanguageModel(model, tokenizer=tokenizer)
     print("dtype=",nnmodel.dtype)
     num_layers = int(len(nnmodel.model.layers))
@@ -159,4 +161,5 @@ if __name__ == "__main__":
         multiprocessing=not args.disable_multiprocessing,
         ignore_first_n_tokens_per_sample=CFG["ignore_first_n_tokens_per_sample"],
         overwrite=args.overwrite,
+        token_level_replacement=CFG["token_level_replacement"],
     )
