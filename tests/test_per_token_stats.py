@@ -279,7 +279,7 @@ def test_compute_global_stats(num_values, num_tokens, num_latents, seed, device=
         assistant_percentage.double().cpu().numpy(),
         "Assistant percentages",
     )
-    
+
     check_array_equality(
         act_stats["lmsys_freq"],
         frequencies[group_to_idx["all_tokens"]].double().cpu().numpy(),

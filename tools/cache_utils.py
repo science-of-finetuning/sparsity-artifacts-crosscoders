@@ -277,7 +277,13 @@ class SampleCache:
 
 
 class LatentActivationCache:
-    def __init__(self, latent_activations_dir: Path, expand=True, offset=0, use_sparse_tensor=False):
+    def __init__(
+        self,
+        latent_activations_dir: Path,
+        expand=True,
+        offset=0,
+        use_sparse_tensor=False,
+    ):
         if isinstance(latent_activations_dir, str):
             latent_activations_dir = Path(latent_activations_dir)
 
@@ -361,7 +367,9 @@ class LatentActivationCache:
             : self.sequence_lengths[index + self.offset]
         ]
 
-    def get_latent_activations(self, index: int, expand: bool = True, use_sparse_tensor: bool = False):
+    def get_latent_activations(
+        self, index: int, expand: bool = True, use_sparse_tensor: bool = False
+    ):
         start_index = self.sequence_ranges[index + self.offset]
         end_index = self.sequence_ranges[index + self.offset + 1]
         seq_indices = self.ids[start_index:end_index]
@@ -373,9 +381,14 @@ class LatentActivationCache:
         if expand:
             if use_sparse_tensor:
                 # Create sparse tensor directly
-                indices = seq_indices.t()  # Transpose to get 2xN format required by sparse tensors
+                indices = (
+                    seq_indices.t()
+                )  # Transpose to get 2xN format required by sparse tensors
                 values = self.acts[start_index:end_index]
-                sparse_shape = (self.sequence_lengths[index + self.offset], self.dict_size)
+                sparse_shape = (
+                    self.sequence_lengths[index + self.offset],
+                    self.dict_size,
+                )
                 return th.sparse_coo_tensor(indices, values, sparse_shape)
             else:
                 # Create dense tensor as before

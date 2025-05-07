@@ -174,11 +174,13 @@ def format_setup_name(setup: str) -> str:
     elif parsed["kind"] == "sae":
         latent_type = parsed["latents_type"]
         if latent_type.startswith("random"):
-            seed = latent_type[len("random"):]
+            seed = latent_type[len("random") :]
             return f"SAE: Random latents (seed {seed}), continue with {parsed['continue_with']}"
         else:
             latent_desc = LATENT_TYPE_NAMES.get(f"sae_{latent_type}", latent_type)
-            return f"SAE: {latent_desc} latents, continue with {parsed['continue_with']}"
+            return (
+                f"SAE: {latent_desc} latents, continue with {parsed['continue_with']}"
+            )
     else:
         print(f"Unknown kind: {parsed['kind']}")
     return setup

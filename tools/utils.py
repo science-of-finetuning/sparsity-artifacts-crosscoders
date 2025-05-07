@@ -160,6 +160,7 @@ def save_json(data, path: Path):
     with open(path, "w") as f:
         json.dump(data, f)
 
+
 def auto_device(device: str):
     if device == "auto":
         return "cuda" if th.cuda.is_available() else "cpu"

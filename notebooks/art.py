@@ -1,7 +1,9 @@
 # %%
 from dotenv import load_dotenv
+
 load_dotenv("./.env")
 import IPython
+
 IPython.get_ipython().run_line_magic("load_ext", "autoreload")
 IPython.get_ipython().run_line_magic("autoreload", "2")
 import sys
@@ -384,12 +386,20 @@ data_batchtopk = load_metrics(
     "../results/interv_effects/1741127183_ultrachat-gemma-batchtopk-CC_cornflower-caterpillar_result.json"
 )
 
+
 # %%
-def plot_kl_both_models(data_l1, data_batchtopk, metric_type="kl-instruct", category="k_first", 
-                        text_mode="above", output_file=None, show_legend=True):
+def plot_kl_both_models(
+    data_l1,
+    data_batchtopk,
+    metric_type="kl-instruct",
+    category="k_first",
+    text_mode="above",
+    output_file=None,
+    show_legend=True,
+):
     """
     Plot KL divergence for both L1 and BatchTopK models.
-    
+
     Parameters:
     -----------
     data_l1 : dict
@@ -433,7 +443,7 @@ def plot_kl_both_models(data_l1, data_batchtopk, metric_type="kl-instruct", cate
         if df is None:
             print(f"No valid data available for any setup in {model_name}")
             return None
-        
+
         # Filter for requested metric and categories
         df = df.loc[:, (categories, metric_type)]
 
@@ -447,7 +457,7 @@ def plot_kl_both_models(data_l1, data_batchtopk, metric_type="kl-instruct", cate
         if not valid_setups:
             print(f"No data available for any of the requested setups in {model_name}")
             return None
-        
+
         df = df.loc[valid_setups]
         df = df.dropna(axis=1, how="all")
         return df
@@ -464,71 +474,104 @@ def plot_kl_both_models(data_l1, data_batchtopk, metric_type="kl-instruct", cate
         # Define colors for different categories
         COLOR_LOWEST_50PCT = "#59cd90"  # Dark green for best latents
         COLOR_HIGHEST_50PCT = "#ee6352"  # Light red for worst latents
-        COLOR_ALL = "#7eb2dd"           # Light blue for "All" category
-        COLOR_NONE = "#445e93"          # Dark blue for "None" category
-        COLOR_CHAT_ERROR = "#9370db"    # Purple for chat error
-        
+        COLOR_ALL = "#7eb2dd"  # Light blue for "All" category
+        COLOR_NONE = "#445e93"  # Dark blue for "None" category
+        COLOR_CHAT_ERROR = "#9370db"  # Purple for chat error
+
         # Define hierarchical labels
         group_labels = ["<b>None</b>", "<b>L1</b>", "<b>BatchTopK</b>"]
-        
+
         fig = go.Figure()
 
         # Calculate positions for grouped bars
         n_groups = len(group_labels)
         # Move groups closer together - make None much closer
-        group_positions = np.array([0, 0.6, 1.71])  # Further reduced spacing between groups
+        group_positions = np.array(
+            [0, 0.6, 1.71]
+        )  # Further reduced spacing between groups
         group_width = 0.8
-        
+
         # Define positions for each bar
         # For None: just one bar
         # For L1: All, Chat Error, Latent Scaling (Best+Worst), ∆<sub>norm</sub> (Best+Worst)
         # For BatchTopK: All, Chat Error, Latent Scaling (Best+Worst), ∆<sub>norm</sub> (Best+Worst)
-        
+
         # Define method positions within each group (further increased spacing between methods)
         method_positions = {
             "None": 0,
             "All": -0.32,  # Further increased spacing between subgroups
             "Chat Error": -0.19,  # Between All and Latent Scaling
             "Latent Scaling": 0.1,
-            "∆<sub>norm</sub>": 0.45   # Further increased spacing between subgroups
+            "∆<sub>norm</sub>": 0.45,  # Further increased spacing between subgroups
         }
-        
+
         # Define bar width for all bars (1.5x larger)
         bar_width = group_width / 10 * 1.5
-        
+
         # Define bar positions with exact positioning to avoid overlap
         bar_positions = {
             # None baseline
             "vanilla base2chat": (group_positions[0], 0),
-            
             # L1 group
             "L1_patch base error cchat": (group_positions[1], method_positions["All"]),
             # Chat Error
-            "L1_patch chat error cchat": (group_positions[1], method_positions["Chat Error"]),
+            "L1_patch chat error cchat": (
+                group_positions[1],
+                method_positions["Chat Error"],
+            ),
             # Latent Scaling pair (NO space but NO overlap between Best/Worst)
-            "L1_patch all rank sum pareto 50pct cchat": (group_positions[1], method_positions["Latent Scaling"] - bar_width/2),
-            "L1_patch all rank sum antipareto 50pct cchat": (group_positions[1], method_positions["Latent Scaling"] + bar_width/2),
+            "L1_patch all rank sum pareto 50pct cchat": (
+                group_positions[1],
+                method_positions["Latent Scaling"] - bar_width / 2,
+            ),
+            "L1_patch all rank sum antipareto 50pct cchat": (
+                group_positions[1],
+                method_positions["Latent Scaling"] + bar_width / 2,
+            ),
             # ∆<sub>norm</sub> pair (NO space but NO overlap between Best/Worst)
-            "L1_patch all dec norm diff pareto 50pct cchat": (group_positions[1], method_positions["∆<sub>norm</sub>"] - bar_width/2),
-            "L1_patch all dec norm diff antipareto 50pct cchat": (group_positions[1], method_positions["∆<sub>norm</sub>"] + bar_width/2),
-            
+            "L1_patch all dec norm diff pareto 50pct cchat": (
+                group_positions[1],
+                method_positions["∆<sub>norm</sub>"] - bar_width / 2,
+            ),
+            "L1_patch all dec norm diff antipareto 50pct cchat": (
+                group_positions[1],
+                method_positions["∆<sub>norm</sub>"] + bar_width / 2,
+            ),
             # BatchTopK group
-            "BatchTopK_patch base error cchat": (group_positions[2], method_positions["All"]),
+            "BatchTopK_patch base error cchat": (
+                group_positions[2],
+                method_positions["All"],
+            ),
             # Chat Error
-            "BatchTopK_patch chat error cchat": (group_positions[2], method_positions["Chat Error"]),
+            "BatchTopK_patch chat error cchat": (
+                group_positions[2],
+                method_positions["Chat Error"],
+            ),
             # Latent Scaling pair (NO space but NO overlap between Best/Worst)
-            "BatchTopK_patch all rank sum pareto 50pct cchat": (group_positions[2], method_positions["Latent Scaling"] - bar_width/2),
-            "BatchTopK_patch all rank sum antipareto 50pct cchat": (group_positions[2], method_positions["Latent Scaling"] + bar_width/2),
+            "BatchTopK_patch all rank sum pareto 50pct cchat": (
+                group_positions[2],
+                method_positions["Latent Scaling"] - bar_width / 2,
+            ),
+            "BatchTopK_patch all rank sum antipareto 50pct cchat": (
+                group_positions[2],
+                method_positions["Latent Scaling"] + bar_width / 2,
+            ),
             # ∆<sub>norm</sub> pair (NO space but NO overlap between Best/Worst)
-            "BatchTopK_patch all dec norm diff pareto 50pct cchat": (group_positions[2], method_positions["∆<sub>norm</sub>"] - bar_width/2),
-            "BatchTopK_patch all dec norm diff antipareto 50pct cchat": (group_positions[2], method_positions["∆<sub>norm</sub>"] + bar_width/2),
+            "BatchTopK_patch all dec norm diff pareto 50pct cchat": (
+                group_positions[2],
+                method_positions["∆<sub>norm</sub>"] - bar_width / 2,
+            ),
+            "BatchTopK_patch all dec norm diff antipareto 50pct cchat": (
+                group_positions[2],
+                method_positions["∆<sub>norm</sub>"] + bar_width / 2,
+            ),
         }
-        
+
         # Function to add text annotation based on mode
         def add_text_annotation(x, y, error_val, text_value):
             if text_mode == "none":
                 return  # No text annotation
-            
+
             if text_mode == "in":
                 # Inside bar
                 fig.add_annotation(
@@ -549,7 +592,7 @@ def plot_kl_both_models(data_l1, data_batchtopk, metric_type="kl-instruct", cate
                     textangle=0,  # Horizontal text
                     font=dict(size=10, color="black"),
                 )
-        
+
         # Function to calculate error value
         def calculate_error(df, setup, category, metric_type):
             return (
@@ -560,12 +603,14 @@ def plot_kl_both_models(data_l1, data_batchtopk, metric_type="kl-instruct", cate
                 )
                 ** 0.5
             )
-        
+
         # Add None baseline bar
         if df_l1 is not None and "vanilla base2chat" in df_l1.index:
             group_pos, offset = bar_positions["vanilla base2chat"]
             mean_val = df_l1.loc["vanilla base2chat", (category, metric_type)]["mean"]
-            error_val = calculate_error(df_l1, "vanilla base2chat", category, metric_type)
+            error_val = calculate_error(
+                df_l1, "vanilla base2chat", category, metric_type
+            )
 
             fig.add_trace(
                 go.Bar(
@@ -587,13 +632,17 @@ def plot_kl_both_models(data_l1, data_batchtopk, metric_type="kl-instruct", cate
 
             # Add text annotation
             add_text_annotation(group_pos + offset, mean_val, error_val, mean_val)
-        
+
         # Add "All" bars for each crosscoder
         # L1 All
         if df_l1 is not None and "patch base error cchat" in df_l1.index:
             group_pos, offset = bar_positions["L1_patch base error cchat"]
-            mean_val = df_l1.loc["patch base error cchat", (category, metric_type)]["mean"]
-            error_val = calculate_error(df_l1, "patch base error cchat", category, metric_type)
+            mean_val = df_l1.loc["patch base error cchat", (category, metric_type)][
+                "mean"
+            ]
+            error_val = calculate_error(
+                df_l1, "patch base error cchat", category, metric_type
+            )
 
             fig.add_trace(
                 go.Bar(
@@ -615,12 +664,16 @@ def plot_kl_both_models(data_l1, data_batchtopk, metric_type="kl-instruct", cate
 
             # Add text annotation
             add_text_annotation(group_pos + offset, mean_val, error_val, mean_val)
-        
+
         # BatchTopK All
         if df_batchtopk is not None and "patch base error cchat" in df_batchtopk.index:
             group_pos, offset = bar_positions["BatchTopK_patch base error cchat"]
-            mean_val = df_batchtopk.loc["patch base error cchat", (category, metric_type)]["mean"]
-            error_val = calculate_error(df_batchtopk, "patch base error cchat", category, metric_type)
+            mean_val = df_batchtopk.loc[
+                "patch base error cchat", (category, metric_type)
+            ]["mean"]
+            error_val = calculate_error(
+                df_batchtopk, "patch base error cchat", category, metric_type
+            )
 
             fig.add_trace(
                 go.Bar(
@@ -642,13 +695,17 @@ def plot_kl_both_models(data_l1, data_batchtopk, metric_type="kl-instruct", cate
 
             # Add text annotation
             add_text_annotation(group_pos + offset, mean_val, error_val, mean_val)
-            
+
         # Add Chat Error bar for L1
         if df_l1 is not None and "patch chat error cchat" in df_l1.index:
             group_pos, offset = bar_positions["L1_patch chat error cchat"]
-            mean_val = df_l1.loc["patch chat error cchat", (category, metric_type)]["mean"]
-            error_val = calculate_error(df_l1, "patch chat error cchat", category, metric_type)
-            
+            mean_val = df_l1.loc["patch chat error cchat", (category, metric_type)][
+                "mean"
+            ]
+            error_val = calculate_error(
+                df_l1, "patch chat error cchat", category, metric_type
+            )
+
             fig.add_trace(
                 go.Bar(
                     x=[group_pos + offset],
@@ -669,12 +726,16 @@ def plot_kl_both_models(data_l1, data_batchtopk, metric_type="kl-instruct", cate
 
             # Add text annotation
             add_text_annotation(group_pos + offset, mean_val, error_val, mean_val)
-            
+
         # Add Chat Error bar for BatchTopK
         if df_batchtopk is not None and "patch chat error cchat" in df_batchtopk.index:
             group_pos, offset = bar_positions["BatchTopK_patch chat error cchat"]
-            mean_val = df_batchtopk.loc["patch chat error cchat", (category, metric_type)]["mean"]
-            error_val = calculate_error(df_batchtopk, "patch chat error cchat", category, metric_type)
+            mean_val = df_batchtopk.loc[
+                "patch chat error cchat", (category, metric_type)
+            ]["mean"]
+            error_val = calculate_error(
+                df_batchtopk, "patch chat error cchat", category, metric_type
+            )
 
             fig.add_trace(
                 go.Bar(
@@ -696,28 +757,32 @@ def plot_kl_both_models(data_l1, data_batchtopk, metric_type="kl-instruct", cate
 
             # Add text annotation
             add_text_annotation(group_pos + offset, mean_val, error_val, mean_val)
-        
+
         # Add L1 model bars for Best/Worst pairs
         if df_l1 is not None:
             for method in ["Latent Scaling", "∆<sub>norm</sub>"]:
                 best_setup = None
                 worst_setup = None
-                
+
                 if method == "Latent Scaling":
                     best_setup = "patch all rank sum pareto 50pct cchat"
                     worst_setup = "patch all rank sum antipareto 50pct cchat"
                 else:  # ∆<sub>norm</sub>
                     best_setup = "patch all dec norm diff pareto 50pct cchat"
                     worst_setup = "patch all dec norm diff antipareto 50pct cchat"
-                
+
                 # Add Best bar
                 if best_setup in df_l1.index:
                     group_pos, offset = bar_positions[f"L1_{best_setup}"]
                     mean_val = df_l1.loc[best_setup, (category, metric_type)]["mean"]
-                    error_val = calculate_error(df_l1, best_setup, category, metric_type)
-                    
+                    error_val = calculate_error(
+                        df_l1, best_setup, category, metric_type
+                    )
+
                     # Only add to legend if this is the first occurrence of Best and legend is enabled
-                    add_to_legend = show_legend and "Lowest 50%" not in [t.name for t in fig.data]
+                    add_to_legend = show_legend and "Lowest 50%" not in [
+                        t.name for t in fig.data
+                    ]
 
                     fig.add_trace(
                         go.Bar(
@@ -738,16 +803,22 @@ def plot_kl_both_models(data_l1, data_batchtopk, metric_type="kl-instruct", cate
                     )
 
                     # Add text annotation
-                    add_text_annotation(group_pos + offset, mean_val, error_val, mean_val)
-                
+                    add_text_annotation(
+                        group_pos + offset, mean_val, error_val, mean_val
+                    )
+
                 # Add Worst bar
                 if worst_setup in df_l1.index:
                     group_pos, offset = bar_positions[f"L1_{worst_setup}"]
                     mean_val = df_l1.loc[worst_setup, (category, metric_type)]["mean"]
-                    error_val = calculate_error(df_l1, worst_setup, category, metric_type)
-                    
+                    error_val = calculate_error(
+                        df_l1, worst_setup, category, metric_type
+                    )
+
                     # Only add to legend if this is the first occurrence of Worst and legend is enabled
-                    add_to_legend = show_legend and "Highest 50%" not in [t.name for t in fig.data]
+                    add_to_legend = show_legend and "Highest 50%" not in [
+                        t.name for t in fig.data
+                    ]
 
                     fig.add_trace(
                         go.Bar(
@@ -768,26 +839,32 @@ def plot_kl_both_models(data_l1, data_batchtopk, metric_type="kl-instruct", cate
                     )
 
                     # Add text annotation
-                    add_text_annotation(group_pos + offset, mean_val, error_val, mean_val)
-        
+                    add_text_annotation(
+                        group_pos + offset, mean_val, error_val, mean_val
+                    )
+
         # Add BatchTopK model bars for Best/Worst pairs
         if df_batchtopk is not None:
             for method in ["Latent Scaling", "∆<sub>norm</sub>"]:
                 best_setup = None
                 worst_setup = None
-                
+
                 if method == "Latent Scaling":
                     best_setup = "patch all rank sum pareto 50pct cchat"
                     worst_setup = "patch all rank sum antipareto 50pct cchat"
                 else:  # ∆<sub>norm</sub>
                     best_setup = "patch all dec norm diff pareto 50pct cchat"
                     worst_setup = "patch all dec norm diff antipareto 50pct cchat"
-                
+
                 # Add Best bar
                 if best_setup in df_batchtopk.index:
                     group_pos, offset = bar_positions[f"BatchTopK_{best_setup}"]
-                    mean_val = df_batchtopk.loc[best_setup, (category, metric_type)]["mean"]
-                    error_val = calculate_error(df_batchtopk, best_setup, category, metric_type)
+                    mean_val = df_batchtopk.loc[best_setup, (category, metric_type)][
+                        "mean"
+                    ]
+                    error_val = calculate_error(
+                        df_batchtopk, best_setup, category, metric_type
+                    )
 
                     fig.add_trace(
                         go.Bar(
@@ -808,13 +885,19 @@ def plot_kl_both_models(data_l1, data_batchtopk, metric_type="kl-instruct", cate
                     )
 
                     # Add text annotation
-                    add_text_annotation(group_pos + offset, mean_val, error_val, mean_val)
-                
+                    add_text_annotation(
+                        group_pos + offset, mean_val, error_val, mean_val
+                    )
+
                 # Add Worst bar
                 if worst_setup in df_batchtopk.index:
                     group_pos, offset = bar_positions[f"BatchTopK_{worst_setup}"]
-                    mean_val = df_batchtopk.loc[worst_setup, (category, metric_type)]["mean"]
-                    error_val = calculate_error(df_batchtopk, worst_setup, category, metric_type)
+                    mean_val = df_batchtopk.loc[worst_setup, (category, metric_type)][
+                        "mean"
+                    ]
+                    error_val = calculate_error(
+                        df_batchtopk, worst_setup, category, metric_type
+                    )
 
                     fig.add_trace(
                         go.Bar(
@@ -835,17 +918,31 @@ def plot_kl_both_models(data_l1, data_batchtopk, metric_type="kl-instruct", cate
                     )
 
                     # Add text annotation
-                    add_text_annotation(group_pos + offset, mean_val, error_val, mean_val)
+                    add_text_annotation(
+                        group_pos + offset, mean_val, error_val, mean_val
+                    )
 
         # Add method labels below each group
         method_labels = {
-            1: ["All", "ε<sub>chat</sub>", "Latent Scaling", "∆<sub>norm</sub>"],  # L1 group
-            2: ["All", "ε<sub>chat</sub>", "Latent Scaling", "∆<sub>norm</sub>"],  # BatchTopK group
+            1: [
+                "All",
+                "ε<sub>chat</sub>",
+                "Latent Scaling",
+                "∆<sub>norm</sub>",
+            ],  # L1 group
+            2: [
+                "All",
+                "ε<sub>chat</sub>",
+                "Latent Scaling",
+                "∆<sub>norm</sub>",
+            ],  # BatchTopK group
         }
-        
+
         for group_idx, labels in method_labels.items():
             for i, label in enumerate(labels):
-                position = method_positions[label.replace("ε<sub>chat</sub>", "Chat Error")]
+                position = method_positions[
+                    label.replace("ε<sub>chat</sub>", "Chat Error")
+                ]
                 fig.add_annotation(
                     x=group_positions[group_idx] + position,
                     y=-0.01,
@@ -885,20 +982,24 @@ def plot_kl_both_models(data_l1, data_batchtopk, metric_type="kl-instruct", cate
                 linecolor="black",
                 # Add explicit tick values and make the last one bold
                 tickmode="array",
-                tickvals=[0, 0.2, 0.4, 0.6, 0.8, 1.0] if category == "k_first" else [0, 0.05, 0.1, 0.15, 0.2, 0.25],
-                ticktext=["0.0", "0.2", "0.4", "0.6", "0.8", "<b>1.0</b>"] if category == "k_first" else ["0.0", "0.05", "0.1", "0.15", "0.2", "<b>0.25</b>"],
+                tickvals=(
+                    [0, 0.2, 0.4, 0.6, 0.8, 1.0]
+                    if category == "k_first"
+                    else [0, 0.05, 0.1, 0.15, 0.2, 0.25]
+                ),
+                ticktext=(
+                    ["0.0", "0.2", "0.4", "0.6", "0.8", "<b>1.0</b>"]
+                    if category == "k_first"
+                    else ["0.0", "0.05", "0.1", "0.15", "0.2", "<b>0.25</b>"]
+                ),
             ),
             bargap=0,
             plot_bgcolor="white",
             bargroupgap=0.05,
             # showlegend=show_legend,  # Control legend visibility
             legend=dict(
-                orientation="h",
-                yanchor="bottom",
-                y=0.95,
-                xanchor="right",
-                x=1
-            )
+                orientation="h", yanchor="bottom", y=0.95, xanchor="right", x=1
+            ),
         )
 
         # Adjust x-axis range to match group positioning
@@ -914,34 +1015,47 @@ def plot_kl_both_models(data_l1, data_batchtopk, metric_type="kl-instruct", cate
         fig.update_yaxes(tickfont=dict(size=16))
 
         fig.show()
-        
+
         # Save the figure if output_file is provided
         if output_file:
             fig.write_image(output_file)
-        
+
         return fig
+
 
 # Example usage with different options
 # Default: k_first category with text above bars
-fig = plot_kl_both_models(data_l1, data_batchtopk, text_mode="in", show_legend=True,
-                         output_file="results/first_k_kl_both_models.pdf")
+fig = plot_kl_both_models(
+    data_l1,
+    data_batchtopk,
+    text_mode="in",
+    show_legend=True,
+    output_file="results/first_k_kl_both_models.pdf",
+)
 
 # Alternative: all category with text inside bars
-fig = plot_kl_both_models(data_l1, data_batchtopk, category="all", text_mode="in", show_legend=False,
-                         output_file="results/all_kl_both_models.pdf")
+fig = plot_kl_both_models(
+    data_l1,
+    data_batchtopk,
+    category="all",
+    text_mode="in",
+    show_legend=False,
+    output_file="results/all_kl_both_models.pdf",
+)
 
 # fig = plot_kl_both_models(data_l1, data_batchtopk, category="post_k_first", text_mode="in", show_legend=False,
 #                          output_file="results/post_k_first_kl_both_models.pdf")
 
 # No text labels and no legend
 # fig = plot_kl_both_models(data_l1, data_batchtopk, text_mode="none", show_legend=False,
-                        #  output_file="results/first_k_kl_instruct_both_models_no_text_no_legend.pdf")
+#  output_file="results/first_k_kl_instruct_both_models_no_text_no_legend.pdf")
 
 # %%
+
 
 # %%
 def plot_kl_instruct(data):
-    
+
     metric_type = "kl-instruct"
     categories = ["k_first"]  # Only k_first category
 
@@ -997,8 +1111,16 @@ def plot_kl_instruct(data):
             }
 
             # Define hierarchical labels
-            group_labels = ["Baselines", "Latent Scaling", "∆<sub>norm</sub>"]#, "Template"]
-            sub_labels = [["None", "All"], ["Lowest 50%", "Highest 50%"], ["Lowest 50%", "Highest 50%"]]#, ["", ""]]
+            group_labels = [
+                "Baselines",
+                "Latent Scaling",
+                "∆<sub>norm</sub>",
+            ]  # , "Template"]
+            sub_labels = [
+                ["None", "All"],
+                ["Lowest 50%", "Highest 50%"],
+                ["Lowest 50%", "Highest 50%"],
+            ]  # , ["", ""]]
 
             fig = go.Figure()
 

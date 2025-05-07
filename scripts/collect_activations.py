@@ -1,4 +1,5 @@
 import sys
+
 sys.path.append(".")
 import argparse
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -11,7 +12,7 @@ from pathlib import Path
 import os
 import time
 
-os.environ["WANDB__SERVICE_WAIT"] = "300" 
+os.environ["WANDB__SERVICE_WAIT"] = "300"
 
 from tools.configs import MODEL_CONFIGS
 
@@ -68,7 +69,9 @@ if __name__ == "__main__":
         "--overwrite", action="store_true", help="Overwrite existing activations"
     )
     parser.add_argument(
-        "--store-tokens", action="store_true", help="Store tokens in the activation cache"
+        "--store-tokens",
+        action="store_true",
+        help="Store tokens in the activation cache",
     )
     parser.add_argument(
         "--disable-multiprocessing", action="store_true", help="Disable multiprocessing"
@@ -92,13 +95,17 @@ if __name__ == "__main__":
 
     if args.wandb:
         import wandb
+
         wandb.init(
-            name=args.model.split("/")[-1] + "_" + args.dataset.split("/")[-1] + "_" + args.dataset_split,
+            name=args.model.split("/")[-1]
+            + "_"
+            + args.dataset.split("/")[-1]
+            + "_"
+            + args.dataset_split,
             entity=args.wandb_entity,
             project=args.wandb_project,
             config=args,
         )
-
 
     CFG = MODEL_CONFIGS[args.model]
     print("MODEL_CONFIGS=", CFG)
@@ -112,7 +119,7 @@ if __name__ == "__main__":
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     nnmodel = LanguageModel(model, tokenizer=tokenizer)
-    print("dtype=",nnmodel.dtype)
+    print("dtype=", nnmodel.dtype)
     num_layers = int(len(nnmodel.model.layers))
     layers = args.layers
     logger.info(f"Collecting activations from layers: {layers}")
@@ -129,15 +136,14 @@ if __name__ == "__main__":
     dataset = load_dataset(args.dataset, split=args.dataset_split)
     dataset = dataset.select(range(min(args.max_samples, len(dataset))))
 
-
     text_column = MODEL_CONFIGS[args.model]["text_column"]
-    
+
     if args.text_column is not None:
         text_column = args.text_column
 
     if text_column != "text":
         args.dataset_split = f"{args.dataset_split}-col{text_column}"
-    
+
     print("Text column=", text_column)
     out_dir = store_dir / args.model.split("/")[-1] / dataset_name / args.dataset_split
     out_dir.mkdir(parents=True, exist_ok=True)

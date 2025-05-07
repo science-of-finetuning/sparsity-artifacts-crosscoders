@@ -30,17 +30,16 @@ def plot_scaler_histograms(
 
     # Filter out NaN values from both reconstructions
     # Convert to numpy arrays to handle NaN values consistently
-    recon_base = recon_base.numpy() if hasattr(recon_base, 'numpy') else recon_base
-    recon_chat = recon_chat.numpy() if hasattr(recon_chat, 'numpy') else recon_chat
-    
+    recon_base = recon_base.numpy() if hasattr(recon_base, "numpy") else recon_base
+    recon_chat = recon_chat.numpy() if hasattr(recon_chat, "numpy") else recon_chat
+
     valid_mask = ~(np.isnan(recon_base) | np.isnan(recon_chat))
     recon_base = recon_base[valid_mask]
     recon_chat = recon_chat[valid_mask]
 
-
     ratio = recon_base / recon_chat
     if baseline is not None:
-        baseline = baseline.numpy() if hasattr(baseline, 'numpy') else baseline
+        baseline = baseline.numpy() if hasattr(baseline, "numpy") else baseline
         baseline = baseline[valid_mask]
         ratio_baseline = baseline / recon_chat
 
