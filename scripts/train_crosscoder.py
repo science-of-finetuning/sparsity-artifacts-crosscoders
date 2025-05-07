@@ -51,15 +51,6 @@ def get_local_shuffled_indices(num_samples_per_dataset, shard_size):
     return shuffled_indices
 
 
-def get_loss_name(loss_type):
-    if loss_type == CodeNormalization.SAE:
-        return "SAELoss"
-    elif loss_type == CodeNormalization.MIXED:
-        return "MixedLoss"
-    else:
-        return "CCLoss"
-
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--activation-store-dir", type=str, default="activations")
@@ -93,14 +84,14 @@ if __name__ == "__main__":
         "--code-normalization",
         type=str,
         default="crosscoder",
-        choices=["crosscoder", "sae", "mixed"],
+        choices=["crosscoder", "sae", "mixed", "DECOUPLED"],
     )
     parser.add_argument("--use-mse-loss", action="store_true")
     parser.add_argument("--k", type=int, default=100)
     parser.add_argument(
         "--type", type=str, default="relu", choices=["batch-top-k", "relu"]
     )
-
+    parser.add_argument("--surname", type=str, default=None)
     args = parser.parse_args()
 
     print(f"Training args: {args}")
@@ -208,13 +199,13 @@ if __name__ == "__main__":
         ]
     )
 
-    code_normalization = CodeNormalization.from_string(args.code_normalization)
+    code_normalization = args.code_normalization
     if args.type == "relu":
         name = (
             f"{args.base_model.split('/')[-1]}-L{args.layer}-mu{args.mu:.1e}-lr{args.lr:.0e}"
             + (f"-{args.run_name}" if args.run_name is not None else "")
             + (f"-local-shuffling" if args.local_shuffling else "")
-            + (f"-{get_loss_name(code_normalization)}")
+            + (f"-{code_normalization.capitalize()}Loss")
             + (f"-mse" if args.use_mse_loss else "")
         )
     elif args.type == "batch-top-k":
@@ -222,7 +213,7 @@ if __name__ == "__main__":
             f"{args.base_model.split('/')[-1]}-L{args.layer}-k{args.k}-lr{args.lr:.0e}"
             + (f"-{args.run_name}" if args.run_name is not None else "")
             + (f"-local-shuffling" if args.local_shuffling else "")
-            + (f"-{get_loss_name(code_normalization)}")
+            + (f"-{code_normalization.capitalize()}")
         )
     else:
         raise ValueError(f"Invalid sparsity type: {args.code_normalization}")
@@ -231,6 +222,8 @@ if __name__ == "__main__":
         name += f"-pt"
     if args.max_steps is None:
         args.max_steps = len(train_dataset) // args.batch_size
+    if args.surname:
+        name += f"-{args.surname}"
     device = "cuda" if th.cuda.is_available() else "cpu"
     print(f"Training on device={device}.")
     print(f"Loss type: {code_normalization}")
