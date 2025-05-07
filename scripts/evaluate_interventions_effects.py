@@ -423,7 +423,7 @@ if __name__ == "__main__":
     parser.add_argument("--split", type=str, default="train")
     parser.add_argument("--base-device", type=str, default="cuda")
     parser.add_argument("--chat-device", type=str, default="cuda")
-    parser.add_argument("--crosscoder", type=str, default="l13_crosscoder")
+    parser.add_argument("--dictionary", type=str, required=True)
     parser.add_argument("--num-seeds", type=int, default=5)
     parser.add_argument("--name", type=str, default=None)
     parser.add_argument("--log-every", type=int, default=10)
@@ -435,20 +435,21 @@ if __name__ == "__main__":
     parser.add_argument(
         "--percentage", type=int, nargs="+", default=[5, 10, 30, 50, 100]
     )
-    parser.add_argument(
-        "--columns",
-        nargs="+",
-        default=[
-            "rank_sum",
-            "beta_ratio_reconstruction",
-            "beta_ratio_error",
-            "base uselessness score",
-            "dec_norm_diff",
-        ],
-    )
-    parser.add_argument("--skip-target-patch", action="store_true")
-    parser.add_argument("--skip-vanilla", action="store_true")
-    parser.add_argument("--skip-patching", action="store_true")
+    parser.add_argument("--is-sae", action="store_true")
+    # parser.add_argument(
+    #     "--columns",
+    #     nargs="+",
+    #     default=[
+    #         "rank_sum",
+    #         "beta_ratio_reconstruction",
+    #         "beta_ratio_error",
+    #         "base uselessness score",
+    #         "dec_norm_diff",
+    #     ],
+    # )
+    # parser.add_argument("--skip-target-patch", action="store_true")
+    # parser.add_argument("--skip-vanilla", action="store_true")
+    # parser.add_argument("--skip-patching", action="store_true")
     parser.add_argument("--add-base-only-latents", action="store_true")
     parser.add_argument("--df-path", type=Path, default=None)
     parser.add_argument("--chat-only-indices", type=Path, default=None)
@@ -461,12 +462,12 @@ if __name__ == "__main__":
         else "cuda" if th.cuda.is_available() else "cpu"
     )
     seeds = list(range(args.num_seeds))
-    crosscoder = load_dictionary_model(args.crosscoder).to(device)
+    dictionary = load_dictionary_model(args.dictionary, is_sae=args.is_sae).to(device)
     percentages = args.percentage
     # fn_dict, infos = create_acl_half_fns(
-    #     crosscoder,
+    #     dictionary,
     #     seeds,
-    #     args.crosscoder,
+    #     args.dictionary,
     #     percentages,
     #     args.columns,
     #     skip_target_patch=args.skip_target_patch,
@@ -478,23 +479,23 @@ if __name__ == "__main__":
         print(f"Loading df from {args.df_path}")
         df = load_latent_df(args.df_path)
     else:
-        print(f"Loading df from crosscoder {args.crosscoder}")
-        df = load_latent_df(args.crosscoder)
+        print(f"Loading df from dictionary {args.dictionary}")
+        df = load_latent_df(args.dictionary)
     if args.chat_only_indices is not None:
         chat_only_indices = th.load(args.chat_only_indices).tolist()
         df = df.iloc[chat_only_indices]
         df["tag"] = "Chat only"
 
     print(f"len df: {len(df)}")
-    if not isinstance(crosscoder, CrossCoder):
+    if not isinstance(dictionary, CrossCoder):
         fn_dict, infos = sae_steering_half_fns(
-            crosscoder,
+            dictionary,
             seeds,
             df,
         )
     else:
         fn_dict, infos = arxiv_paper_half_fns(
-            crosscoder,
+            dictionary,
             df,
             add_base_only_latents=args.add_base_only_latents,
         )
@@ -508,7 +509,8 @@ if __name__ == "__main__":
     if args.name is None and args.test:
         args.name = "test"
         print(f"Testing using {args.name}")
-    args.name = str(int(time.time())) + "_" + args.name + "_" + generate_slug(2)
+    name = "_" + args.name if args.name is not None else ""
+    args.name = str(int(time.time())) + name + "_" + generate_slug(2)
     project = "perplexity-comparison"
     if args.test:
         project += "-test"

@@ -421,7 +421,7 @@ def load_crosscoder(crosscoder=None):
             raise ValueError(f"Unknown crosscoder: {crosscoder}")
 
 
-def load_dictionary_model(model_name: str | Path):
+def load_dictionary_model(model_name: str | Path, is_sae: bool | None = None):
     """Load a dictionary model from a local path or HuggingFace Hub.
 
     Args:
@@ -461,7 +461,9 @@ def load_dictionary_model(model_name: str | Path):
         except Exception as e:
             print(f"Error loading model from hub: {e}")
             # If no model_type in config, try to infer from other fields
-            if config is not None and "k" in config and "dict_size" in config:
+            if is_sae or (
+                config is not None and "k" in config and "dict_size" in config
+            ):
                 return BatchTopKSAE.from_pretrained(model_id, from_hub=True)
             else:
                 return CrossCoder.from_pretrained(model_id, from_hub=True)

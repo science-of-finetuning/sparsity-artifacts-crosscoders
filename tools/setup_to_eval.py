@@ -353,6 +353,56 @@ def baseline_diffs_half_fns(
     return half_fns
 
 
+def threshold_half_fns(
+    full_df: pd.DataFrame,
+    threshold: float,
+    column: str,
+    dictionary: Dictionary,
+    is_crosscoder: bool,
+    take_below: bool = True,
+) -> dict[str, HalfStepPreprocessFn]:
+    """Creates a half function for steering using latents below a threshold of a given column.
+
+    Args:
+        full_df: Latent dataframe
+        threshold: Value to filter latents by
+        column: Column name to apply threshold to
+        dictionary: Dictionary object containing the latent vectors
+        is_crosscoder: Whether dictionary is a crosscoder
+        take_below: If True, take latents below threshold, otherwise take above
+
+    Returns:
+        Dictionary with a single half function that steers using latents filtered by threshold and column.
+    """
+    comparison = "<=" if take_below else ">="
+    latents = full_df.query(f"{column} {comparison} {threshold}").index.tolist()
+
+    direction = "blw" if take_below else "abv"
+
+    if is_crosscoder:
+        op_name = "add"
+        interv = CrossCoderAdditiveSteering(
+            dictionary,
+            steer_activations_of="base",
+            steer_with_latents_from="chat",
+            continue_with="chat",
+            latents_to_steer=latents,
+        )
+    else:
+        op_name = "sae"
+        interv = SAEAdditiveSteering(
+            dictionary,
+            steer_activations_of="base",
+            steer_with_latents_from="chat",
+            continue_with="chat",
+            latents_to_steer=latents,
+        )
+    infos = {
+        f"{column}-{direction}{threshold}-latents": latents,
+    }
+    return {f"patch_all_{op_name}_{column}-{direction}{threshold}-cchat": interv}, infos
+
+
 def arxiv_paper_half_fns(
     crosscoder: CrossCoder,
     full_df: pd.DataFrame,
@@ -462,6 +512,21 @@ def arxiv_paper_half_fns(
                 continue_with="chat",
                 latents_to_steer=latents,
             )
+    for column, threshold, take_below in [
+        ("dec_norm_diff", 0.3, True),
+        ("beta_activation_ratio", 0.6, True),
+        ("beta_activation_ratio", 0.3, True),
+    ]:
+        fn, info = threshold_half_fns(
+            full_df,
+            threshold,
+            column,
+            crosscoder,
+            is_crosscoder=True,
+            take_below=take_below,
+        )
+        half_fns.update(fn)
+        infos[next(iter(fn.keys()))] = info
     return half_fns, infos
 
 
@@ -557,4 +622,16 @@ def sae_steering_half_fns(
             "beta_activation_ratio"
         ].values.tolist(),
     }
+    # Apply threshold for beta_activation_ratio at 0.6 and 0.3
+    for threshold in [0.6, 0.3]:
+        fn, info = threshold_half_fns(
+            full_df,
+            threshold,
+            "beta_activation_ratio",
+            sae,
+            is_crosscoder=False,
+            take_below=True,
+        )
+        half_fns.update(fn)
+        infos[next(iter(fn.keys()))] = info
     return half_fns, infos
