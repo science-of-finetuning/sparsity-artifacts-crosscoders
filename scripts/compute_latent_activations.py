@@ -172,12 +172,16 @@ def main():
         default="/workspace/data/latent_activations/",
     )
     parser.add_argument("--upload-to-hub", action="store_true")
-    parser.add_argument("--from-hub", action="store_true")
     parser.add_argument("--split", type=str, default="validation")
+    parser.add_argument("--load-from-disk", action="store_true")
     args = parser.parse_args()
 
+
+    out_dir = Path(args.latent_activations_dir) / f"{args.dictionary_model}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
     # Load the activation dataset
-    if not args.from_hub:
+    if not args.load_from_disk:
         fineweb_cache, lmsys_cache = load_activation_dataset(
             activation_store_dir=args.activation_store_dir,
             base_model=args.base_model.split("/")[-1],
@@ -261,8 +265,6 @@ def main():
         # Convert to tensor and save
         padded_tensor = th.stack(padded_seqs)
 
-        out_dir = Path(args.latent_activations_dir) / f"{args.dictionary_model}"
-        out_dir.mkdir(parents=True, exist_ok=True)
 
         # Save tensors
         th.save(out_acts.cpu(), out_dir / "out_acts.pt")
@@ -273,11 +275,11 @@ def main():
         th.save(seq_lengths.cpu(), out_dir / "seq_lengths.pt")
         th.save(combined_max_activations.cpu(), out_dir / "max_activations.pt")
 
-    # Print some stats about max activations
-    print(f"Maximum activation statistics:")
-    print(f"  Average: {combined_max_activations.mean().item():.4f}")
-    print(f"  Maximum: {combined_max_activations.max().item():.4f}")
-    print(f"  Minimum: {combined_max_activations.min().item():.4f}")
+        # Print some stats about max activations
+        print(f"Maximum activation statistics:")
+        print(f"  Average: {combined_max_activations.mean().item():.4f}")
+        print(f"  Maximum: {combined_max_activations.max().item():.4f}")
+        print(f"  Minimum: {combined_max_activations.min().item():.4f}")
 
     if args.upload_to_hub:
         # Initialize Hugging Face API
@@ -288,6 +290,22 @@ def main():
         # Define repository ID for the dataset
         repo_id = f"science-of-finetuning/latent-activations-{args.dictionary_model}"
 
+        # Check if repository exists, create it if it doesn't
+        try:
+            # Try to get repository info to check if it exists
+            api.repo_info(repo_id=repo_id, repo_type="dataset")
+            print(f"Repository {repo_id} already exists")
+        except Exception as e:
+            # Repository doesn't exist, create it
+            print(f"Repository {repo_id} doesn't exist, creating it...")
+            api.create_repo(
+                repo_id=repo_id,
+                repo_type="dataset",
+                private=False,
+                exist_ok=True,
+            )
+            print(f"Created repository {repo_id}")
+        
         # Upload all tensors to HF Hub directly from saved files
         api.upload_file(
             path_or_fileobj=str(out_dir / "out_acts.pt"),
