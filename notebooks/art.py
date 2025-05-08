@@ -380,14 +380,39 @@ import plotly.io as pio
 pio.kaleido.scope.mathjax = None
 
 data_l1 = load_metrics(
-    "../results/interv_effects/all_gemma_dogfish-bat-bison_merged_result.json"
+    "/workspace/clement/repos/representation-structure-comparison/results/interv_effects/all_l1_crosscoder_dogfish-bat-bison-octopus.json"
 )
 data_batchtopk = load_metrics(
     "../results/interv_effects/1741127183_ultrachat-gemma-batchtopk-CC_cornflower-caterpillar_result.json"
 )
 
+# Constants for setup strings
+VANILLA_BASE2CHAT = "vanilla base2chat"
+PATCH_BASE_ERROR = "patch base error cchat"
+PATCH_CHAT_ERROR = "patch chat error cchat"
 
-# %%
+
+# CrossCoder Both ratios group (50%)
+def patch_best_latent_scaling(use_additive_steering):
+    add_str = " add" if use_additive_steering else ""
+    return f"patch all{add_str} rank sum pareto 50pct cchat"
+
+
+def patch_worst_latent_scaling(use_additive_steering):
+    add_str = " add" if use_additive_steering else ""
+    return f"patch all{add_str} rank sum antipareto 50pct cchat"
+
+
+# RND (Norm difference) group
+def patch_best_norm_diff(use_additive_steering):
+    add_str = " add" if use_additive_steering else ""
+    return f"patch all{add_str} dec norm diff pareto 50pct cchat"
+
+
+def patch_worst_norm_diff(use_additive_steering):
+    add_str = " add" if use_additive_steering else ""
+    return f"patch all{add_str} dec norm diff antipareto 50pct cchat"
+
 def plot_kl_both_models(
     data_l1,
     data_batchtopk,
@@ -396,6 +421,7 @@ def plot_kl_both_models(
     text_mode="above",
     output_file=None,
     show_legend=True,
+    use_additive_steering=False,
 ):
     """
     Plot KL divergence for both L1 and BatchTopK models.
@@ -422,16 +448,16 @@ def plot_kl_both_models(
     # Define setups based on the groups from the drawing
     requested_setups = [
         # Vanilla group
-        "vanilla base2chat",  # Base->Chat
-        "patch base error cchat",  # Base error + chat reconstruction
+        VANILLA_BASE2CHAT,  # Base->Chat
+        PATCH_BASE_ERROR,  # Base error + chat reconstruction
         # Chat error
-        "patch chat error cchat",  # Chat error + chat reconstruction
+        PATCH_CHAT_ERROR,  # Chat error + chat reconstruction
         # CrossCoder Both ratios group (50%)
-        "patch all rank sum pareto 50pct cchat",  # Best latents
-        "patch all rank sum antipareto 50pct cchat",  # Worst latents
+        patch_best_latent_scaling(use_additive_steering),  # Best latents
+        patch_worst_latent_scaling(use_additive_steering),  # Worst latents
         # RND (Norm difference) group
-        "patch all dec norm diff pareto 50pct cchat",  # Best latents
-        "patch all dec norm diff antipareto 50pct cchat",  # Worst latents
+        patch_best_norm_diff(use_additive_steering),  # Best latents
+        patch_worst_norm_diff(use_additive_steering),  # Worst latents
         # Ctrl group
         # "patch base ctrl cchat",  # Control tokens replacement
     ]
@@ -511,57 +537,68 @@ def plot_kl_both_models(
         # Define bar positions with exact positioning to avoid overlap
         bar_positions = {
             # None baseline
-            "vanilla base2chat": (group_positions[0], 0),
+            VANILLA_BASE2CHAT: (group_positions[0], 0),
             # L1 group
-            "L1_patch base error cchat": (group_positions[1], method_positions["All"]),
+            "L1_" + PATCH_BASE_ERROR: (group_positions[1], method_positions["All"]),
             # Chat Error
-            "L1_patch chat error cchat": (
+            "L1_"
+            + PATCH_CHAT_ERROR: (
                 group_positions[1],
                 method_positions["Chat Error"],
             ),
-            # Latent Scaling pair (NO space but NO overlap between Best/Worst)
-            "L1_patch all rank sum pareto 50pct cchat": (
+            # Latent Scaling pair
+            "L1_"
+            + patch_best_latent_scaling(use_additive_steering): (
                 group_positions[1],
                 method_positions["Latent Scaling"] - bar_width / 2,
             ),
-            "L1_patch all rank sum antipareto 50pct cchat": (
+            "L1_"
+            + patch_worst_latent_scaling(use_additive_steering): (
                 group_positions[1],
                 method_positions["Latent Scaling"] + bar_width / 2,
             ),
-            # ∆<sub>norm</sub> pair (NO space but NO overlap between Best/Worst)
-            "L1_patch all dec norm diff pareto 50pct cchat": (
+            # ∆<sub>norm</sub> pair
+            "L1_"
+            + patch_best_norm_diff(use_additive_steering): (
                 group_positions[1],
                 method_positions["∆<sub>norm</sub>"] - bar_width / 2,
             ),
-            "L1_patch all dec norm diff antipareto 50pct cchat": (
+            "L1_"
+            + patch_worst_norm_diff(use_additive_steering): (
                 group_positions[1],
                 method_positions["∆<sub>norm</sub>"] + bar_width / 2,
             ),
             # BatchTopK group
-            "BatchTopK_patch base error cchat": (
+            "BatchTopK_"
+            + PATCH_BASE_ERROR: (
                 group_positions[2],
                 method_positions["All"],
             ),
             # Chat Error
-            "BatchTopK_patch chat error cchat": (
+            "BatchTopK_"
+            + PATCH_CHAT_ERROR: (
                 group_positions[2],
                 method_positions["Chat Error"],
             ),
-            # Latent Scaling pair (NO space but NO overlap between Best/Worst)
-            "BatchTopK_patch all rank sum pareto 50pct cchat": (
+            # Latent Scaling pair
+            "BatchTopK_"
+            + patch_best_latent_scaling(use_additive_steering): (
                 group_positions[2],
                 method_positions["Latent Scaling"] - bar_width / 2,
             ),
-            "BatchTopK_patch all rank sum antipareto 50pct cchat": (
+            "BatchTopK_"
+            + patch_worst_latent_scaling(use_additive_steering): (
                 group_positions[2],
                 method_positions["Latent Scaling"] + bar_width / 2,
             ),
-            # ∆<sub>norm</sub> pair (NO space but NO overlap between Best/Worst)
-            "BatchTopK_patch all dec norm diff pareto 50pct cchat": (
+            # ∆<sub>norm</sub> pair
+            "BatchTopK_"
+            + patch_best_norm_diff(use_additive_steering): (
                 group_positions[2],
                 method_positions["∆<sub>norm</sub>"] - bar_width / 2,
             ),
-            "BatchTopK_patch all dec norm diff antipareto 50pct cchat": (
+            "BatchTopK_"
+            + patch_worst_norm_diff(use_additive_steering): (
                 group_positions[2],
                 method_positions["∆<sub>norm</sub>"] + bar_width / 2,
             ),
@@ -605,12 +642,10 @@ def plot_kl_both_models(
             )
 
         # Add None baseline bar
-        if df_l1 is not None and "vanilla base2chat" in df_l1.index:
-            group_pos, offset = bar_positions["vanilla base2chat"]
-            mean_val = df_l1.loc["vanilla base2chat", (category, metric_type)]["mean"]
-            error_val = calculate_error(
-                df_l1, "vanilla base2chat", category, metric_type
-            )
+        if df_l1 is not None and VANILLA_BASE2CHAT in df_l1.index:
+            group_pos, offset = bar_positions[VANILLA_BASE2CHAT]
+            mean_val = df_l1.loc[VANILLA_BASE2CHAT, (category, metric_type)]["mean"]
+            error_val = calculate_error(df_l1, VANILLA_BASE2CHAT, category, metric_type)
 
             fig.add_trace(
                 go.Bar(
@@ -635,14 +670,10 @@ def plot_kl_both_models(
 
         # Add "All" bars for each crosscoder
         # L1 All
-        if df_l1 is not None and "patch base error cchat" in df_l1.index:
-            group_pos, offset = bar_positions["L1_patch base error cchat"]
-            mean_val = df_l1.loc["patch base error cchat", (category, metric_type)][
-                "mean"
-            ]
-            error_val = calculate_error(
-                df_l1, "patch base error cchat", category, metric_type
-            )
+        if df_l1 is not None and PATCH_BASE_ERROR in df_l1.index:
+            group_pos, offset = bar_positions["L1_" + PATCH_BASE_ERROR]
+            mean_val = df_l1.loc[PATCH_BASE_ERROR, (category, metric_type)]["mean"]
+            error_val = calculate_error(df_l1, PATCH_BASE_ERROR, category, metric_type)
 
             fig.add_trace(
                 go.Bar(
@@ -666,13 +697,13 @@ def plot_kl_both_models(
             add_text_annotation(group_pos + offset, mean_val, error_val, mean_val)
 
         # BatchTopK All
-        if df_batchtopk is not None and "patch base error cchat" in df_batchtopk.index:
-            group_pos, offset = bar_positions["BatchTopK_patch base error cchat"]
-            mean_val = df_batchtopk.loc[
-                "patch base error cchat", (category, metric_type)
-            ]["mean"]
+        if df_batchtopk is not None and PATCH_BASE_ERROR in df_batchtopk.index:
+            group_pos, offset = bar_positions["BatchTopK_" + PATCH_BASE_ERROR]
+            mean_val = df_batchtopk.loc[PATCH_BASE_ERROR, (category, metric_type)][
+                "mean"
+            ]
             error_val = calculate_error(
-                df_batchtopk, "patch base error cchat", category, metric_type
+                df_batchtopk, PATCH_BASE_ERROR, category, metric_type
             )
 
             fig.add_trace(
@@ -697,14 +728,10 @@ def plot_kl_both_models(
             add_text_annotation(group_pos + offset, mean_val, error_val, mean_val)
 
         # Add Chat Error bar for L1
-        if df_l1 is not None and "patch chat error cchat" in df_l1.index:
-            group_pos, offset = bar_positions["L1_patch chat error cchat"]
-            mean_val = df_l1.loc["patch chat error cchat", (category, metric_type)][
-                "mean"
-            ]
-            error_val = calculate_error(
-                df_l1, "patch chat error cchat", category, metric_type
-            )
+        if df_l1 is not None and PATCH_CHAT_ERROR in df_l1.index:
+            group_pos, offset = bar_positions["L1_" + PATCH_CHAT_ERROR]
+            mean_val = df_l1.loc[PATCH_CHAT_ERROR, (category, metric_type)]["mean"]
+            error_val = calculate_error(df_l1, PATCH_CHAT_ERROR, category, metric_type)
 
             fig.add_trace(
                 go.Bar(
@@ -728,13 +755,13 @@ def plot_kl_both_models(
             add_text_annotation(group_pos + offset, mean_val, error_val, mean_val)
 
         # Add Chat Error bar for BatchTopK
-        if df_batchtopk is not None and "patch chat error cchat" in df_batchtopk.index:
-            group_pos, offset = bar_positions["BatchTopK_patch chat error cchat"]
-            mean_val = df_batchtopk.loc[
-                "patch chat error cchat", (category, metric_type)
-            ]["mean"]
+        if df_batchtopk is not None and PATCH_CHAT_ERROR in df_batchtopk.index:
+            group_pos, offset = bar_positions["BatchTopK_" + PATCH_CHAT_ERROR]
+            mean_val = df_batchtopk.loc[PATCH_CHAT_ERROR, (category, metric_type)][
+                "mean"
+            ]
             error_val = calculate_error(
-                df_batchtopk, "patch chat error cchat", category, metric_type
+                df_batchtopk, PATCH_CHAT_ERROR, category, metric_type
             )
 
             fig.add_trace(
@@ -765,11 +792,11 @@ def plot_kl_both_models(
                 worst_setup = None
 
                 if method == "Latent Scaling":
-                    best_setup = "patch all rank sum pareto 50pct cchat"
-                    worst_setup = "patch all rank sum antipareto 50pct cchat"
+                    best_setup = patch_best_latent_scaling(use_additive_steering)
+                    worst_setup = patch_worst_latent_scaling(use_additive_steering)
                 else:  # ∆<sub>norm</sub>
-                    best_setup = "patch all dec norm diff pareto 50pct cchat"
-                    worst_setup = "patch all dec norm diff antipareto 50pct cchat"
+                    best_setup = patch_best_norm_diff(use_additive_steering)
+                    worst_setup = patch_worst_norm_diff(use_additive_steering)
 
                 # Add Best bar
                 if best_setup in df_l1.index:
@@ -850,11 +877,11 @@ def plot_kl_both_models(
                 worst_setup = None
 
                 if method == "Latent Scaling":
-                    best_setup = "patch all rank sum pareto 50pct cchat"
-                    worst_setup = "patch all rank sum antipareto 50pct cchat"
+                    best_setup = patch_best_latent_scaling(use_additive_steering)
+                    worst_setup = patch_worst_latent_scaling(use_additive_steering)
                 else:  # ∆<sub>norm</sub>
-                    best_setup = "patch all dec norm diff pareto 50pct cchat"
-                    worst_setup = "patch all dec norm diff antipareto 50pct cchat"
+                    best_setup = patch_best_norm_diff(use_additive_steering)
+                    worst_setup = patch_worst_norm_diff(use_additive_steering)
 
                 # Add Best bar
                 if best_setup in df_batchtopk.index:
@@ -1023,17 +1050,25 @@ def plot_kl_both_models(
         return fig
 
 
-# Example usage with different options
-# Default: k_first category with text above bars
+# %%
 fig = plot_kl_both_models(
     data_l1,
     data_batchtopk,
     text_mode="in",
     show_legend=True,
     output_file="results/first_k_kl_both_models.pdf",
+    use_additive_steering=True,
 )
 
-# Alternative: all category with text inside bars
+plot_kl_both_models(
+    data_l1,
+    data_batchtopk,
+    text_mode="in",
+    show_legend=True,
+    output_file="results/first_k_kl_both_models_replace.pdf",
+    use_additive_steering=False,
+)
+
 fig = plot_kl_both_models(
     data_l1,
     data_batchtopk,
@@ -1041,7 +1076,19 @@ fig = plot_kl_both_models(
     text_mode="in",
     show_legend=False,
     output_file="results/all_kl_both_models.pdf",
+    use_additive_steering=True,
 )
+
+fig = plot_kl_both_models(
+    data_l1,
+    data_batchtopk,
+    category="all",
+    text_mode="in",
+    show_legend=False,
+    output_file="results/all_kl_both_models_replace.pdf",
+    use_additive_steering=False,
+)
+
 
 # fig = plot_kl_both_models(data_l1, data_batchtopk, category="post_k_first", text_mode="in", show_legend=False,
 #                          output_file="results/post_k_first_kl_both_models.pdf")
@@ -1051,205 +1098,3 @@ fig = plot_kl_both_models(
 #  output_file="results/first_k_kl_instruct_both_models_no_text_no_legend.pdf")
 
 # %%
-
-
-# %%
-def plot_kl_instruct(data):
-
-    metric_type = "kl-instruct"
-    categories = ["k_first"]  # Only k_first category
-
-    # Define setups based on the groups from the drawing
-    requested_setups = [
-        # Vanilla group
-        "vanilla base2chat",  # Base->Chat
-        "patch base error cchat",  # Base error + chat reconstruction
-        # CrossCoder Both ratios group (50%)
-        "patch all rank sum pareto 50pct cchat",  # Best latents
-        "patch all rank sum antipareto 50pct cchat",  # Worst latents
-        # RND (Norm difference) group
-        "patch all dec norm diff pareto 50pct cchat",  # Best latents
-        "patch all dec norm diff antipareto 50pct cchat",  # Worst latents
-        # Ctrl group
-        # "patch base ctrl cchat",  # Control tokens replacement
-    ]
-
-    # Build dataframe for selected setups across categories
-    df = build_complete_dataframe(data)
-    if df is None:
-        print("No valid data available for any setup")
-    else:
-        # Filter for requested metric and categories
-        df = df.loc[:, (categories, metric_type)]
-
-        # Find which setups are available in the data
-        valid_setups = [s for s in requested_setups if s in df.index]
-        missing_setups = [s for s in requested_setups if s not in df.index]
-
-        if missing_setups:
-            print("Warning: Missing data for setups:", missing_setups)
-
-        if not valid_setups:
-            print("No data available for any of the requested setups")
-        else:
-            df = df.loc[valid_setups]
-            df = df.dropna(axis=1, how="all")
-
-            # Define color groups (using different shades for each group)
-            color_groups = {
-                # Vanilla group - blues
-                "vanilla base2chat": "#0d47a1",
-                "patch base error cchat": "#2196f3",
-                # Ours group (CrossCoder Both) - greens
-                "patch all rank sum pareto 50pct cchat": "#1b5e20",
-                "patch all rank sum antipareto 50pct cchat": "#4caf50",
-                # RND group - purples
-                "patch all dec norm diff pareto 50pct cchat": "#4a148c",
-                "patch all dec norm diff antipareto 50pct cchat": "#9c27b0",
-                # Ctrl group - orange
-                "patch base ctrl cchat": "#e65100",
-            }
-
-            # Define hierarchical labels
-            group_labels = [
-                "Baselines",
-                "Latent Scaling",
-                "∆<sub>norm</sub>",
-            ]  # , "Template"]
-            sub_labels = [
-                ["None", "All"],
-                ["Lowest 50%", "Highest 50%"],
-                ["Lowest 50%", "Highest 50%"],
-            ]  # , ["", ""]]
-
-            fig = go.Figure()
-
-            # Calculate positions for grouped bars
-            n_groups = len(group_labels)
-            group_positions = np.arange(n_groups)
-            group_width = 0.75
-            bar_width = group_width / 2
-
-            for i, setup in enumerate(requested_setups):
-                group_idx = i // 2
-
-                # Modify offset calculation to center the single bar in the template group
-                if group_idx == 3:  # Template group
-                    offset = 0  # Center the bar
-                else:
-                    offset = -group_width / 4 if i % 2 == 0 else group_width / 4
-
-                current_width = bar_width
-
-                mean_val = df.loc[setup, ("k_first", metric_type)]["mean"]
-                error_val = (
-                    1.96
-                    * (
-                        df.loc[setup, ("k_first", metric_type)]["variance"]
-                        / df.loc[setup, ("k_first", metric_type)]["n"]
-                    )
-                    ** 0.5
-                )
-
-                fig.add_trace(
-                    go.Bar(
-                        x=[group_positions[group_idx] + offset],
-                        y=[mean_val],
-                        width=current_width,
-                        marker_color=color_groups[setup],
-                        showlegend=False,
-                        name=setup,
-                        error_y=dict(
-                            type="data",
-                            array=[error_val],
-                            visible=True,
-                            thickness=1.5,
-                            width=6,
-                        ),
-                    )
-                )
-
-                # Add value labels inside bars (vertical)
-                fig.add_annotation(
-                    x=group_positions[group_idx] + offset,
-                    y=mean_val / 2,  # Center of the bar
-                    text=f"{mean_val:.3f}",
-                    showarrow=False,
-                    textangle=270,  # Vertical text
-                    font=dict(size=14, color="white"),
-                )
-
-            # Update layout
-            fig.update_layout(
-                title=None,  # Remove title
-                showlegend=False,
-                height=400,
-                margin=dict(t=20, b=20, l=20, r=20),  # Reduce margins
-                xaxis=dict(
-                    ticktext=group_labels,
-                    tickvals=group_positions,
-                    title="",
-                    tickfont=dict(size=16),
-                    showgrid=False,
-                    showline=False,
-                    linewidth=1,
-                    linecolor="black",
-                ),
-                yaxis=dict(
-                    title="KL divergence",
-                    titlefont=dict(size=16),
-                    tickfont=dict(size=16),
-                    showgrid=True,
-                    gridwidth=1,
-                    gridcolor="lightgrey",
-                    zeroline=True,
-                    zerolinewidth=1,
-                    zerolinecolor="grey",
-                    showline=False,
-                    linewidth=1,
-                    linecolor="black",
-                    # Add explicit tick values and make the last one bold
-                    tickmode="array",
-                    tickvals=[0, 0.2, 0.4, 0.6, 0.8, 1.0],
-                    ticktext=["0.0", "0.2", "0.4", "0.6", "0.8", "<b>1.0</b>"],
-                ),
-                bargap=0,
-                plot_bgcolor="white",
-                bargroupgap=0.05,
-            )
-
-            # Add sub-labels (A/B) below each bar
-            for i in range(n_groups - 1):
-                for j, sub_label in enumerate(sub_labels[i]):
-                    fig.add_annotation(
-                        x=group_positions[i]
-                        + (-group_width / 4 if j == 0 else group_width / 4),
-                        y=-0.01,
-                        text=sub_label,
-                        showarrow=False,
-                        yshift=-10,
-                        font=dict(size=14),
-                    )
-
-            # Adjust x-axis range to match group positioning
-            fig.update_xaxes(range=[-0.5, len(group_positions) - 0.5])
-
-            fig.update_layout(
-                title=metric_type,
-                showlegend=False,
-                height=350,
-                width=500,
-                margin=dict(t=0, b=0, l=0, r=0),  # Reduce margins
-            )
-            # Remove title
-            fig.update_layout(title=None)
-
-            # Make the topmost y-axis tick bold
-            fig.update_yaxes(tickfont=dict(size=16))
-
-            fig.show()
-            # Get the current y-axis ticks
-            y_ticks = fig.layout.yaxis.ticktext
-
-            fig.write_image("results/first_k_kl_instruct.pdf")
-            # Show plot
