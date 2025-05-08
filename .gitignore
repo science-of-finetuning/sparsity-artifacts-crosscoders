@@ -25,3 +25,5 @@ run/run1.sh
 run/run2.sh
 *.pdf
 *.svg
+autointerp/data
+autointerp/explanations.json
