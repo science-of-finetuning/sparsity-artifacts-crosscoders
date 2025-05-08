@@ -23,3 +23,5 @@ playground.ipynb
 _archive/**
 run/run1.sh
 run/run2.sh
+*.pdf
+*.svg
