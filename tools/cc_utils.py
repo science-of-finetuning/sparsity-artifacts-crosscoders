@@ -21,6 +21,7 @@ from dictionary_learning.trainers.batch_top_k import BatchTopKSAE
 from nnterp import load_model
 from tiny_dashboard import OfflineFeatureCentricDashboard
 from tiny_dashboard.dashboard_implementations import CrosscoderOnlineFeatureDashboard
+from ..CONFIG import HF_NAME
 
 dfs = defaultdict(lambda: None)
 df_hf_repo_legacy = {
@@ -32,11 +33,11 @@ df_hf_repo_legacy = {
 }
 
 
-def stats_repo_id(crosscoder):
-    return f"science-of-finetuning/diffing-stats-{crosscoder}"
+def stats_repo_id(crosscoder, author=HF_NAME):
+    return f"{author}/diffing-stats-{crosscoder}"
 
 
-def load_latent_df(crosscoder_or_path=None):
+def load_latent_df(crosscoder_or_path=None, author=HF_NAME):
     """Load the latent_df for the given crosscoder."""
     if crosscoder_or_path is None:
         crosscoder_or_path = "l13_crosscoder"
@@ -51,7 +52,7 @@ def load_latent_df(crosscoder_or_path=None):
         # Local model
         df_path = Path(crosscoder_or_path)
     else:
-        repo_id = f"science-of-finetuning/diffing-stats-{crosscoder_or_path}"
+        repo_id = f"{author}/diffing-stats-{crosscoder_or_path}"
         try:
             df_path = hf_hub_download(
                 repo_id=repo_id,
@@ -74,6 +75,7 @@ def push_latent_df(
     commit_message=None,
     confirm=True,
     create_repo_if_missing=False,
+    author=HF_NAME,
 ):
     """
     Push a new feature_df.csv to the hub.
@@ -172,7 +174,7 @@ def push_latent_df(
         df_hf_repo_legacy.get(crosscoder) if hasattr(df_hf_repo_legacy, "get") else None
     )
     if repo_id is None:
-        repo_id = f"science-of-finetuning/diffing-stats-{crosscoder}"
+        repo_id = f"{author}/diffing-stats-{crosscoder}"
 
     with TemporaryDirectory() as tmpdir:
         df.to_csv(Path(tmpdir) / "feature_df.csv")
@@ -217,14 +219,14 @@ def model_path_to_name(model_path: Path):
         return model_path.name
 
 
-def push_dictionary_model(model_path: Path):
+def push_dictionary_model(model_path: Path, author=HF_NAME):
     """Push a dictionary model to the Hugging Face Hub.
 
     Args:
         model_path: The path to the model to push
     """
     model_name = model_path_to_name(model_path)
-    repo_id = f"science-of-finetuning/{model_name}"
+    repo_id = f"{author}/{model_name}"
     model_dir = model_path.parent
     config_path = model_dir / "config.json"
 
@@ -421,7 +423,9 @@ def load_crosscoder(crosscoder=None):
             raise ValueError(f"Unknown crosscoder: {crosscoder}")
 
 
-def load_dictionary_model(model_name: str | Path, is_sae: bool | None = None):
+def load_dictionary_model(
+    model_name: str | Path, is_sae: bool | None = None, author=HF_NAME
+):
     """Load a dictionary model from a local path or HuggingFace Hub.
 
     Args:
@@ -438,7 +442,7 @@ def load_dictionary_model(model_name: str | Path, is_sae: bool | None = None):
             model_name = df_hf_repo_legacy[str(model_name)]
         else:
             model_name = str(model_name)
-        model_id = "science-of-finetuning/" + str(model_name)
+        model_id = f"{author}/{str(model_name)}"
         # Download config to determine model type
         try:
             config_path = hf_hub_download(
@@ -754,14 +758,14 @@ def offline_dashboard(crosscoder, max_example_per_quantile=20, tokenizer=None):
     return dashboard
 
 
-def get_available_models():
+def get_available_models(author=HF_NAME):
     """Fetch CrossCoder models from Hugging Face"""
     try:
         # Initialize the Hugging Face API
         api = HfApi()
 
         # Get models from the science-of-finetuning organization
-        models = api.list_models(author="science-of-finetuning")
+        models = api.list_models(author=author)
 
         # Filter for CrossCoder models (you may need to adjust this filter)
         crosscoder_models = [model.id.split("/")[-1] for model in models]

@@ -1,0 +1,1 @@
+HF_NAME = "science-of-finetuning"  # org / user to upload to

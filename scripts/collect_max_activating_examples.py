@@ -19,6 +19,7 @@ import time
 sys.path.append(".")
 
 from tools.cache_utils import LatentActivationCache
+from CONFIG import HF_NAME
 
 th.set_grad_enabled(False)
 
@@ -435,7 +436,7 @@ def main():
         wandb.finish()
 
     # Upload to HuggingFace Hub
-    repo = "science-of-finetuning/diffing-stats-" + args.crosscoder
+    repo = f"{HF_NAME}/diffing-stats-" + args.crosscoder
     if not args.test:
         print(f"Uploading to HuggingFace Hub: {repo}")
         for ftype in ["pt", "db"]:

@@ -2,28 +2,11 @@ import sys
 from pathlib import Path
 
 sys.path.append(str(Path(__file__).parent.parent))
-import pandas as pd
-import numpy as np
 import torch as th
-import plotly.graph_objects as go
-import plotly.express as px
-from tqdm.auto import tqdm, trange
-from plotly.subplots import make_subplots
-import matplotlib.pyplot as plt
+from tqdm.auto import trange
 from argparse import ArgumentParser
-
-from tools.utils import load_latent_df, push_latent_df, apply_masks
-from tools.cc_utils import (
-    chat_only_latent_indices,
-    base_only_latent_indices,
-    shared_latent_indices,
-)
-from tools.latent_scaler.plot import plot_scaler_histograms
-from tools.latent_scaler.utils import load_betas, get_beta_from_index
-from tools.paths import *
-from transformers import AutoTokenizer, AutoModelForCausalLM
 from tools.utils import load_activation_dataset, load_dictionary_model
-from tools.cache_utils import SampleCache
+from transformers import AutoTokenizer
 
 
 @th.no_grad()
@@ -274,7 +257,7 @@ def main():
         th.save(combined_max_activations.cpu(), out_dir / "max_activations.pt")
 
     # Print some stats about max activations
-    print(f"Maximum activation statistics:")
+    print("Maximum activation statistics:")
     print(f"  Average: {combined_max_activations.mean().item():.4f}")
     print(f"  Maximum: {combined_max_activations.max().item():.4f}")
     print(f"  Minimum: {combined_max_activations.min().item():.4f}")
@@ -284,9 +267,7 @@ def main():
         from huggingface_hub import HfApi
 
         api = HfApi()
-
-        # Define repository ID for the dataset
-        repo_id = f"science-of-finetuning/latent-activations-{args.dictionary_model}"
+        repo_id = f"/latent-activations-{args.dictionary_model}"
 
         # Upload all tensors to HF Hub directly from saved files
         api.upload_file(
