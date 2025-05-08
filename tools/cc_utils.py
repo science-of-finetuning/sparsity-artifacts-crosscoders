@@ -21,7 +21,7 @@ from dictionary_learning.trainers.batch_top_k import BatchTopKSAE
 from nnterp import load_model
 from tiny_dashboard import OfflineFeatureCentricDashboard
 from tiny_dashboard.dashboard_implementations import CrosscoderOnlineFeatureDashboard
-from ..CONFIG import HF_NAME
+from CONFIG import HF_NAME
 
 dfs = defaultdict(lambda: None)
 df_hf_repo_legacy = {
