@@ -50,7 +50,7 @@ def load_latent_df(crosscoder_or_path=None):
         # Local model
         df_path = Path(crosscoder_or_path)
     else:
-        repo_id = f"science-of-finetuning/diffing-stats-{crosscoder_or_path}"
+        repo_id = stats_repo_id(crosscoder_or_path)
         try:
             df_path = hf_hub_download(
                 repo_id=repo_id,
@@ -171,7 +171,7 @@ def push_latent_df(
         df_hf_repo_legacy.get(crosscoder) if hasattr(df_hf_repo_legacy, "get") else None
     )
     if repo_id is None:
-        repo_id = f"science-of-finetuning/diffing-stats-{crosscoder}"
+        repo_id = stats_repo_id(crosscoder)
 
     with TemporaryDirectory() as tmpdir:
         df.to_csv(Path(tmpdir) / "feature_df.csv")
@@ -509,7 +509,7 @@ def online_dashboard(
         crosscoder: the crosscoder to use
         max_acts: a dictionary of max activations for each latent. If None, will be loaded from the latent_df of the crosscoder.
     """
-    coder = _crosscoder(crosscoder)
+    coder = load_dictionary_model(crosscoder)
     if crosscoder_device == "auto":
         crosscoder_device = "cuda:0" if th.cuda.is_available() else "cpu"
     coder = coder.to(crosscoder_device)

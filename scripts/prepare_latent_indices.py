@@ -44,7 +44,7 @@ def main():
     parser.add_argument(
         "--low-norm-diff-sample-size",
         type=int,
-        default=3000,
+        default=3176,
         help="Number of low norm diff indices to sample"
     )
     args = parser.parse_args()
