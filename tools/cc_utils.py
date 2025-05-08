@@ -12,6 +12,8 @@ from pandas.io.formats.printing import pprint_thing
 import torch as th
 from transformers import AutoTokenizer
 from huggingface_hub import hf_hub_download, hf_api
+from huggingface_hub import HfApi
+
 from dictionary_learning.dictionary import Dictionary
 
 from dictionary_learning.dictionary import BatchTopKCrossCoder, CrossCoder
@@ -420,7 +422,7 @@ def load_crosscoder(crosscoder=None):
             raise ValueError(f"Unknown crosscoder: {crosscoder}")
 
 
-def load_dictionary_model(model_name: str | Path):
+def load_dictionary_model(model_name: str | Path, is_sae: bool | None = None):
     """Load a dictionary model from a local path or HuggingFace Hub.
 
     Args:
@@ -456,7 +458,9 @@ def load_dictionary_model(model_name: str | Path):
         except Exception as e:
             print(f"Error loading model from hub: {e}")
             # If no model_type in config, try to infer from other fields
-            if config is not None and "k" in config and "dict_size" in config:
+            if is_sae or (
+                config is not None and "k" in config and "dict_size" in config
+            ):
                 return BatchTopKSAE.from_pretrained(model_id, from_hub=True)
             else:
                 return CrossCoder.from_pretrained(model_id, from_hub=True)
@@ -745,3 +749,22 @@ def offline_dashboard(crosscoder, max_example_per_quantile=20, tokenizer=None):
     )
     dashboard.display()
     return dashboard
+
+
+def get_available_models():
+    """Fetch CrossCoder models from Hugging Face"""
+    try:
+        # Initialize the Hugging Face API
+        api = HfApi()
+
+        # Get models from the science-of-finetuning organization
+        models = api.list_models(author="science-of-finetuning")
+
+        # Filter for CrossCoder models (you may need to adjust this filter)
+        crosscoder_models = [model.id.split("/")[-1] for model in models]
+
+        return crosscoder_models
+    except Exception as e:
+        # If there's an error fetching models, return just the dummy option
+        print(f"Error fetching CrossCoder models: {e}")
+        return []

@@ -5,6 +5,7 @@ import pytest
 import random
 import numpy as np
 import pandas as pd
+from collections import defaultdict
 
 # Add the project root directory to Python path
 project_root = Path(__file__).parent.parent
@@ -76,19 +77,13 @@ def compare_stats(stats1, stats2, rtol=1e-5):
     )
 
 
-@pytest.mark.parametrize("seed", [42, 123, 456, None, None])
-@pytest.mark.parametrize(
-    "num_values,num_tokens,num_latents",
-    [(800, 500, 20), (1000, 10, 500), (10, 700, 400)],
-)
-def test_sparse(num_values, num_tokens, num_latents, seed, device="cpu"):
+def create_toy_data(num_values, num_tokens, num_latents, seed=None, device="cpu"):
     if seed is None:
         seed = th.randint(0, 10000, ()).to(device)
         # seed = 8308
         print(f"seed:{seed}")
     th.manual_seed(seed)
     # Create test data
-    bucket_edges = th.tensor([0.1, 1, 2, 4], device=device)
     values = th.rand(num_values).to(device) * 5
     rnd_tokens = th.randint(0, num_tokens, (num_values * 30,)).to(device)
     rnd_features = th.randint(0, num_latents, (num_values * 30,)).to(device)
@@ -100,6 +95,32 @@ def test_sparse(num_values, num_tokens, num_latents, seed, device="cpu"):
         rnd_features = th.randint(0, num_latents, (num_values * 30 * i,)).to(device)
         indices = th.stack([rnd_tokens, rnd_features], dim=1).unique(dim=0)[:num_values]
         i += 1
+    return indices, values
+
+
+def check_array_equality(actual, expected, name):
+    if not np.allclose(actual, expected, equal_nan=True):
+        err_str = ""
+        for i, (a, b) in enumerate(zip(actual, expected)):
+            if a == b or (np.isnan(a) and np.isnan(b)):
+                continue
+            err_str += f"{i}: {a} != {b} - "
+            print(f"{i}: {a} != {b}")
+        if not err_str:
+            print("No actual differences found")
+        assert False, f"{name} mismatch: " + err_str
+
+
+@pytest.mark.parametrize("seed", [42, 123, 456, None, None])
+@pytest.mark.parametrize(
+    "num_values,num_tokens,num_latents",
+    [(800, 500, 20), (1000, 10, 500), (10, 700, 400)],
+)
+def test_sparse_and_dense_stats(
+    num_values, num_tokens, num_latents, seed, device="cpu"
+):
+    bucket_edges = th.tensor([0.1, 1, 2, 4], device=device)
+    indices, values = create_toy_data(num_values, num_tokens, num_latents, seed, device)
     group_mask = th.randint(0, 2, (num_tokens,), dtype=th.bool).to(device)
     neps = 0
     for i in range(num_values):
@@ -134,7 +155,6 @@ def test_sparse(num_values, num_tokens, num_latents, seed, device="cpu"):
         else:
             expected_means[0, f_idx, 4] += val_
             expected_counts[0, f_idx, 4] += 1
-
     # Compute means
     for bucket in range(5):
         expected_means[0, :, bucket] /= expected_counts[0, :, bucket].float()
@@ -156,30 +176,16 @@ def test_sparse(num_values, num_tokens, num_latents, seed, device="cpu"):
         bucket_edges=bucket_edges,
     )
     stats_dense.update(dense.unsqueeze(0), group_mask.unsqueeze(0), "test")
-    mismatch = False
+    assert stats_dense.token_counts["test"] == group_mask.sum().item()
+    assert stats_sparse.token_counts["test"] == group_mask.sum().item()
     for stats, name in [(stats_sparse, "sparse"), (stats_dense, "dense")]:
         print(f"Testing {name} stats...")
-        if not th.allclose(stats._means, th.nan_to_num(expected_means, 0)):
-            print(f"Expected means: {expected_means}")
-            print(f"Actual means: {stats._means}")
-            mismatch = True
-            print(f"Values: {values}")
-            print(f"Mask: {group_mask}")
-            print(f"Indices: {indices}")
+
         # Plot histogram of differences between expected and actual means
         means_diff = stats._means - th.nan_to_num(expected_means, 0)
         if means_diff.abs().max() > 1e-6:
             print(f"Max difference in means: {means_diff.max().item():.2e}")
             print(f"Mean difference in means: {means_diff.mean().item():.2e}")
-            import matplotlib.pyplot as plt
-
-            plt.figure(figsize=(10, 6))
-            plt.hist(means_diff.cpu().numpy().flatten(), bins=50)
-            plt.yscale("log")
-            plt.xlabel("Difference")
-            plt.ylabel("Count")
-            plt.title(f"Distribution of Differences in Means ({name}) seed:{seed}")
-            plt.show()
             for lat in range(num_latents):
                 for buck in range(5):
                     if abs(means_diff[0, lat, buck]) > 1e-6:
@@ -190,111 +196,101 @@ def test_sparse(num_values, num_tokens, num_latents, seed, device="cpu"):
         if not th.allclose(stats._counts, expected_counts):
             print(f"Expected counts: {expected_counts}")
             print(f"Actual counts: {stats._counts}")
+            assert False, f"Counts mismatch for {name}"
+        if not th.allclose(stats._means, th.nan_to_num(expected_means, 0)):
+            print(f"Expected means: {expected_means}")
+            print(f"Actual means: {stats._means}")
+            print(f"Values: {values}")
+            print(f"Mask: {group_mask}")
+            print(f"Indices: {indices}")
+            assert False, f"Means mismatch for {name}"
 
 
-# def test_sparse_dense_consistency(seed):
-#     """Test that sparse and dense inputs produce the same results."""
-#     # Set random seeds for reproducibility
-#     random.seed(seed)
-#     np.random.seed(seed)
-#     th.manual_seed(seed)
+@pytest.mark.parametrize("seed", [42, 123, 456, None, None])
+@pytest.mark.parametrize(
+    "num_values,num_tokens,num_latents",
+    [(800, 500, 20), (1000, 10, 500), (10, 700, 400)],
+)
+def test_compute_global_stats(num_values, num_tokens, num_latents, seed, device="cpu"):
+    if seed is None:
+        seed = th.randint(0, 10000, ()).to(device)
+        print(f"seed:{seed}")
+    indices, values = create_toy_data(num_values, num_tokens, num_latents, seed, device)
+    token_groups = [
+        "ctrl_tokens",
+        "non_ctrl_tokens",
+        "assistant_tokens",
+        "user_tokens",
+        "bos",
+        "all_tokens",
+    ]
+    group_to_idx = {group: i for i, group in enumerate(token_groups)}
+    masks = {}
+    th.manual_seed(seed + 1)
+    masks["ctrl_tokens"] = th.randint(0, 2, (num_tokens,), dtype=th.bool).to(device)
+    masks["non_ctrl_tokens"] = ~masks["ctrl_tokens"]
+    masks["assistant_tokens"] = th.randint(0, 2, (num_tokens,), dtype=th.bool).to(
+        device
+    )
+    masks["user_tokens"] = ~masks["assistant_tokens"]
+    masks["bos"] = th.zeros(num_tokens, dtype=th.bool).to(device)
+    masks["bos"][0] = True
+    masks["all_tokens"] = th.ones(num_tokens, dtype=th.bool).to(device)
+    total_counts = th.tensor(
+        [masks[group_name].sum().item() for group_name in token_groups],
+        device=device,
+    )
+    counts = th.zeros((len(token_groups), num_latents), dtype=th.int64)
+    for group_name, group_mask in masks.items():
+        for i, (pos, latent) in enumerate(indices):
+            if group_mask[pos] and values[i] > EPSILON:
+                counts[group_to_idx[group_name]][latent] += 1
+    frequencies = counts / total_counts.unsqueeze(-1)
+    ctrl_percentage = counts[group_to_idx["ctrl_tokens"]] / (
+        counts[group_to_idx["ctrl_tokens"]] + counts[group_to_idx["non_ctrl_tokens"]]
+    )
+    assistant_percentage = counts[group_to_idx["assistant_tokens"]] / (
+        counts[group_to_idx["assistant_tokens"]] + counts[group_to_idx["user_tokens"]]
+    )
+    stats = ActivationStats(
+        num_latents,
+        max_activations=th.ones(num_latents, device=device),
+        device=device,
+        token_groups=token_groups + [f"ctrl_token_{i}" for i in range(1, 11)],
+        bucket_edges=th.tensor([0.1, 1, 2, 4], device=device),
+    )
+    stats.update((indices, values), masks["ctrl_tokens"], "ctrl_tokens")
+    stats.update((indices, values), masks["non_ctrl_tokens"], "non_ctrl_tokens")
+    stats.update((indices, values), masks["assistant_tokens"], "assistant_tokens")
+    stats.update((indices, values), masks["user_tokens"], "user_tokens")
+    stats.update((indices, values), masks["bos"], "bos")
+    stats.update((indices, values), masks["all_tokens"], "all_tokens")
+    check_array_equality(
+        stats._counts.sum(dim=-1)[: len(token_groups)], counts.cpu().numpy(), "Counts"
+    )
+    act_stats = stats.finish().compute_latent_stats().loc[(-1,)]
+    assert np.allclose(
+        act_stats["lmsys_ctrl_%"],
+        ctrl_percentage.double().cpu().numpy(),
+        equal_nan=True,
+    )
+    check_array_equality(
+        act_stats["lmsys_assistant_%"],
+        assistant_percentage.double().cpu().numpy(),
+        "Assistant percentages",
+    )
 
-#     # Create mock data
-#     mock_data = MockActivationData(num_features=100, seq_length=20, sparsity=0.1)
-
-#     device = th.device("cuda" if th.cuda.is_available() else "cpu")
-
-#     # Initialize stats objects for both dense and sparse
-#     dense_stats = ActivationStats(
-#         mock_data.num_features, mock_data.max_activations, device=device
-#     )
-
-#     sparse_stats = ActivationStats(
-#         mock_data.num_features, mock_data.max_activations, device=device
-#     )
-#     assert (
-#         mock_data.dense_activations.dim() == 3
-#     ), f"Dense activations has no batch dim? {mock_data.dense_activations.shape}"
-#     # Update stats with dense data
-#     for group_name, group_mask in mock_data.group_masks.items():
-#         dense_stats.update(
-#             mock_data.dense_activations.to(device),
-#             group_mask.to(device),
-#             group_name,
-#         )
-
-#     # Update stats with sparse data
-#     for group_name, group_mask in mock_data.group_masks.items():
-#         sparse_stats.update(
-#             (mock_data.sparse_indices.to(device), mock_data.sparse_values.to(device)),
-#             group_mask.to(device),
-#             group_name,
-#         )
-
-#     # Compute final stats
-#     dense_computed_stats = dense_stats.finish()
-#     sparse_computed_stats = sparse_stats.finish()
-
-#     # Compare results
-#     compare_stats(dense_computed_stats, sparse_computed_stats)
-
-
-# def test_edge_cases():
-#     """Test edge cases like empty sequences or all zeros."""
-#     device = th.device("cuda" if th.cuda.is_available() else "cpu")
-
-#     # Test with empty sequences
-#     mock_data = MockActivationData(num_features=10, seq_length=0)
-
-#     dense_stats = ActivationStats(
-#         mock_data.num_features, mock_data.max_activations, device
-#     )
-#     sparse_stats = ActivationStats(
-#         mock_data.num_features, mock_data.max_activations, device
-#     )
-#     assert (
-#         mock_data.dense_activations.dim() == 3
-#     ), f"Dense activations has no batch dim? {mock_data.dense_activations.shape}"
-
-#     for group_name, group_mask in mock_data.group_masks.items():
-#         dense_stats.update(
-#             mock_data.dense_activations.to(device),
-#             group_mask.to(device),
-#             group_name,
-#         )
-#         sparse_stats.update(
-#             (mock_data.sparse_indices.to(device), mock_data.sparse_values.to(device)),
-#             group_mask.to(device),
-#             group_name,
-#         )
-
-#     compare_stats(dense_stats.finish(), sparse_stats.finish())
-
-#     # Test with all zero activations
-#     mock_data = MockActivationData(num_features=10, seq_length=5)
-#     mock_data.dense_activations.zero_()
-#     mock_data.sparse_values.zero_()
-
-#     dense_stats = ActivationStats(
-#         mock_data.num_features, mock_data.max_activations, device
-#     )
-#     sparse_stats = ActivationStats(
-#         mock_data.num_features, mock_data.max_activations, device
-#     )
-#     assert (
-#         mock_data.dense_activations.dim() == 3
-#     ), f"Dense activations has no batch dim? {mock_data.dense_activations.shape}"
-
-#     for group_name, group_mask in mock_data.group_masks.items():
-#         dense_stats.update(
-#             mock_data.dense_activations.to(device),
-#             group_mask.to(device),
-#             group_name,
-#         )
-#         sparse_stats.update(
-#             (mock_data.sparse_indices.to(device), mock_data.sparse_values.to(device)),
-#             group_mask.to(device),
-#             group_name,
-#         )
-
-#     compare_stats(dense_stats.finish(), sparse_stats.finish())
+    check_array_equality(
+        act_stats["lmsys_freq"],
+        frequencies[group_to_idx["all_tokens"]].double().cpu().numpy(),
+        "Frequency",
+    )
+    for group_name in token_groups:
+        if group_name == "all_tokens":
+            continue
+        df_name = group_name.replace("_tokens", "")
+        check_array_equality(
+            act_stats[f"lmsys_{df_name}_freq"],
+            frequencies[group_to_idx[group_name]].double().cpu().numpy(),
+            f"Frequency for {group_name}",
+        )

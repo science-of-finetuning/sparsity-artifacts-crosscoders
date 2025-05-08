@@ -385,7 +385,8 @@ def compute_quantile_activating_examples(
 
 
 # python scripts/collect_max_activating_examples.py gemma-2-2b-L13-k100-lr1e-04-local-shuffling-CCLoss --latent-activation-cache-path /workspace/data/latent_activations
-# python scripts/collect_max_activating_examples.py  diffing-stats-gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04 --latent-activation-cache-path /workspace/data/latent_activations
+# python scripts/collect_max_activating_examples.py  gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04 --latent-activation-cache-path /workspace/data/latent_activations
+
 
 def main():
     parser = argparse.ArgumentParser()

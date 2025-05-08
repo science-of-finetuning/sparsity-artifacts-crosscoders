@@ -28,7 +28,7 @@ FLAGS="--activation-store-dir $ACTIVATION_DIR \
 --batch-size $BATCH_SIZE \
 --layer $LAYER \
 --base-model $BASE_MODEL \
---chat-model $INSTRUCT_MODEL \
+--chat-model $CHAT_MODEL \
 --same-init-for-all-layers \
 --lr $LR \
 --init-with-transpose \

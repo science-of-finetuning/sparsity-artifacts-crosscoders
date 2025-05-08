@@ -23,7 +23,13 @@ import plotly.express as px
 from transformers import AutoTokenizer
 
 sys.path.append(".")
-from tools.utils import tokenize_with_ctrl_ids, patch_tokenizer, gemma_tokens_to_conv, load_latent_df
+from tools.utils import (
+    tokenize_with_ctrl_ids,
+    patch_tokenizer,
+    gemma_tokens_to_conv,
+    load_latent_df,
+    push_latent_df,
+)
 from tools.cache_utils import LatentActivationCache
 
 
@@ -297,6 +303,7 @@ class ActivationStats:
 
     @th.no_grad()
     def update_sparse(self, sparse_acts, group_mask, group_name):
+        self.token_counts[group_name] += group_mask.sum().item()
         (indices, activations) = sparse_acts
         noise_mask = activations > EPSILON
         indices = indices[noise_mask]
@@ -344,7 +351,7 @@ class ActivationStats:
         self._means[group_idx][active_latents] = th.where(
             nonzero_mask,
             self._means[group_idx][active_latents] / counts,
-            self._means[group_idx][active_latents]
+            self._means[group_idx][active_latents],
         )
         # self._means[group_idx][active_latents][counts != 0] /= counts[counts != 0]
         # add 1 for each sorted_latent, bucket index
@@ -382,6 +389,7 @@ class ActivationStats:
             return self.update_sparse(activations, group_mask, group_name)
         if len(group_activations) == 0:
             return
+        self.token_counts[group_name] += len(group_activations)
 
         # Compute buckets on GPU
         rel_activations = group_activations / self.max_activations
@@ -549,7 +557,9 @@ def main(
     return computed_stats
 
 
-def process_stats(stats: ComputedActivationStats, crosscoder: str, verbose=1):
+def process_stats(
+    stats: ComputedActivationStats, crosscoder: str, save_path, verbose=1, test=False
+):
     if verbose:
         # compute simple statistics, like bucket frequency
         bucket_freq = stats.stats.groupby("bucket")["nonzero count"].sum()
@@ -604,11 +614,11 @@ def process_stats(stats: ComputedActivationStats, crosscoder: str, verbose=1):
                 ratio = high_acts / low_acts
                 print(f"{group}: {ratio:.2f}")
     latent_stats = stats.compute_latent_stats()
-    latent_stats.to_csv("results/per_token_stats/latent_stats.csv")
+    latent_stats.to_csv(save_path / "latent_stats.csv")
     # plot histograms of different stats
     # Plot histograms of different stats
     # Create directory for plots
-    plot_dir = Path("results/per_token_stats/plots") / crosscoder
+    plot_dir = save_path / "plots"
     plot_dir.mkdir(exist_ok=True, parents=True)
 
     # Plot ctrl frequency distribution
@@ -696,25 +706,34 @@ def process_stats(stats: ComputedActivationStats, crosscoder: str, verbose=1):
     # fmt: on
     new_stats = new_stats[all_cols]
     # # add enc base norm latent
-    new_stats.to_csv("results/per_token_stats/latent_stats_global.csv")
+    new_stats.to_csv(save_path / "latent_stats_global.csv")
+    if not test:
+        push_latent_df(new_stats, crosscoder, confirm=False)
 
 
 # python scripts/per_token_stats.py gemma-2-2b-L13-k100-lr1e-04-local-shuffling-CCLoss --latent-activation-cache-path /workspace/data/latent_activations
+# python scripts/per_token_stats.py gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04 --latent-activation-cache-path /workspace/data/latent_activations
+
 if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("crosscoder", type=str)
     parser.add_argument("--latent-activation-cache-path", type=Path, required=True)
     parser.add_argument("--test", "-t", action="store_true")
     parser.add_argument("--use-precomputed-stats", "--skip", action="store_true")
+    parser.add_argument("--name", type=str, default="")
     args = parser.parse_args()
 
     if args.use_precomputed_stats:
         stats = ComputedActivationStats.load(Path("results/per_token_stats"))
-        process_stats(stats, verbose=0)
+        process_stats(stats, verbose=0, test=args.test)
         exit()
 
     # Create output directory
-    output_dir = Path("results/per_token_stats")
+    output_dir = Path("results/per_token_stats") / args.crosscoder
+    if args.test:
+        output_dir = output_dir / "test"
+    if args.name:
+        output_dir = output_dir / args.name
     output_dir.mkdir(exist_ok=True, parents=True)
 
     # Load tokenizer and patch it
@@ -735,4 +754,4 @@ if __name__ == "__main__":
         test=args.test,
     )
 
-    process_stats(stats, args.crosscoder, verbose=1)
+    process_stats(stats, args.crosscoder, output_dir, verbose=1, test=args.test)

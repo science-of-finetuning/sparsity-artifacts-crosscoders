@@ -152,7 +152,9 @@ def setup_selector():
     data = st.session_state.get("current_data", {})
     options = get_available_options(data) if data else {}
 
-    setup_type = st.selectbox("Setup Type", ["Vanilla", "Patching", "CrossCoder", "SAE"])
+    setup_type = st.selectbox(
+        "Setup Type", ["Vanilla", "Patching", "CrossCoder", "SAE"]
+    )
 
     if setup_type == "Vanilla":
         model = st.selectbox(
@@ -268,7 +270,13 @@ def setup_selector():
     elif setup_type == "SAE":
         latent_type = st.selectbox(
             "Latent Selection",
-            ["pareto", "antipareto", "pareto_nofilter", "antipareto_nofilter", "random"],
+            [
+                "pareto",
+                "antipareto",
+                "pareto_nofilter",
+                "antipareto_nofilter",
+                "random",
+            ],
             format_func=lambda x: LATENT_TYPE_NAMES.get(f"sae_{x}", x),
         )
 

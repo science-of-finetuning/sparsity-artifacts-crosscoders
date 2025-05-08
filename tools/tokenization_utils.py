@@ -123,6 +123,7 @@ def patch_tokenizer(
             use_proxy = True
         if use_proxy:
             tokenizer = IncompleteTokenizerProxy(tokenizer)
+    return tokenizer
 
 
 def sanitize(tok):

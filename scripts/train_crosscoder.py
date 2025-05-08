@@ -13,7 +13,7 @@ from dictionary_learning.trainers.crosscoder import (
     BatchTopKCrossCoderTrainer,
 )
 from dictionary_learning.training import trainSAE
-from dictionary_learning.dictionary import LossType, BatchTopKCrossCoder
+from dictionary_learning.dictionary import CodeNormalization, BatchTopKCrossCoder
 import os
 
 import wandb
@@ -51,15 +51,6 @@ def get_local_shuffled_indices(num_samples_per_dataset, shard_size):
     return shuffled_indices
 
 
-def get_loss_name(loss_type):
-    if loss_type == LossType.SAE:
-        return "SAELoss"
-    elif loss_type == LossType.MIXED:
-        return "MixedLoss"
-    else:
-        return "CCLoss"
-
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--activation-store-dir", type=str, default="activations")
@@ -90,17 +81,17 @@ if __name__ == "__main__":
     parser.add_argument("--no-train-shuffle", action="store_true")
     parser.add_argument("--local-shuffling", action="store_true")
     parser.add_argument(
-        "--sparsity-type",
+        "--code-normalization",
         type=str,
         default="crosscoder",
-        choices=["crosscoder", "sae", "mixed"],
+        choices=["crosscoder", "sae", "mixed", "DECOUPLED"],
     )
     parser.add_argument("--use-mse-loss", action="store_true")
     parser.add_argument("--k", type=int, default=100)
     parser.add_argument(
         "--type", type=str, default="relu", choices=["batch-top-k", "relu"]
     )
-
+    parser.add_argument("--surname", type=str, default=None)
     args = parser.parse_args()
 
     print(f"Training args: {args}")
@@ -208,13 +199,13 @@ if __name__ == "__main__":
         ]
     )
 
-    sparsity_type = LossType.from_string(args.sparsity_type)
+    code_normalization = args.code_normalization
     if args.type == "relu":
         name = (
             f"{args.base_model.split('/')[-1]}-L{args.layer}-mu{args.mu:.1e}-lr{args.lr:.0e}"
             + (f"-{args.run_name}" if args.run_name is not None else "")
             + (f"-local-shuffling" if args.local_shuffling else "")
-            + (f"-{get_loss_name(sparsity_type)}")
+            + (f"-{code_normalization.capitalize()}Loss")
             + (f"-mse" if args.use_mse_loss else "")
         )
     elif args.type == "batch-top-k":
@@ -222,18 +213,20 @@ if __name__ == "__main__":
             f"{args.base_model.split('/')[-1]}-L{args.layer}-k{args.k}-lr{args.lr:.0e}"
             + (f"-{args.run_name}" if args.run_name is not None else "")
             + (f"-local-shuffling" if args.local_shuffling else "")
-            + (f"-{get_loss_name(sparsity_type)}")
+            + (f"-{code_normalization.capitalize()}")
         )
     else:
-        raise ValueError(f"Invalid sparsity type: {args.sparsity_type}")
+        raise ValueError(f"Invalid sparsity type: {args.code_normalization}")
 
     if args.pretrained is not None:
         name += f"-pt"
     if args.max_steps is None:
         args.max_steps = len(train_dataset) // args.batch_size
+    if args.surname:
+        name += f"-{args.surname}"
     device = "cuda" if th.cuda.is_available() else "cpu"
     print(f"Training on device={device}.")
-    print(f"Loss type: {sparsity_type}")
+    print(f"Loss type: {code_normalization}")
     if args.type == "relu":
         trainer_cfg = {
             "trainer": CrossCoderTrainer,
@@ -254,9 +247,9 @@ if __name__ == "__main__":
                 "norm_init_scale": args.norm_init_scale,
                 "init_with_transpose": args.init_with_transpose,
                 "encoder_layers": args.encoder_layers,
-                "sparsity_loss_type": sparsity_type,
-                "sparsity_loss_alpha_sae": 1.0,
-                "sparsity_loss_alpha_cc": 0.1,
+                "code_normalization": code_normalization,
+                "code_normalization_alpha_sae": 1.0,
+                "code_normalization_alpha_cc": 0.1,
             },
             "pretrained_ae": (
                 CrossCoder.from_pretrained(args.pretrained)
@@ -285,9 +278,9 @@ if __name__ == "__main__":
                 "norm_init_scale": args.norm_init_scale,
                 "init_with_transpose": args.init_with_transpose,
                 "encoder_layers": args.encoder_layers,
-                "sparsity_loss_type": sparsity_type,
-                "sparsity_loss_alpha_sae": 1.0,
-                "sparsity_loss_alpha_cc": 0.1,
+                "code_normalization": code_normalization,
+                "code_normalization_alpha_sae": 1.0,
+                "code_normalization_alpha_cc": 0.1,
             },
             "pretrained_ae": (
                 BatchTopKCrossCoder.from_pretrained(args.pretrained)
@@ -296,7 +289,7 @@ if __name__ == "__main__":
             ),
         }
     else:
-        raise ValueError(f"Invalid sparsity type: {args.sparsity_type}")
+        raise ValueError(f"Invalid sparsity type: {args.code_normalization}")
 
     print(f"Training on {len(train_dataset)} token activations.")
     dataloader = th.utils.data.DataLoader(

@@ -253,9 +253,11 @@ def test_edge_cases():
     )
     compare_results(result_old, result_new)
 
+
 class DummyTokenizer:
     def convert_ids_to_tokens(self, tokens):
         return tokens
+
 
 def test_db_vs_pt_storage(tmp_path):
     """Test that DB and PT storage methods preserve the same information."""

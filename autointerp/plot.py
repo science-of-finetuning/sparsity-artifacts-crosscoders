@@ -1,6 +1,7 @@
 # %%
 import sys
 
+
 sys.path.append("..")
 sys.path.append("../autointerp")
 import json
@@ -67,18 +68,22 @@ def load_and_process_data(filenames, quantile=None, use_random=False):
     """
     Load and process multiple data files, calculating accuracy statistics for each.
 
+
     Args:
         filenames: List of filename strings without extension (e.g., ['scores_data_0_1025'])
+
 
     Returns:
         DataFrame containing merged accuracy statistics from all files
     """
     dataframes = []
 
+
     for filename in filenames:
         # Load detection data
         detection_path = f"{filename}.json"
         detection = json.load(open(detection_path))
+
 
         # Process detection data
         detection_results = []
@@ -104,6 +109,7 @@ def load_and_process_data(filenames, quantile=None, use_random=False):
             detection_results.append(result)
         detection_df = pd.DataFrame(detection_results)
 
+
         try:
             # Load fuzzing data
             fuzzing_path = f"fuzzing/{filename}.json"
@@ -126,8 +132,13 @@ def load_and_process_data(filenames, quantile=None, use_random=False):
             # Convert to DataFrames
             fuzzing_df = pd.DataFrame(fuzzing_results)
 
+
             # Merge the dataframes
             file_df = pd.merge(
+                detection_df,
+                fuzzing_df,
+                on=["feature", "filename"],
+                suffixes=("_detection", "_fuzzing"),
                 detection_df,
                 fuzzing_df,
                 on=["feature", "filename"],
@@ -140,12 +151,14 @@ def load_and_process_data(filenames, quantile=None, use_random=False):
         print(len(file_df))
         dataframes.append(file_df)
 
+
     # Stack all dataframes
     if dataframes:
         merged_df = pd.concat(dataframes, ignore_index=True)
         return merged_df
     else:
         return pd.DataFrame()
+
 
 
 # %%
@@ -538,6 +551,9 @@ valid_df["beta_ratio_reconstruction_rank"] = valid_df["beta_ratio_reconstruction
 valid_df["rank_sum"] = (
     valid_df["beta_ratio_error_rank"] + valid_df["beta_ratio_reconstruction_rank"]
 )
+valid_df["rank_sum"] = (
+    valid_df["beta_ratio_error_rank"] + valid_df["beta_ratio_reconstruction_rank"]
+)
 
 # Calculate ranks for dec_norm_diff and frequency
 valid_df["dec_norm_diff_rank"] = valid_df["dec_norm_diff"].rank(ascending=True)
@@ -564,9 +580,11 @@ for i in range(1, 11):
     se = std_acc / np.sqrt(count)
     ci_95 = 1.96 * se
 
+
     cumulative_percentiles.append(i * 10)
     cumulative_detection_means.append(mean_acc)
     cumulative_detection_ci.append(ci_95)
+
 
     # For dec_norm_diff ranks
     threshold_dec = np.percentile(valid_df["dec_norm_diff_sum"], i * 10)
@@ -578,8 +596,10 @@ for i in range(1, 11):
     se_dec = std_acc_dec / np.sqrt(count_dec)
     ci_95_dec = 1.96 * se_dec
 
+
     cumulative_detection_means_dec.append(mean_acc_dec)
     cumulative_detection_ci_dec.append(ci_95_dec)
+
 
     # For frequency ranks
     # threshold_freq = np.percentile(valid_df['freq_rank'], i * 10)
@@ -600,10 +620,14 @@ plt.errorbar(
     cumulative_detection_means,
     yerr=cumulative_detection_ci,
     fmt="o-",
+    fmt="o-",
     capsize=5,
+    ecolor="gray",
     ecolor="gray",
     markersize=8,
     linewidth=2,
+    color="green",
+    label="Beta Ratio Ranks",
     color="green",
     label="Beta Ratio Ranks",
 )
@@ -614,10 +638,14 @@ plt.errorbar(
     cumulative_detection_means_dec,
     yerr=cumulative_detection_ci_dec,
     fmt="s-",
+    fmt="s-",
     capsize=5,
+    ecolor="gray",
     ecolor="gray",
     markersize=8,
     linewidth=2,
+    color="purple",
+    label="Dec Norm Diff Ranks",
     color="purple",
     label="Dec Norm Diff Ranks",
 )
@@ -637,6 +665,11 @@ plt.errorbar(
 # )
 
 # Add labels and title
+plt.xlabel("Cumulative Percentile of Ranks")
+plt.ylabel("Average Detection Accuracy")
+plt.title(
+    "Detection Accuracy by Cumulative Percentile of Ranks\nwith 95% Confidence Intervals"
+)
 plt.xlabel("Cumulative Percentile of Ranks")
 plt.ylabel("Average Detection Accuracy")
 plt.title(
@@ -663,6 +696,7 @@ valid_df.plot.scatter(x="rank_sum", y="freq", c=f"autointerp_{sample_type}_total
 # Create a 2D histogram plot
 plt.figure(figsize=(10, 8))
 hist = plt.hist2d(valid_df["rank_sum"], valid_df["freq_rank"], bins=30, cmap="viridis")
+hist = plt.hist2d(valid_df["rank_sum"], valid_df["freq_rank"], bins=30, cmap="viridis")
 plt.colorbar(label="Count")
 plt.xlabel("Rank Sum")
 plt.ylabel("Frequency Rank")
@@ -672,6 +706,7 @@ plt.show()
 # %%
 
 plt.figure(figsize=(10, 8))
+hist = plt.hist2d(valid_df["rank_sum"], valid_df["freq_rank"], bins=30, cmap="viridis")
 hist = plt.hist2d(valid_df["rank_sum"], valid_df["freq_rank"], bins=30, cmap="viridis")
 plt.colorbar(label="Count")
 plt.xlabel("Rank Sum")
@@ -690,6 +725,8 @@ valid_df.plot.scatter(x="rank_sum", y="freq", c=f"autointerp_{sample_type}_total
 plt.figure(figsize=(10, 8))
 tmpdf = valid_df.query("0 < beta_ratio_reconstruction <= 2")
 hist = plt.hist2d(
+    tmpdf["beta_ratio_reconstruction"],
+    np.log10(tmpdf["freq"]),
     tmpdf["beta_ratio_reconstruction"],
     np.log10(tmpdf["freq"]),
     bins=30,
@@ -716,6 +753,7 @@ def plot_percentile_comparison(
     Create a percentile comparison plot showing how a metric varies across different percentile bins
     of various ranking metrics.
 
+
     Args:
         data: Either a single DataFrame or a list of (DataFrame, name) tuples containing the data with rank columns
         percentile_range: Size of each percentile bin (default: 10)
@@ -724,6 +762,7 @@ def plot_percentile_comparison(
         include_metrics: List of metrics to include in the plot. Options are:
                         'beta_ratio', 'dec_norm_diff', 'freq'
                         If None, includes all metrics.
+
 
     Returns:
         matplotlib figure object
@@ -754,6 +793,27 @@ def plot_percentile_comparison(
         
     # Define colors and styles for each metric
     metric_styles = {
+        "beta_ratio": {
+            "color": "blue",
+            "marker": "o",
+            "linestyle": "-",
+            "label": "Beta Ratio Ranks",
+            "rank_col": "rank_sum",
+        },
+        "dec_norm_diff": {
+            "color": "red",
+            "marker": "s",
+            "linestyle": "--",
+            "label": "Dec Norm Diff Ranks",
+            "rank_col": "dec_norm_diff_rank",
+        },
+        "freq": {
+            "color": "green",
+            "marker": "^",
+            "linestyle": "-.",
+            "label": "Frequency Ranks",
+            "rank_col": "freq_rank",
+        },
         "beta_ratio": {
             "color": "blue",
             "marker": "o",
@@ -873,8 +933,10 @@ def plot_percentile_comparison(
     # Add grid for better readability
     plt.grid(True, alpha=0.3)
 
+
     # Set x-axis ticks to match percentile bins
     x_ticks = np.arange(0, 100, percentile_range)
+    x_tick_labels = [f"${i}$-${i+percentile_range}$" for i in x_ticks]
     x_tick_labels = [f"${i}$-${i+percentile_range}$" for i in x_ticks]
     plt.xticks(x_ticks, x_tick_labels)
 
@@ -941,6 +1003,8 @@ plt.figure(figsize=(10, 8))
 hist = plt.hist2d(
     tmpdf["beta_ratio_reconstruction"],
     np.log10(tmpdf["freq"]),
+    tmpdf["beta_ratio_reconstruction"],
+    np.log10(tmpdf["freq"]),
     bins=30,
     cmap="viridis",
 )
@@ -954,14 +1018,27 @@ plt.show()
 
 from scipy import stats
 
+
 # Calculate Spearman correlation between frequency and rank_sum
+spearman_corr, p_value = stats.spearmanr(
+    valid_df["beta_ratio_reconstruction"], valid_df["freq"]
+)
 spearman_corr, p_value = stats.spearmanr(
     valid_df["beta_ratio_reconstruction"], valid_df["freq"]
 )
 print(spearman_corr, p_value)
 spearman_corr, p_value = stats.spearmanr(valid_df["beta_ratio_error"], valid_df["freq"])
+spearman_corr, p_value = stats.spearmanr(valid_df["beta_ratio_error"], valid_df["freq"])
 print(spearman_corr, p_value)
 # %%
+valid_df.plot.scatter(
+    x="beta_ratio_reconstruction",
+    y="beta_ratio_error",
+    c=np.log10(valid_df["freq"]),
+    colorbar=True,
+    cmap="viridis",
+    alpha=0.5,
+)
 valid_df.plot.scatter(
     x="beta_ratio_reconstruction",
     y="beta_ratio_error",

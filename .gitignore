@@ -9,6 +9,7 @@ results-runai/**
 .venv
 .env
 display_metrics/cache/
+steering_app/cache/
 .junk
 checkpoints/
 autointerp/detection/

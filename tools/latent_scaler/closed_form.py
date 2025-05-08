@@ -8,6 +8,7 @@ from dictionary_learning.cache import PairedActivationCache
 import numpy as np
 from loguru import logger
 
+
 def remove_latents(
     activation: th.Tensor, latent_activations: th.Tensor, latent_vectors: th.Tensor
 ) -> th.Tensor:
@@ -46,6 +47,7 @@ def remove_latents(
 
 def identity_fn(x: th.Tensor) -> th.Tensor:
     return x
+
 
 # %%
 @th.no_grad()
@@ -109,12 +111,13 @@ def closed_form_scalars(
     for batch in tqdm(dataloader):
         batch_size_current = batch.shape[0]
         batch = batch.to(device).to(dtype)
-        latent_activations = dict_model.encode(encode_activation_fn(batch), use_threshold=True) # use threshold is for BatchTopKSAE
+        latent_activations = dict_model.encode(
+            encode_activation_fn(batch), use_threshold=True
+        )  # use threshold is for BatchTopKSAE
         assert latent_activations.shape == (batch_size_current, dict_size)
-        
+
         if latent_activation_postprocessing_fn is not None:
             latent_activations = latent_activation_postprocessing_fn(latent_activations)
-        
 
         Y_batch = target_activation_fn(
             batch,
@@ -230,11 +233,14 @@ def test_closed_form_scalars(
             ), "Vectors are not orthogonal"
 
     # Generate sparse activations by zeroing out most values
-    latent_activations = th.randn(N, num_latent_vectors, dtype=dtype, device=device).exp()
-    sparsity_mask = th.rand(N, num_latent_vectors, device=device) > 0.9 # Keep ~10% of activations
+    latent_activations = th.randn(
+        N, num_latent_vectors, dtype=dtype, device=device
+    ).exp()
+    sparsity_mask = (
+        th.rand(N, num_latent_vectors, device=device) > 0.9
+    )  # Keep ~10% of activations
     latent_activations = latent_activations * sparsity_mask
     latent_activations = latent_activations / latent_activations.mean(dim=0) * 10
-
 
     # randomly scale the latent vectors
     for i in range(num_latent_vectors):

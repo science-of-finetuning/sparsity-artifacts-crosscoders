@@ -44,12 +44,14 @@ else:
         load_chat_activation,
     )
 
+
 def get_bucket_edges(n_buckets, add_noise_threshold=0.05):
     step_size = 1 / n_buckets
-    steps = (th.arange(n_buckets + 1) * step_size)
+    steps = th.arange(n_buckets + 1) * step_size
     if add_noise_threshold is not None:
         steps = th.cat([th.tensor([0, add_noise_threshold]), steps[1:]])
     return steps
+
 
 def squared_error(residual):
     # residual: [n_latents, batch_size, dim_model]
@@ -58,6 +60,7 @@ def squared_error(residual):
     out = residual.pow(2).sum(dim=2)
     assert out.shape == (n_latents, batch_size)
     return out
+
 
 def compute_stats(
     betas: th.Tensor,
@@ -111,12 +114,20 @@ def compute_stats(
         )
 
     if compute_individual_errors:
-        assert num_samples is not None, "num_samples must be provided if compute_individual_errors is True"
-        mse_individual = th.zeros(len(latent_indices), num_samples, device=device, dtype=th.float32)
-        mse_before_individual = th.zeros(len(latent_indices), num_samples, device=device, dtype=th.float32)
+        assert (
+            num_samples is not None
+        ), "num_samples must be provided if compute_individual_errors is True"
+        mse_individual = th.zeros(
+            len(latent_indices), num_samples, device=device, dtype=th.float32
+        )
+        mse_before_individual = th.zeros(
+            len(latent_indices), num_samples, device=device, dtype=th.float32
+        )
 
     if compute_latent_activations:
-        latent_activations_individual = th.zeros(len(latent_indices), num_samples, device=device, dtype=th.float32)
+        latent_activations_individual = th.zeros(
+            len(latent_indices), num_samples, device=device, dtype=th.float32
+        )
 
     start_idx = 0
     for batch in tqdm(dataloader, desc="Computing scaler stats"):
@@ -151,7 +162,9 @@ def compute_stats(
         assert latent_activations.shape == (batch_size, len(latent_indices))
 
         if compute_latent_activations:
-            latent_activations_individual[:, start_idx:end_idx] = latent_activations.permute(1, 0)
+            latent_activations_individual[:, start_idx:end_idx] = (
+                latent_activations.permute(1, 0)
+            )
 
         # Scale latent activations by betas
         scaled_latents = latent_activations * betas.unsqueeze(0)
@@ -214,10 +227,11 @@ def compute_stats(
         mse_before_std.update(squared_error_residual_before.permute(1, 0))
         count += th.ones_like(mse) * batch_size
 
-
         if max_activations is not None:
             mse_buckets.update(latent_activations, squared_error_residual.permute(1, 0))
-            mse_before_buckets.update(latent_activations, squared_error_residual_before.permute(1, 0))
+            mse_before_buckets.update(
+                latent_activations, squared_error_residual_before.permute(1, 0)
+            )
 
         if compute_individual_errors:
             mse_individual[:, start_idx:end_idx] = squared_error_residual
@@ -250,7 +264,9 @@ def compute_stats(
         output["mse_before_individual"] = mse_before_individual.cpu().numpy()
 
     if compute_latent_activations:
-        output["latent_activations_individual"] = latent_activations_individual.cpu().numpy()
+        output["latent_activations_individual"] = (
+            latent_activations_individual.cpu().numpy()
+        )
 
     mse_mean, mse_std, mse_count = mse_std.compute()
     output["mse_mean"] = mse_mean.cpu().numpy()
@@ -307,10 +323,10 @@ def main():
     parser.add_argument("--crosscoder-path", type=str, required=True)
     parser.add_argument("--activation-store-dir", type=Path, required=True)
     parser.add_argument(
-            "--latent-indices-path",
-            type=Path,
-            default="/workspace/data/latent_indices/Butanium_gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04/chat_only_indices.pt",
-        )    
+        "--latent-indices-path",
+        type=Path,
+        default="/workspace/data/latent_indices/Butanium_gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04/chat_only_indices.pt",
+    )
     parser.add_argument("--base-model", type=str, default="google/gemma-2-2b")
     parser.add_argument("--chat-model", type=str, default="google/gemma-2-2b-it")
     parser.add_argument("--layer", type=int, default=13)
@@ -345,13 +361,28 @@ def main():
     parser.add_argument("-N", "--num-samples", type=int, default=5_000_000)
     parser.add_argument("--train-num-samples", type=int, default=50_000_000)
     parser.add_argument("--dataset-split", type=str, default="validation")
-    parser.add_argument("--special-results-dir", type=str, default="", help="Addon to the results directory. Results will be loaded and saved in results_dir/SRD/model_name/")
+    parser.add_argument(
+        "--special-results-dir",
+        type=str,
+        default="",
+        help="Addon to the results directory. Results will be loaded and saved in results_dir/SRD/model_name/",
+    )
     parser.add_argument("--n-offset", type=int, default=0)
     parser.add_argument("--train-n-offset", type=int, default=None)
     parser.add_argument("-CIE", "--compute-individual-errors", action="store_true")
     parser.add_argument("-CLA", "--compute-latent-activations", action="store_true")
-    parser.add_argument("--betas-subset-path", type=Path, default=None, help="Path to a file containing indices of latents to include in the verification (Indices in the betas file, not latent indices)")
-    parser.add_argument("--lmsys-subfolder", type=str, default=None, help="Subfolder for the LMSYS dataset")
+    parser.add_argument(
+        "--betas-subset-path",
+        type=Path,
+        default=None,
+        help="Path to a file containing indices of latents to include in the verification (Indices in the betas file, not latent indices)",
+    )
+    parser.add_argument(
+        "--lmsys-subfolder",
+        type=str,
+        default=None,
+        help="Subfolder for the LMSYS dataset",
+    )
     args = parser.parse_args()
 
     if args.train_num_samples is None:
@@ -363,7 +394,6 @@ def main():
         train_n_offset = args.n_offset
     else:
         train_n_offset = args.train_n_offset
-
 
     dtype_map = {"float32": th.float32, "float64": th.float64, "bfloat16": th.bfloat16}
     dtype = dtype_map[args.dtype]
@@ -387,14 +417,14 @@ def main():
 
     # Construct betas path following compute_scalers.py logic
     if args.special_results_dir:
-        results_dir = args.results_dir / args.special_results_dir / args.crosscoder_path.replace("/", "_")
+        results_dir = (
+            args.results_dir
+            / args.special_results_dir
+            / args.crosscoder_path.replace("/", "_")
+        )
     else:
         results_dir = args.results_dir / args.crosscoder_path.replace("/", "_")
     results_dir = results_dir / Path(args.latent_indices_path).name.split(".")[0]
-    
-
-
-
 
     # Load validation dataset
     activation_store_dir = Path(args.activation_store_dir)
@@ -407,13 +437,25 @@ def main():
         instruct_model=chat_model_stub,
         layer=args.layer,
         split=args.dataset_split,
-        lmsys_subfolder=args.lmsys_subfolder
+        lmsys_subfolder=args.lmsys_subfolder,
     )
     num_samples_per_dataset = args.num_samples // 2
     dataset = th.utils.data.ConcatDataset(
         [
-            th.utils.data.Subset(fineweb_cache, th.arange(args.n_offset * num_samples_per_dataset, (args.n_offset + 1) * num_samples_per_dataset)),
-            th.utils.data.Subset(lmsys_cache, th.arange(args.n_offset * num_samples_per_dataset, (args.n_offset + 1) * num_samples_per_dataset)),
+            th.utils.data.Subset(
+                fineweb_cache,
+                th.arange(
+                    args.n_offset * num_samples_per_dataset,
+                    (args.n_offset + 1) * num_samples_per_dataset,
+                ),
+            ),
+            th.utils.data.Subset(
+                lmsys_cache,
+                th.arange(
+                    args.n_offset * num_samples_per_dataset,
+                    (args.n_offset + 1) * num_samples_per_dataset,
+                ),
+            ),
         ]
     )
 
@@ -441,7 +483,7 @@ def main():
             (
                 "base_error",
                 load_zero_vector,
-                partial(load_base_error, base_decoder=base_decoder)
+                partial(load_base_error, base_decoder=base_decoder),
             )
         )
     if args.base_reconstruction:
@@ -453,17 +495,11 @@ def main():
             ("it_reconstruction", load_zero_vector, load_chat_reconstruction)
         )
     if args.chat_error:
-        computations.append(
-            ("it_error", load_zero_vector, load_chat_error)
-        )
+        computations.append(("it_error", load_zero_vector, load_chat_error))
     if args.chat_activation:
-        computations.append(
-            ("it_activation", load_zero_vector, load_chat_activation)
-        )
+        computations.append(("it_activation", load_zero_vector, load_chat_activation))
     if args.base_activation:
-        computations.append(
-            ("base_activation", load_zero_vector, load_base_activation)
-        )
+        computations.append(("base_activation", load_zero_vector, load_base_activation))
 
     if len(computations) == 0:
         logger.info("No computations selected, running all")
@@ -488,7 +524,9 @@ def main():
     # Compute stats for each computation type
     for name, loader_fn, target_fn in computations:
         logger.info(f"Computing stats for {name}")
-        betas, betas_name = load_betas(args, name, results_dir, train_num_samples, train_n_offset)
+        betas, betas_name = load_betas(
+            args, name, results_dir, train_num_samples, train_n_offset
+        )
         if args.betas_subset_path is not None:
             betas_subset = th.load(args.betas_subset_path)
             betas = betas[betas_subset]
