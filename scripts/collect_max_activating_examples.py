@@ -12,6 +12,8 @@ from collections import defaultdict
 import numpy as np
 import torch as th
 from tqdm import tqdm
+from huggingface_hub import hf_api, hf_hub_download
+from huggingface_hub.errors import EntryNotFoundError
 import wandb
 from huggingface_hub import hf_api
 import time
@@ -453,7 +455,5 @@ def main():
 
 
 if __name__ == "__main__":
-    import os
-
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
     main()

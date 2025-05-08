@@ -27,9 +27,10 @@ dfs = defaultdict(lambda: None)
 df_hf_repo_legacy = {
     "l13_crosscoder": "science-of-finetuning/max-activating-examples-gemma-2-2b-l13-mu4.1e-02-lr1e-04",
     "Butanium/gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04": "science-of-finetuning/max-activating-examples-gemma-2-2b-l13-mu4.1e-02-lr1e-04",
-    "science-of-finetuning/diffing-stats-gemma-2-2b-l13-mu4.1e-02-lr1e-04": "science-of-finetuning/max-activating-examples-gemma-2-2b-l13-mu4.1e-02-lr1e-04",
     "connor": "science-of-finetuning/max-activating-examples-gemma-2-2b-l13-ckissane",
     "ckkissane/crosscoder-gemma-2-2b-model-diff": "science-of-finetuning/max-activating-examples-gemma-2-2b-l13-ckissane",
+    "gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04": "science-of-finetuning/max-activating-examples-gemma-2-2b-l13-mu4.1e-02-lr1e-04",
+    "science-of-finetuning/diffing-stats-gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04": "science-of-finetuning/max-activating-examples-gemma-2-2b-l13-mu4.1e-02-lr1e-04",
 }
 
 
@@ -52,7 +53,7 @@ def load_latent_df(crosscoder_or_path=None, author=HF_NAME):
         # Local model
         df_path = Path(crosscoder_or_path)
     else:
-        repo_id = f"{author}/diffing-stats-{crosscoder_or_path}"
+        repo_id = stats_repo_id(crosscoder_or_path)
         try:
             df_path = hf_hub_download(
                 repo_id=repo_id,
@@ -174,7 +175,7 @@ def push_latent_df(
         df_hf_repo_legacy.get(crosscoder) if hasattr(df_hf_repo_legacy, "get") else None
     )
     if repo_id is None:
-        repo_id = f"{author}/diffing-stats-{crosscoder}"
+        repo_id = stats_repo_id(crosscoder)
 
     with TemporaryDirectory() as tmpdir:
         df.to_csv(Path(tmpdir) / "feature_df.csv")
