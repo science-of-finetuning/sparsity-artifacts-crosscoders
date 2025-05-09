@@ -12,10 +12,9 @@ from collections import defaultdict
 import numpy as np
 import torch as th
 from tqdm import tqdm
-from huggingface_hub import hf_api, hf_hub_download
+from huggingface_hub import hf_api
 from huggingface_hub.errors import EntryNotFoundError
 import wandb
-from huggingface_hub import hf_api
 import time
 
 sys.path.append(".")
@@ -389,7 +388,100 @@ def compute_quantile_activating_examples(
 # python scripts/collect_max_activating_examples.py  gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04 --latent-activation-cache-path /workspace/data/latent_activations
 
 
-def main():
+def collect_activating_examples(
+    crosscoder: str,
+    latent_activation_cache: LatentActivationCache,
+    bos_token_id: int = 2,
+    n: int = 100,
+    min_threshold: float = 1e-4,
+    quantiles: list[float] = [0.25, 0.5, 0.75, 0.95, 1.0],
+    save_path: Path = Path("results/quantile_examples"),
+    only_upload: bool = False,
+    test: bool = False,
+) -> None:
+    """
+    Collect and save examples that activate latent features at different quantiles.
+
+    This function processes latent activations to find examples that activate features
+    at specified quantile thresholds. It can optionally save results locally and/or
+    upload them to HuggingFace Hub.
+
+    Args:
+        crosscoder (str): Name of the crosscoder model to analyze
+        latent_activation_cache_path (Path): Path to directory containing latent activation data
+        bos_token_id (int, optional): Beginning of sequence token ID. Defaults to 2.
+        n (int, optional): Number of examples to collect per quantile. Defaults to 100.
+        min_threshold (float, optional): Minimum activation threshold. Defaults to 1e-4.
+        quantiles (list[float], optional): Quantile thresholds to analyze.
+            Defaults to [0.25, 0.5, 0.75, 0.95, 1.0].
+        save_path (Path, optional): Directory to save results.
+            Defaults to Path("results/quantile_examples").
+        only_upload (bool, optional): If True, only upload existing results to HuggingFace.
+            Defaults to False.
+        test (bool, optional): If True, run in test mode with smaller dataset.
+            Defaults to False.
+
+    Returns:
+        None
+    """
+    save_path = save_path / crosscoder
+
+    if not only_upload:
+        # Initialize wandb
+        project = "quantile-activating-examples"
+        if test:
+            project = "test-" + project
+        wandb.init(
+            project=project,
+            config={
+                "crosscoder": crosscoder,
+                "bos_token_id": bos_token_id,
+                "n": n,
+                "min_threshold": min_threshold,
+                "quantiles": quantiles,
+                "save_path": str(save_path),
+                "test": test,
+            },
+        )
+
+        # Create save directory if it doesn't exist
+        save_path.mkdir(parents=True, exist_ok=True)
+
+        # Generate and save quantile examples
+        print("Generating quantile examples...")
+        compute_quantile_activating_examples(
+            latent_activation_cache=latent_activation_cache,
+            quantiles=quantiles,
+            min_threshold=min_threshold,
+            n=n,
+            save_path=save_path,
+            test=test,
+        )
+
+        wandb.finish()
+
+    # Upload to HuggingFace Hub
+    repo = f"{HF_NAME}/diffing-stats-" + crosscoder
+    if not test:
+        print(f"Uploading to HuggingFace Hub: {repo}")
+        for ftype in ["pt", "db"]:
+            name = "test_examples" if test else "examples"
+            file_path = save_path / f"{name}.{ftype}"
+            print(f"Uploading {file_path} to {repo}")
+            if file_path.exists():
+                hf_api.upload_file(
+                    repo_id=repo,
+                    repo_type="dataset",
+                    path_or_fileobj=file_path,
+                    path_in_repo=f"{name}.{ftype}",
+                )
+
+
+if __name__ == "__main__":
+    import os
+
+    os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
     parser = argparse.ArgumentParser()
     parser.add_argument("crosscoder", type=str)
     parser.add_argument("--latent-activation-cache-path", type=Path, required=True)
@@ -405,55 +497,22 @@ def main():
     parser.add_argument("--only-upload", action="store_true")
     parser.add_argument("--test", action="store_true")
     args = parser.parse_args()
-
-    save_path = args.save_path / args.crosscoder
-
-    if not args.only_upload:
+    # Load latent activation cache
+    if args.only_upload:
+        latent_activation_cache = None
+    else:
         device = "cuda" if th.cuda.is_available() else "cpu"
-        # Initialize wandb
-        project = "quantile-activating-examples"
-        if args.test:
-            project = "test-" + project
-        wandb.init(project=project, config=vars(args))
-
-        # Load latent activation cache
         latent_activation_cache = LatentActivationCache(
             args.latent_activation_cache_path / args.crosscoder, expand=False
         ).to(device)
-
-        # Create save directory if it doesn't exist
-        save_path.mkdir(parents=True, exist_ok=True)
-
-        # Generate and save quantile examples
-        print("Generating quantile examples...")
-        compute_quantile_activating_examples(
-            latent_activation_cache=latent_activation_cache,
-            quantiles=args.quantiles,
-            min_threshold=args.min_threshold,
-            n=args.n,
-            save_path=save_path,
-            test=args.test,
-        )
-
-        wandb.finish()
-
-    # Upload to HuggingFace Hub
-    repo = f"{HF_NAME}/diffing-stats-" + args.crosscoder
-    if not args.test:
-        print(f"Uploading to HuggingFace Hub: {repo}")
-        for ftype in ["pt", "db"]:
-            name = "test_examples" if args.test else "examples"
-            file_path = save_path / f"{name}.{ftype}"
-            print(f"Uploading {file_path} to {repo}")
-            if file_path.exists():
-                hf_api.upload_file(
-                    repo_id=repo,
-                    repo_type="dataset",
-                    path_or_fileobj=file_path,
-                    path_in_repo=f"{name}.{ftype}",
-                )
-
-
-if __name__ == "__main__":
-    os.environ["TOKENIZERS_PARALLELISM"] = "false"
-    main()
+    collect_activating_examples(
+        crosscoder=args.crosscoder,
+        latent_activation_cache=latent_activation_cache,
+        bos_token_id=args.bos_token_id,
+        n=args.n,
+        min_threshold=args.min_threshold,
+        quantiles=args.quantiles,
+        save_path=args.save_path,
+        only_upload=args.only_upload,
+        test=args.test,
+    )

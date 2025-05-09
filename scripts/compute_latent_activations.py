@@ -9,6 +9,7 @@ from tools.utils import load_activation_dataset, load_dictionary_model
 from transformers import AutoTokenizer
 from CONFIG import HF_NAME
 
+
 @th.no_grad()
 def get_positive_activations(sequences, ranges, dataset, cc, latent_ids):
     """
@@ -40,7 +41,10 @@ def get_positive_activations(sequences, ranges, dataset, cc, latent_ids):
             [dataset[j].cuda() for j in range(ranges[seq_idx][0], ranges[seq_idx][1])]
         )
         feature_activations = cc.get_activations(activations)
-        assert feature_activations.shape == (len(activations), len(latent_ids))
+        assert feature_activations.shape == (
+            len(activations),
+            len(latent_ids),
+        ), f"Feature activations shape: {feature_activations.shape}, expected: {(len(activations), len(latent_ids))}"
 
         # Track maximum activations
         # For each latent feature, find the max activation in this sequence
@@ -134,52 +138,71 @@ def load_latent_activations(
     return activations, indices, sequences, latent_ids
 
 
-def main():
-    parser = ArgumentParser(
-        description="Compute positive and maximum activations for latent features"
-    )
-    parser.add_argument(
-        "--activation-store-dir", type=str, default="/workspace/data/activations/"
-    )
-    parser.add_argument(
-        "--indices-root", type=str, default="/workspace/data/latent_indices/"
-    )
-    parser.add_argument("--base-model", type=str, default="google/gemma-2-2b")
-    parser.add_argument("--chat-model", type=str, default="google/gemma-2-2b-it")
-    parser.add_argument("--layer", type=int, default=13)
-    parser.add_argument("--dictionary-model", type=str, required=True)
-    parser.add_argument("--target-set", type=str, nargs="+", default=[])
-    parser.add_argument(
-        "--latent-activations-dir",
-        type=str,
-        default="/workspace/data/latent_activations/",
-    )
-    parser.add_argument("--upload-to-hub", action="store_true")
-    parser.add_argument("--split", type=str, default="validation")
-    parser.add_argument("--load-from-disk", action="store_true")
-    args = parser.parse_args()
+def compute_latent_activations(
+    dictionary_model: str,
+    activation_store_dir: str = "/workspace/data/activations/",
+    base_model: str = "google/gemma-2-2b",
+    chat_model: str = "google/gemma-2-2b-it",
+    layer: int = 13,
+    latent_ids: th.Tensor | None = None,
+    latent_activations_dir: str = "/workspace/data/latent_activations/",
+    upload_to_hub: bool = False,
+    split: str = "validation",
+    load_from_disk: bool = False,
+) -> None:
+    """
+    Compute and save latent activations for a given dictionary model.
 
+    This function processes activations from specified datasets (e.g., FineWeb and LMSYS),
+    applies the provided dictionary model to compute latent activations, and saves the results
+    to disk. Optionally, it can upload the computed activations to the Hugging Face Hub.
 
-    out_dir = Path(args.latent_activations_dir) / f"{args.dictionary_model}"
+    Args:
+        dictionary_model (str): Path or identifier for the dictionary (crosscoder) model to use.
+        activation_store_dir (str, optional): Directory containing the raw activation datasets.
+            Defaults to "/workspace/data/activations/".
+        base_model (str, optional): Name or path of the base model (e.g., "google/gemma-2-2b").
+            Defaults to "google/gemma-2-2b".
+        chat_model (str, optional): Name or path of the chat/instruct model.
+            Defaults to "google/gemma-2-2b-it".
+        layer (int, optional): The layer index from which to extract activations.
+            Defaults to 13.
+        latent_ids (th.Tensor or None, optional): Tensor of latent indices to compute activations for.
+            If None, uses all latents in the dictionary model.
+        latent_activations_dir (str, optional): Directory to save computed latent activations.
+            Defaults to "/workspace/data/latent_activations/".
+        upload_to_hub (bool, optional): Whether to upload the computed activations to the Hugging Face Hub.
+            Defaults to False.
+        split (str, optional): Dataset split to use (e.g., "validation").
+            Defaults to "validation".
+        load_from_disk (bool, optional): If True, load precomputed activations from disk instead of recomputing.
+            Defaults to False.
+
+    Returns:
+        None
+    """
+    out_dir = Path(latent_activations_dir) / f"{dictionary_model}"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # Load the activation dataset
-    if not args.load_from_disk:
+    if not load_from_disk:
         fineweb_cache, lmsys_cache = load_activation_dataset(
-            activation_store_dir=args.activation_store_dir,
-            base_model=args.base_model.split("/")[-1],
-            instruct_model=args.chat_model.split("/")[-1],
-            layer=args.layer,
-            split=args.split,
+            activation_store_dir=activation_store_dir,
+            base_model=base_model.split("/")[-1],
+            instruct_model=chat_model.split("/")[-1],
+            layer=layer,
+            split=split,
         )
         tokens_fineweb = fineweb_cache.tokens[0]
         tokens_lmsys = lmsys_cache.tokens[0]
 
         # Load the dictionary model
-        dictionary_model = load_dictionary_model(args.dictionary_model).to("cuda")
+        dictionary_model = load_dictionary_model(dictionary_model).to("cuda")
+        if latent_ids is None:
+            latent_ids = th.arange(dictionary_model.dict_size)
 
         # Load the tokenizer
-        tokenizer = AutoTokenizer.from_pretrained(args.base_model)
+        tokenizer = AutoTokenizer.from_pretrained(base_model)
 
         seq_lmsys, idx_to_seq_pos_lmsys, ranges_lmsys = split_into_sequences(
             tokenizer, tokens_lmsys
@@ -187,17 +210,6 @@ def main():
         seq_fineweb, idx_to_seq_pos_fineweb, ranges_fineweb = split_into_sequences(
             tokenizer, tokens_fineweb
         )
-
-        indices_root = Path(args.indices_root)
-        if len(args.target_set) == 0:
-            latent_ids = th.arange(dictionary_model.dict_size)
-        else:
-            indices = []
-            for target_set in args.target_set:
-                indices.append(
-                    th.load(indices_root / f"{target_set}.pt", weights_only=True)
-                )
-            latent_ids = th.cat(indices)
 
         (
             out_acts_fineweb,
@@ -248,7 +260,6 @@ def main():
         # Convert to tensor and save
         padded_tensor = th.stack(padded_seqs)
 
-
         # Save tensors
         th.save(out_acts.cpu(), out_dir / "out_acts.pt")
         th.save(out_ids.cpu(), out_dir / "out_ids.pt")
@@ -258,20 +269,20 @@ def main():
         th.save(seq_lengths.cpu(), out_dir / "seq_lengths.pt")
         th.save(combined_max_activations.cpu(), out_dir / "max_activations.pt")
 
-    # Print some stats about max activations
-    print("Maximum activation statistics:")
-    print(f"  Average: {combined_max_activations.mean().item():.4f}")
-    print(f"  Maximum: {combined_max_activations.max().item():.4f}")
-    print(f"  Minimum: {combined_max_activations.min().item():.4f}")
+        # Print some stats about max activations
+        print("Maximum activation statistics:")
+        print(f"  Average: {combined_max_activations.mean().item():.4f}")
+        print(f"  Maximum: {combined_max_activations.max().item():.4f}")
+        print(f"  Minimum: {combined_max_activations.min().item():.4f}")
 
-    if args.upload_to_hub:
+    if upload_to_hub:
         # Initialize Hugging Face API
         from huggingface_hub import HfApi
 
         api = HfApi()
 
         # Define repository ID for the dataset
-        repo_id = f"{HF_NAME}/latent-activations-{args.dictionary_model}"
+        repo_id = f"{HF_NAME}/latent-activations-{dictionary_model}"
         # Check if repository exists, create it if it doesn't
         try:
             # Try to get repository info to check if it exists
@@ -287,7 +298,7 @@ def main():
                 exist_ok=True,
             )
             print(f"Created repository {repo_id}")
-        
+
         # Upload all tensors to HF Hub directly from saved files
         api.upload_file(
             path_or_fileobj=str(out_dir / "out_acts.pt"),
@@ -326,7 +337,45 @@ def main():
         )
 
         print(f"All files uploaded to Hugging Face Hub at {repo_id}")
-
+    else:
+        print("Skipping upload to Hugging Face Hub")
 
 if __name__ == "__main__":
-    main()
+    parser = ArgumentParser(
+        description="Compute positive and maximum activations for latent features"
+    )
+    parser.add_argument(
+        "--activation-store-dir", type=str, default="/workspace/data/activations/"
+    )
+    parser.add_argument(
+        "--indices-root", type=str, default="/workspace/data/latent_indices/"
+    )
+    parser.add_argument("--base-model", type=str, default="google/gemma-2-2b")
+    parser.add_argument("--chat-model", type=str, default="google/gemma-2-2b-it")
+    parser.add_argument("--layer", type=int, default=13)
+    parser.add_argument("--dictionary-model", type=str, required=True)
+    parser.add_argument("--target-set", type=str, nargs="+", default=[])
+    parser.add_argument(
+        "--latent-activations-dir",
+        type=str,
+        default="/workspace/data/latent_activations/",
+    )
+    parser.add_argument("--upload-to-hub", action="store_true")
+    parser.add_argument("--split", type=str, default="validation")
+    parser.add_argument("--load-from-disk", action="store_true")
+    args = parser.parse_args()
+
+    compute_latent_activations(
+        dictionary_model=args.dictionary_model,
+        activation_store_dir=args.activation_store_dir,
+        indices_root=args.indices_root,
+        base_model=args.base_model,
+        chat_model=args.chat_model,
+        layer=args.layer,
+        target_set=args.target_set,
+        latent_activations_dir=args.latent_activations_dir,
+        upload_to_hub=args.upload_to_hub,
+        split=args.split,
+        load_from_disk=args.load_from_disk,
+    )
+
