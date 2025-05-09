@@ -1,12 +1,8 @@
 import torch as th
 from typing import Callable, Union
-from dictionary_learning.dictionary import Dictionary
+from dictionary_learning.dictionary import Dictionary, CrossCoder
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-from pathlib import Path
-from dictionary_learning.cache import PairedActivationCache
-import numpy as np
-from loguru import logger
 
 
 def remove_latents(
@@ -62,6 +58,9 @@ def closed_form_scalars(
     device: th.device = th.device("cuda"),
     dtype: Union[th.dtype, None] = th.float32,
 ) -> th.Tensor:
+    """
+    Compute the argmin_\beta || x - f\beta d ||^2 using the closed form solution.
+    """
     # beta = (latent_vector.T @ (data.T @ latent_vector) / ((latent_vector.norm() ** 2) * (latent_activations.norm() ** 2))
     # data: N x dim_model
     # latent_vector: dim_model
@@ -109,15 +108,17 @@ def closed_form_scalars(
     count_active = th.zeros(num_latent_vectors, device=device, dtype=dtype)
 
     for batch in tqdm(dataloader):
+        if batch.shape[0] == 0:
+            continue
         batch_size_current = batch.shape[0]
         batch = batch.to(device).to(dtype)
         latent_activations = dict_model.encode(
             encode_activation_fn(batch), use_threshold=True
-        )  # use threshold is for BatchTopKSAE
-        assert latent_activations.shape == (batch_size_current, dict_size)
-
+        )
         if latent_activation_postprocessing_fn is not None:
             latent_activations = latent_activation_postprocessing_fn(latent_activations)
+
+        assert latent_activations.shape == (batch_size_current, dict_size)
 
         Y_batch = target_activation_fn(
             batch,
