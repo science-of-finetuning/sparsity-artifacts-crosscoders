@@ -1,6 +1,12 @@
 import pytest
+import sys
+from pathlib import Path
 from transformers import AutoTokenizer
-from .tokenization_utils import custom_chat_template
+
+project_root = Path(__file__).parent.parent
+sys.path.append(str(project_root))
+
+from tools.tokenization_utils import custom_chat_template
 
 
 @pytest.mark.parametrize("ctrl_tokens", [True, False])

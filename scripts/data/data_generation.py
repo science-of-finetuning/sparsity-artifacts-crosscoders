@@ -2,13 +2,10 @@ import sys
 
 sys.path.append("..")
 
-from pathlib import Path
 import torch as th
 from datasets import Dataset, load_dataset
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from tqdm.auto import tqdm, trange
-from huggingface_hub import hf_api
-from tempfile import NamedTemporaryFile
 
 
 def setup_model():
