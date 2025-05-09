@@ -24,6 +24,7 @@ th.set_float32_matmul_precision("high")
 
 from tools.utils import load_activation_dataset
 
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 def get_local_shuffled_indices(num_samples_per_dataset, shard_size):
     num_shards_per_dataset = num_samples_per_dataset // shard_size + (
