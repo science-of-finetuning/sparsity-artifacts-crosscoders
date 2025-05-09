@@ -5,6 +5,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Literal
 import sqlite3
+import sys
 
 import pandas as pd
 import numpy as np
@@ -14,14 +15,16 @@ from transformers import AutoTokenizer
 from huggingface_hub import hf_hub_download, hf_api
 from huggingface_hub import HfApi
 
-from dictionary_learning.dictionary import Dictionary
-
 from dictionary_learning.dictionary import BatchTopKCrossCoder, CrossCoder
 from dictionary_learning.trainers.batch_top_k import BatchTopKSAE
 from nnterp import load_model
 from tiny_dashboard import OfflineFeatureCentricDashboard
 from tiny_dashboard.dashboard_implementations import CrosscoderOnlineFeatureDashboard
-from ..CONFIG import HF_NAME
+from .paths import REPO_ROOT
+
+sys.path.append(REPO_ROOT)
+
+from CONFIG import HF_NAME
 
 dfs = defaultdict(lambda: None)
 df_hf_repo_legacy = {

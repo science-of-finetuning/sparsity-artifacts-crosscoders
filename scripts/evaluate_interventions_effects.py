@@ -11,7 +11,7 @@ from datasets import load_dataset
 import torch as th
 
 sys.path.append(str(Path(__file__).parent.parent))
-from scripts.edit_eval_results import add_random_means
+from scripts.utils.edit_eval_results import add_random_means
 from tools.compute_utils import RunningMeanStd, chunked_kl
 from tools.setup_to_eval import HalfStepPreprocessFn
 from tools.split_gemma import split_gemma

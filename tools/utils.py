@@ -166,3 +166,20 @@ def auto_device(device: str):
         return "cuda" if th.cuda.is_available() else "cpu"
     else:
         return device
+
+
+def dict_to_args(**d):
+    """
+    Convert a dictionary to a list of strings of the form "--key value"
+    """
+
+    def preproc(k, val):
+        k = f"--{k}"
+        if isinstance(val, bool):
+            return [k] if val else []
+        elif isinstance(val, list):
+            return [k, *[str(v) for v in val]]
+        else:
+            return [k, str(val)]
+
+    return list(sum([preproc(k, v) for k, v in d.items()], []))
