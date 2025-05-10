@@ -12,17 +12,28 @@ import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
 import os
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, AutoModelForCausalLM
 
-from tools.utils import dict_to_args
-from tools.cc_utils import load_latent_df, push_latent_df
+from tools.utils import dict_to_args, auto_device, load_hf_model
+from tools.tokenizer_utils import patch_tokenizer
+from tools.cc_utils import load_latent_df, push_latent_df, load_dictionary_model
 from scripts import (
     compute_latent_activations,
     collect_activating_examples,
     compute_latent_stats,
     compute_scalers,
+    kl_experiment,
+    compute_latents_template_stats,
 )
-from scripts.eval_betas import load_betas_results, add_possible_cols, plot_error_vs_reconstruction, plot_ratio_histogram, plot_beta_distribution_histograms, plot_correlation_with_frequency, plot_rank_distributions
+from scripts.eval_betas import (
+    load_betas_results,
+    add_possible_cols,
+    plot_error_vs_reconstruction,
+    plot_ratio_histogram,
+    plot_beta_distribution_histograms,
+    plot_correlation_with_frequency,
+    plot_rank_distributions,
+)
 from tools.cache_utils import LatentActivationCache
 
 
@@ -120,8 +131,14 @@ def frequency_plot(df: pd.DataFrame):
     plt.show()
 
 
-
-def make_betas_plots(crosscoder: str, data_dir: Path, results_dir: Path, chat_specific_indices: list[int], shared_indices: list[int], upload_to_hub: bool = True):
+def make_betas_plots(
+    crosscoder: str,
+    data_dir: Path,
+    results_dir: Path,
+    chat_specific_indices: list[int],
+    shared_indices: list[int],
+    upload_to_hub: bool = True,
+):
     betas_dir = data_dir / "results" / "closed_form_scalars"
     cc_name = crosscoder.replace("/", "_")
     plots_dir = results_dir / "closed_form_scalars" / cc_name
@@ -143,9 +160,15 @@ def make_betas_plots(crosscoder: str, data_dir: Path, results_dir: Path, chat_sp
     }
 
     df = load_latent_df(crosscoder)
-    all_betas, count_active = load_betas_results(betas_dir / cc_name / "all_latents", configs)
-    chat_error_betas, count_active_chat = load_betas_results(betas_dir / cc_name / "chat_specific_latents", configs)
-    shared_error_betas, count_active_shared = load_betas_results(betas_dir / cc_name / "shared_latents", configs)
+    all_betas, count_active = load_betas_results(
+        betas_dir / cc_name / "all_latents", configs
+    )
+    chat_error_betas, count_active_chat = load_betas_results(
+        betas_dir / cc_name / "chat_specific_latents", configs
+    )
+    shared_error_betas, count_active_shared = load_betas_results(
+        betas_dir / cc_name / "shared_latents", configs
+    )
 
     df = add_possible_cols(df, chat_specific_indices, chat_error_betas)
     df = add_possible_cols(df, shared_indices, shared_error_betas)
@@ -180,6 +203,7 @@ def make_betas_plots(crosscoder: str, data_dir: Path, results_dir: Path, chat_sp
     print(
         f"Beta ratio reconstruction ranks range: {reconstruction_ranks.min():.0f} to {reconstruction_ranks.max():.0f}"
     )
+
 
 # python crosscoder_analysis_pipeline.py gemma-2-2b-L13-k100-lr1e-04-local-shuffling-Decoupled --layer 13 --data-dir /workspace/data/ --results-dir /workspace/data/results
 if __name__ == "__main__":
@@ -229,9 +253,9 @@ if __name__ == "__main__":
     #     crosscoder=args.crosscoder,
     #     extra_args=dict_to_args(upload=True)
     # )
-    # latent_activation_cache = LatentActivationCache(
-    #     latent_activations_dir / args.crosscoder, expand=False, use_sparse_tensor=False
-    # )
+    latent_activation_cache = LatentActivationCache(
+        latent_activations_dir / args.crosscoder, expand=False, use_sparse_tensor=False
+    )
     # tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
     # collect_activating_examples(
     #     crosscoder=args.crosscoder,
@@ -304,4 +328,30 @@ if __name__ == "__main__":
     #     latent_indices=shared_baseline_indices,
     #     latent_indices_name="shared_baseline_latents",
     # )
-    make_betas_plots(args.crosscoder, args.data_dir, args.results_dir, effective_chat_latents_indices, shared_baseline_indices, args.upload_to_hub)
+    # make_betas_plots(args.crosscoder, args.data_dir, args.results_dir, effective_chat_latents_indices, shared_baseline_indices, args.upload_to_hub)
+    dictionary = load_dictionary_model(args.crosscoder).to(auto_device())
+    base_model = load_hf_model(args.base_model)
+    chat_model = load_hf_model(args.chat_model)
+    df = load_latent_df(args.crosscoder)  # reload the updated df
+    tokenizer = patch_tokenizer(AutoTokenizer.from_pretrained(args.chat_model))
+    kl_experiment(
+        dictionary=dictionary,
+        base_model=base_model,
+        chat_model=chat_model,
+        tokenizer=tokenizer,
+        dataset_name="science-of-finetuning/ultrachat_200k_gemma-2-2b-it-generated",
+        dataset_col="text",
+        split="train",
+        latent_df=df,
+        chat_only_indices=effective_chat_latents_indices,
+        layer_to_stop=args.layer,
+        max_seq_len=1024,
+    )
+    compute_latents_template_stats(
+        tokenizer=tokenizer,
+        crosscoder=args.crosscoder,
+        latent_activation_cache=latent_activation_cache,
+        max_activations=latent_activation_cache.max_activations,
+        save_path=args.results_dir / "latents_template_stats",
+        test=args.test,
+    )

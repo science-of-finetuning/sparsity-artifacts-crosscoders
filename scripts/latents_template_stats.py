@@ -465,8 +465,9 @@ class ActivationStats:
 
 
 @th.no_grad()
-def main(
+def compute_latents_template_stats(
     tokenizer,
+    crosscoder: str,
     latent_activation_cache: LatentActivationCache,
     max_activations,
     save_path,
@@ -554,6 +555,7 @@ def main(
         computed_stats = stats.finish()
         if save_path is not None:
             computed_stats.save(save_path)
+    process_stats(stats, crosscoder, save_path, verbose=1, test=test)
     return computed_stats
 
 
@@ -724,12 +726,12 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.use_precomputed_stats:
-        stats = ComputedActivationStats.load(Path("results/per_token_stats"))
+        stats = ComputedActivationStats.load(Path("results/latents_template_stats"))
         process_stats(stats, verbose=0, test=args.test)
         exit()
 
     # Create output directory
-    output_dir = Path("results/per_token_stats") / args.crosscoder
+    output_dir = Path("results/latents_template_stats") / args.crosscoder
     if args.test:
         output_dir = output_dir / "test"
     if args.name:
@@ -746,12 +748,12 @@ if __name__ == "__main__":
     )
     max_activations = latent_activation_cache.max_activations
 
-    stats = main(
+    stats = compute_latents_template_stats(
         tokenizer,
+        args.crosscoder,
         latent_activation_cache,
         max_activations,
         save_path=output_dir,
         test=args.test,
     )
 
-    process_stats(stats, args.crosscoder, output_dir, verbose=1, test=args.test)

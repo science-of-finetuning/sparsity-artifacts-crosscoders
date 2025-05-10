@@ -5,10 +5,12 @@ from argparse import ArgumentParser
 from collections import defaultdict
 from pathlib import Path
 from tqdm.auto import tqdm
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, GemmaForCausalLM, AutoTokenizer
 import wandb
 from datasets import load_dataset
 import torch as th
+import pandas as pd
+from dictionary_learning.dictionary import Dictionary
 
 sys.path.append(str(Path(__file__).parent.parent))
 from scripts.utils.edit_eval_results import add_random_means
@@ -16,12 +18,12 @@ from tools.compute_utils import RunningMeanStd, chunked_kl
 from tools.setup_to_eval import HalfStepPreprocessFn
 from tools.split_gemma import split_gemma
 from tools.tokenization_utils import tokenize_with_ctrl_mask, patch_tokenizer
-from tools.utils import mask_k_first_ones_vec
+from tools.utils import mask_k_first_ones_vec, load_hf_model
 from tools.setup_to_eval import (
-    create_acl_half_fns,
-    create_acl_vanilla_half_fns,
-    create_acl_patching_half_fns,
-    create_acl_crosscoder_half_fns,
+    # create_acl_half_fns,
+    # create_acl_vanilla_half_fns,
+    # create_acl_patching_half_fns,
+    # create_acl_crosscoder_half_fns,
     arxiv_paper_half_fns,
     sae_steering_half_fns,
 )
@@ -151,6 +153,7 @@ def compute_final_metrics(metrics_dict, preprocess_before_last_half_fns):
 def evaluate_interventions(
     base_model,
     chat_model,
+    tokenizer,
     dataset,
     preprocess_before_last_half_fns: dict[str, HalfStepPreprocessFn],
     layer_to_stop=13,
@@ -162,6 +165,7 @@ def evaluate_interventions(
     k_first: int = 10,
     save_path: Path | None = None,
 ):
+    assert isinstance(base_model, GemmaForCausalLM), "Current implementation only supports GemmaForCausalLM"
     if save_path is not None:
         save_path.mkdir(parents=True, exist_ok=True)
     # Initialize metric trackers for each subset
@@ -172,7 +176,7 @@ def evaluate_interventions(
     base_model = split_gemma(base_model)
     chat_model = split_gemma(chat_model)
     patch_tokenizer(
-        chat_model.tokenizer,
+        tokenizer,
         "google/gemma-2-2b-it",
     )
 
@@ -191,7 +195,7 @@ def evaluate_interventions(
         batch = dataset[i : i + batch_size]
         batch_tokens = tokenize_with_ctrl_mask(
             batch,
-            tokenizer=chat_model.tokenizer,
+            tokenizer=tokenizer,
             return_dict=True,
             return_tensors="pt",
             padding=True,
@@ -211,7 +215,6 @@ def evaluate_interventions(
         )
         next_ass_toks_mask = assistant_pred_mask & ~k_first_pred_toks_mask
         if not assistant_pred_mask.any():
-            print("Got an empty batch, skipping...")
             continue
 
         (
@@ -389,6 +392,123 @@ def evaluate_interventions(
     return compute_result()
 
 
+def kl_experiment(
+    # Model parameters
+    dictionary: Dictionary,
+    base_model: AutoModelForCausalLM,
+    chat_model: AutoModelForCausalLM,
+    # Dataset parameters
+    dataset_name: str,
+    split: str,
+    dataset_col: str,
+    # Dictionary parameters
+    latent_df: pd.DataFrame,
+    chat_only_indices: list[int] | None = None,
+    add_base_only_latents: bool = False,
+    is_sae: bool = False,
+    # Evaluation parameters
+    layer_to_stop: int = 13,
+    batch_size: int = 6,
+    device: str = "cuda",
+    max_seq_len: int = 1024,
+    log_every: int = 10,
+    k_first: int = 10,
+    checkpoint_every: int = 10,
+    num_seeds: int = 5,
+    percentages: list[int] = [5, 10, 30, 50, 100],
+    # Output parameters
+    save_path: Path = Path("results/interv_effects"),
+    name: str | None = None,
+    test: bool = False,
+) -> dict:
+    """
+    Main function to evaluate interventions effects.
+    """
+    dataset = load_dataset(dataset_name, split=split)[dataset_col]
+    if test:
+        name = name or "test"
+        print(f"Testing using {name}")
+        dataset = dataset[:120]  # Limit dataset size for testing
+    else:
+        dataset = dataset[: min(30_000, len(dataset))]
+
+    # Generate unique run name
+    run_name = (
+        str(int(time.time())) + ("_" + name if name else "") + "_" + generate_slug(2)
+    )
+
+    # Initialize wandb
+    project = "perplexity-comparison" + ("-test" if test else "")
+    wandb.init(project=project, name=run_name)
+
+    # Setup save directory
+    run_save_path = save_path / wandb.run.name
+    run_save_path.mkdir(parents=True, exist_ok=True)
+
+    # Process chat_only_indices if provided
+    if chat_only_indices is not None:
+        latent_df = latent_df.iloc[chat_only_indices]
+        latent_df["tag"] = "Chat only"
+
+    print(f"len df: {len(latent_df)}")
+
+    # Generate function dictionary based on model type
+    seeds = list(range(num_seeds))
+    if not isinstance(dictionary, CrossCoder):
+        fn_dict, infos = sae_steering_half_fns(
+            dictionary,
+            seeds,
+            latent_df,
+        )
+    else:
+        fn_dict, infos = arxiv_paper_half_fns(
+            dictionary,
+            latent_df,
+            add_base_only_latents=add_base_only_latents,
+        )
+
+    # Save metadata
+    with open(run_save_path / "metadata.json", "w") as f:
+        json.dump(
+            {
+                "infos": infos,
+                "parameters": {
+                    "layer_to_stop": layer_to_stop,
+                    "batch_size": batch_size,
+                    "max_seq_len": max_seq_len,
+                    "device": str(device),
+                    "num_seeds": num_seeds,
+                    "percentages": percentages,
+                    "is_sae": is_sae,
+                    "test": test,
+                },
+            },
+            f,
+        )
+
+    # Run evaluation
+    result = evaluate_interventions(
+        base_model,
+        chat_model,
+        dataset,
+        fn_dict,
+        layer_to_stop=layer_to_stop,
+        batch_size=batch_size,
+        device=device,
+        max_seq_len=max_seq_len,
+        log_every=log_every,
+        save_path=run_save_path,
+        checkpoint_every=checkpoint_every,
+    )
+
+    # Add mean across random seeds and save results
+    result = add_random_means(result)
+    with open(save_path / f"{wandb.run.name}_result.json", "w") as f:
+        json.dump(result, f)
+
+    return result
+
+
 # python scripts/evaluate_interventions_effects.py --dataset science-of-finetuning/lmsys-chat-1m-chat-formatted --dataset-col conversation --split validation --name lmsys-chat-1m-validation-beta-cols --columns beta_ratio_reconstruction beta_ratio_error
 
 # python scripts/evaluate_interventions_effects.py --dataset science-of-finetuning/lmsys-chat-1m-chat-formatted --dataset-col conversation --split validation --name lmsys-chat-1m-validation-others-cols --columns rank_sum "base uselessness score"
@@ -436,6 +556,8 @@ if __name__ == "__main__":
         "--percentage", type=int, nargs="+", default=[5, 10, 30, 50, 100]
     )
     parser.add_argument("--is-sae", action="store_true")
+    parser.add_argument("--base-model", type=str, default="google/gemma-2-2b")
+    parser.add_argument("--chat-model", type=str, default="google/gemma-2-2b-it")
     # parser.add_argument(
     #     "--columns",
     #     nargs="+",
@@ -455,7 +577,6 @@ if __name__ == "__main__":
     parser.add_argument("--chat-only-indices", type=Path, default=None)
     args = parser.parse_args()
     print(f"using args: {args}")
-    dataset = load_dataset(args.dataset, split=args.split)
     device = (
         args.device
         if args.device != "auto"
@@ -487,83 +608,28 @@ if __name__ == "__main__":
         df["tag"] = "Chat only"
 
     print(f"len df: {len(df)}")
-    if not isinstance(dictionary, CrossCoder):
-        fn_dict, infos = sae_steering_half_fns(
-            dictionary,
-            seeds,
-            df,
-        )
-    else:
-        fn_dict, infos = arxiv_paper_half_fns(
-            dictionary,
-            df,
-            add_base_only_latents=args.add_base_only_latents,
-        )
-    if args.test:
-        fn_dict = create_acl_vanilla_half_fns()
-        fn_dict.update(create_acl_patching_half_fns())
-        dataset = dataset.select(range(120))
-    else:
-        dataset = dataset.select(range(min(30_000, len(dataset))))
-    print(f"running {len(fn_dict)} interventions")
-    if args.name is None and args.test:
-        args.name = "test"
-        print(f"Testing using {args.name}")
-    name = "_" + args.name if args.name is not None else ""
-    args.name = str(int(time.time())) + name + "_" + generate_slug(2)
-    project = "perplexity-comparison"
-    if args.test:
-        project += "-test"
-    wandb.init(project=project, name=args.name)
-    wdb_name = wandb.run.name
-    (args.save_path / wdb_name).mkdir(parents=True, exist_ok=True)
-    with open(args.save_path / wdb_name / "metadata.json", "w") as f:
-        json.dump(
-            {
-                "infos": infos,
-                "args": {
-                    "named_args": {
-                        k: str(v)
-                        for k, v in args.__dict__.items()
-                        if not k.startswith("_")
-                    }
-                },
-            },
-            f,
-        )
-    # input("breakpoint")
-    chat_model = AutoModelForCausalLM.from_pretrained(
-        "google/gemma-2-2b-it",
-        torch_dtype=th.bfloat16,
-        device_map=args.chat_device,
-        attn_implementation="eager",
-    )
-
-    tokenizer = AutoTokenizer.from_pretrained("google/gemma-2-2b-it")
-    chat_model.tokenizer = tokenizer
-    base_model = AutoModelForCausalLM.from_pretrained(
-        "google/gemma-2-2b",
-        device_map=args.base_device,
-        torch_dtype=th.bfloat16,
-        attn_implementation="eager",
-    )
-    result = evaluate_interventions(
-        base_model,
-        chat_model,
-        dataset[args.dataset_col],
-        fn_dict,
+    result = kl_experiment(
+        dictionary=dictionary,
+        base_model=load_hf_model(args.base_model),
+        chat_model=load_hf_model(args.chat_model),
+        tokenizer=AutoTokenizer.from_pretrained(args.chat_model),
+        dataset_name=args.dataset,
+        split=args.split,
+        dataset_col=args.dataset_col,
+        latent_df=df,
+        chat_only_indices=chat_only_indices,
+        add_base_only_latents=args.add_base_only_latents,
+        is_sae=args.is_sae,
         layer_to_stop=args.layer_to_stop,
         batch_size=args.batch_size,
         device=device,
         max_seq_len=args.max_seq_len,
         log_every=args.log_every,
-        save_path=args.save_path / wandb.run.name,
+        k_first=args.k_first,
         checkpoint_every=args.checkpoint,
+        num_seeds=args.num_seeds,
+        percentages=args.percentage,
+        save_path=args.save_path,
+        name=args.name,
+        test=args.test,
     )
-
-    # Add mean across random seeds
-    result = add_random_means(result)
-
-    args.save_path.mkdir(parents=True, exist_ok=True)
-    with open(args.save_path / f"{wdb_name}_result.json", "w") as f:
-        json.dump(result, f)
