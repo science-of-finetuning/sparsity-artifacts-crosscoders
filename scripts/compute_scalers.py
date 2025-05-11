@@ -394,17 +394,17 @@ def compute_scalers(
         latent_vectors = random_indices_vectors
 
     # Run all computations
-    for name, loader_fn in computations:
-        name += f"_N{num_samples}_n_offset{n_offset}"
-        if latent_activation_postprocessing_fn is not None:
-            name += f"_jumprelu{threshold_active_latents}"
+    for exp_name, loader_fn in computations:
+        exp_name += f"_N{num_samples}_n_offset{n_offset}"
+        if threshold_active_latents is not None:
+            exp_name += f"_jumprelu{threshold_active_latents}"
         if random_vectors:
-            name += f"_random_vectors_s{seed}"
+            exp_name += f"_random_vectors_s{seed}"
         if random_indices:
-            name += f"_random_indices_s{seed}"
+            exp_name += f"_random_indices_s{seed}"
         if name:
-            name += f"_{name}"
-        logger.info(f"Computing {name}")
+            exp_name += f"_{name}"
+        logger.info(f"Computing {exp_name}")
         betas, count_active, nominator, norm_f, norm_d = closed_form_scalars(
             latent_vectors,
             latent_indices,
@@ -416,16 +416,16 @@ def compute_scalers(
             encode_activation_fn=encode_activation_fn,
             latent_activation_postprocessing_fn=latent_activation_postprocessing_fn,
         )
-        th.save(betas.cpu(), results_dir / f"betas_{name}.pt")
-        th.save(count_active.cpu(), results_dir / f"count_active_{name}.pt")
-        th.save(nominator.cpu(), results_dir / f"nominator_{name}.pt")
-        th.save(norm_f.cpu(), results_dir / f"norm_f_{name}.pt")
-        th.save(norm_d.cpu(), results_dir / f"norm_d_{name}.pt")
+        th.save(betas.cpu(), results_dir / f"betas_{exp_name}.pt")
+        th.save(count_active.cpu(), results_dir / f"count_active_{exp_name}.pt")
+        th.save(nominator.cpu(), results_dir / f"nominator_{exp_name}.pt")
+        th.save(norm_f.cpu(), results_dir / f"norm_f_{exp_name}.pt")
+        th.save(norm_d.cpu(), results_dir / f"norm_d_{exp_name}.pt")
 
         if random_indices or random_vectors:
-            th.save(latent_vectors.cpu(), results_dir / f"latent_vectors_{name}.pt")
+            th.save(latent_vectors.cpu(), results_dir / f"latent_vectors_{exp_name}.pt")
         if random_indices:
-            th.save(random_indices.cpu(), results_dir / f"random_indices_{name}.pt")
+            th.save(random_indices.cpu(), results_dir / f"random_indices_{exp_name}.pt")
 
 
 if __name__ == "__main__":

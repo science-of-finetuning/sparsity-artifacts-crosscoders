@@ -6,6 +6,7 @@ Analyze a given crosscoder as shown in the paper.
 """
 
 from run_notebook import run_notebook
+import time
 from argparse import ArgumentParser
 from pathlib import Path
 import numpy as np
@@ -15,7 +16,7 @@ import os
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
 from tools.utils import dict_to_args, auto_device, load_hf_model
-from tools.tokenizer_utils import patch_tokenizer
+from tools.tokenization_utils import patch_tokenizer
 from tools.cc_utils import load_latent_df, push_latent_df, load_dictionary_model
 from scripts import (
     compute_latent_activations,
@@ -33,8 +34,10 @@ from scripts.eval_betas import (
     plot_beta_distribution_histograms,
     plot_correlation_with_frequency,
     plot_rank_distributions,
+    plot_beta_ratios_template_perc
 )
 from tools.cache_utils import LatentActivationCache
+from loguru import logger
 
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -131,13 +134,12 @@ def frequency_plot(df: pd.DataFrame):
     plt.show()
 
 
-def make_betas_plots(
+def make_beta_df(
     crosscoder: str,
     data_dir: Path,
     results_dir: Path,
     chat_specific_indices: list[int],
     shared_indices: list[int],
-    upload_to_hub: bool = True,
 ):
     betas_dir = data_dir / "results" / "closed_form_scalars"
     cc_name = crosscoder.replace("/", "_")
@@ -164,18 +166,33 @@ def make_betas_plots(
         betas_dir / cc_name / "all_latents", configs
     )
     chat_error_betas, count_active_chat = load_betas_results(
-        betas_dir / cc_name / "chat_specific_latents", configs
+        betas_dir / cc_name / "effective_chat_only_latents", configs
     )
     shared_error_betas, count_active_shared = load_betas_results(
-        betas_dir / cc_name / "shared_latents", configs
+        betas_dir / cc_name / "shared_baseline_latents", configs
     )
 
+    df = add_possible_cols(df, df.index.tolist(), all_betas)
     df = add_possible_cols(df, chat_specific_indices, chat_error_betas)
     df = add_possible_cols(df, shared_indices, shared_error_betas)
-    df = add_possible_cols(df, df.index.tolist(), all_betas)
-    if upload_to_hub:
-        push_latent_df(df, crosscoder=crosscoder)
+    df_path = results_dir / cc_name / "latent_df.csv"
+    df_path.parent.mkdir(exist_ok=True)
+    if df_path.exists():
+        logger.info(
+            f"Updating local latent df at {df_path}, old df will be backed up to {df_path}.{int(time.time())}"
+        )
+        df_path.rename(df_path.with_suffix(f".{int(time.time())}.csv"))
+    df.to_csv(df_path)
+    logger.info(f"Saved latent df with betas to {df_path}")
+    return df
 
+
+def make_betas_plots(
+    df: pd.DataFrame,
+    chat_specific_indices: list[int],
+    shared_indices: list[int],
+    plots_dir: Path,
+):
     target_df = df.iloc[chat_specific_indices]
     baseline_df = df.iloc[shared_indices]
     plot_error_vs_reconstruction(target_df, baseline_df, plots_dir, variant="standard")
@@ -328,12 +345,49 @@ if __name__ == "__main__":
     #     latent_indices=shared_baseline_indices,
     #     latent_indices_name="shared_baseline_latents",
     # )
-    # make_betas_plots(args.crosscoder, args.data_dir, args.results_dir, effective_chat_latents_indices, shared_baseline_indices, args.upload_to_hub)
+    # df = make_beta_df(
+    #     args.crosscoder,
+    #     args.data_dir,
+    #     args.results_dir,
+    #     effective_chat_latents_indices,
+    #     shared_baseline_indices,
+    # )
+    # chat_only_indices = df[df["tag"] == "Chat only"].index.tolist()
+    # if args.upload_to_hub:
+    #     push_latent_df(
+    #         df,
+    #         crosscoder=args.crosscoder,
+    #         confirm=False,
+    #         commit_message="Added betas columns to df",
+    #     )
+    # make_betas_plots(
+    #     df,
+    #     chat_only_indices,
+    #     shared_baseline_indices,
+    #     args.results_dir / "closed_form_scalars" / args.crosscoder,
+    # )
+    tokenizer = patch_tokenizer(
+        AutoTokenizer.from_pretrained(args.chat_model), args.chat_model
+    )
+    # compute_latents_template_stats(
+    #     tokenizer=tokenizer,
+    #     crosscoder=args.crosscoder,
+    #     latent_activation_cache=latent_activation_cache,
+    #     max_activations=latent_activation_cache.max_activations,
+    #     save_path=args.results_dir / "latents_template_stats",
+    #     test=args.test,
+    # )
+    # df = pd.read_csv(
+    #     args.results_dir / "latents_template_stats" / "latent_stats_global.csv"
+    # )
+    # plot_beta_ratios_template_perc(
+    #     df.query("tag == 'Chat only'"),
+    #     df[df["lmsys_ctrl_%"] > 0.5].query("tag == 'Chat only'"),
+    #     args.results_dir / args.crosscoder,
+    # )
     dictionary = load_dictionary_model(args.crosscoder).to(auto_device())
     base_model = load_hf_model(args.base_model)
     chat_model = load_hf_model(args.chat_model)
-    df = load_latent_df(args.crosscoder)  # reload the updated df
-    tokenizer = patch_tokenizer(AutoTokenizer.from_pretrained(args.chat_model))
     kl_experiment(
         dictionary=dictionary,
         base_model=base_model,
@@ -346,12 +400,4 @@ if __name__ == "__main__":
         chat_only_indices=effective_chat_latents_indices,
         layer_to_stop=args.layer,
         max_seq_len=1024,
-    )
-    compute_latents_template_stats(
-        tokenizer=tokenizer,
-        crosscoder=args.crosscoder,
-        latent_activation_cache=latent_activation_cache,
-        max_activations=latent_activation_cache.max_activations,
-        save_path=args.results_dir / "latents_template_stats",
-        test=args.test,
     )

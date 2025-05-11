@@ -161,8 +161,8 @@ def save_json(data, path: Path):
         json.dump(data, f)
 
 
-def auto_device(device: str):
-    if device == "auto":
+def auto_device(device: str | None = None):
+    if device is None or device == "auto":
         return "cuda" if th.cuda.is_available() else "cpu"
     else:
         return device

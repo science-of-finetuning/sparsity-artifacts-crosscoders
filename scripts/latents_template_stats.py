@@ -464,101 +464,6 @@ class ActivationStats:
         return ComputedActivationStats(stats, self.token_counts)
 
 
-@th.no_grad()
-def compute_latents_template_stats(
-    tokenizer,
-    crosscoder: str,
-    latent_activation_cache: LatentActivationCache,
-    max_activations,
-    save_path,
-    max_num_tokens=1_000_000_000,
-    test=False,
-):
-    device = "cuda" if th.cuda.is_available() else "cpu"
-    latent_activation_cache.to(device)
-    stats = ActivationStats(
-        latent_activation_cache.dict_size,
-        max_activations,
-        device=device,
-    )
-
-    num_tokens = 0
-    max_num_tokens = max_num_tokens if not test else 100_000
-    for i in range(len(latent_activation_cache)):
-        if tokenizer.start_of_turn_token in latent_activation_cache.get_sequence(i)[:2]:
-            latent_activation_cache.offset = latent_activation_cache.offset + i
-            break
-    print(f"Using offset {latent_activation_cache.offset}")
-    try:
-        # dataloader = DataLoader(
-        #     latent_activation_cache,
-        #     batch_size=batch_size,
-        #     shuffle=False,
-        #     # num_workers=16,
-        # )
-        dataloader = latent_activation_cache
-        pbar = trange(len(dataloader), desc="Processing batches")
-        for i in pbar:
-            tokens = latent_activation_cache.get_sequence(i)
-            # Convert tokens to conversation using gemma_tokens_to_conv
-            tokens, cc_acts = dataloader[i]
-            # convs = [
-            #     gemma_tokens_to_conv(sample.tolist(), tokenizer) for sample in tokens
-            # ]
-            convs = [gemma_tokens_to_conv(tokens.tolist(), tokenizer)]
-            batch = tokenize_with_ctrl_ids(
-                convs,
-                tokenizer,
-                return_dict=True,
-                return_assistant_tokens_mask=True,
-                return_tensors="pt",
-                padding=True,
-                truncation=True,
-                max_length=1024,
-            ).to(device)
-            ctrl_mask = batch["ctrl_mask"]
-            ctrl_ids = batch["ctrl_ids"]
-            assistant_mask = batch["assistant_masks"]
-            attn_mask = batch["attention_mask"].bool()
-            user_tokens_mask = remove_bos(attn_mask & ~assistant_mask & ~ctrl_mask)
-            bos_mask = th.zeros_like(attn_mask, dtype=th.bool)
-            bos_mask[:, 0] = True
-            all_masks = {
-                "ctrl_tokens": ctrl_mask,
-                **{f"ctrl_token_{i}": ctrl_ids == i for i in range(1, 11)},
-                "non_ctrl_tokens": remove_bos(attn_mask & ~ctrl_mask),
-                "assistant_tokens": assistant_mask,
-                "user_tokens": user_tokens_mask,
-                "bos": bos_mask,
-            }
-            # assert (
-            #     attn_mask.shape == cc_acts.shape[:-1]
-            # ), f"Shape mismatch: {attn_mask.shape} <> {cc_acts.shape[:-1]}"
-            # assert (
-            #     ctrl_mask.shape == cc_acts.shape[:-1]
-            # ), f"Shape mismatch: {ctrl_mask.shape} <> {cc_acts.shape[:-1]}"
-            # assert (
-            #     assistant_mask.shape == cc_acts.shape[:-1]
-            # ), f"Shape mismatch: {assistant_mask.shape} <> {cc_acts.shape[:-1]}"
-            # assert (
-            #     all_masks["ctrl_token_1"].shape == cc_acts.shape[:-1]
-            # ), f"Shape mismatch: {all_masks['ctrl_token_1'].shape} <> {cc_acts.shape[:-1]}"
-            for group_name, mask in all_masks.items():
-                stats.update(cc_acts, mask, group_name)
-
-            num_new_tokens = attn_mask.sum().item()
-            num_tokens += num_new_tokens
-            pbar.set_postfix_str(f"Tokens: {num_tokens}")
-            if num_tokens >= max_num_tokens:
-                break
-    finally:
-        computed_stats = stats.finish()
-        if save_path is not None:
-            computed_stats.save(save_path)
-    process_stats(stats, crosscoder, save_path, verbose=1, test=test)
-    return computed_stats
-
-
 def process_stats(
     stats: ComputedActivationStats, crosscoder: str, save_path, verbose=1, test=False
 ):
@@ -711,6 +616,103 @@ def process_stats(
     new_stats.to_csv(save_path / "latent_stats_global.csv")
     if not test:
         push_latent_df(new_stats, crosscoder, confirm=False)
+
+
+
+@th.no_grad()
+def compute_latents_template_stats(
+    tokenizer,
+    crosscoder: str,
+    latent_activation_cache: LatentActivationCache,
+    max_activations,
+    save_path,
+    max_num_tokens=1_000_000_000,
+    test=False,
+):
+    device = "cuda" if th.cuda.is_available() else "cpu"
+    latent_activation_cache.to(device)
+    stats = ActivationStats(
+        latent_activation_cache.dict_size,
+        max_activations,
+        device=device,
+    )
+
+    num_tokens = 0
+    max_num_tokens = max_num_tokens if not test else 100_000
+    for i in range(len(latent_activation_cache)):
+        if tokenizer.start_of_turn_token in latent_activation_cache.get_sequence(i)[:2]:
+            latent_activation_cache.offset = latent_activation_cache.offset + i
+            break
+    print(f"Using offset {latent_activation_cache.offset}")
+    try:
+        # dataloader = DataLoader(
+        #     latent_activation_cache,
+        #     batch_size=batch_size,
+        #     shuffle=False,
+        #     # num_workers=16,
+        # )
+        dataloader = latent_activation_cache
+        pbar = trange(len(dataloader), desc="Processing batches")
+        for i in pbar:
+            tokens = latent_activation_cache.get_sequence(i)
+            # Convert tokens to conversation using gemma_tokens_to_conv
+            tokens, cc_acts = dataloader[i]
+            # convs = [
+            #     gemma_tokens_to_conv(sample.tolist(), tokenizer) for sample in tokens
+            # ]
+            convs = [gemma_tokens_to_conv(tokens.tolist(), tokenizer)]
+            batch = tokenize_with_ctrl_ids(
+                convs,
+                tokenizer,
+                return_dict=True,
+                return_assistant_tokens_mask=True,
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=1024,
+            ).to(device)
+            ctrl_mask = batch["ctrl_mask"]
+            ctrl_ids = batch["ctrl_ids"]
+            assistant_mask = batch["assistant_masks"]
+            attn_mask = batch["attention_mask"].bool()
+            user_tokens_mask = remove_bos(attn_mask & ~assistant_mask & ~ctrl_mask)
+            bos_mask = th.zeros_like(attn_mask, dtype=th.bool)
+            bos_mask[:, 0] = True
+            all_masks = {
+                "ctrl_tokens": ctrl_mask,
+                **{f"ctrl_token_{i}": ctrl_ids == i for i in range(1, 11)},
+                "non_ctrl_tokens": remove_bos(attn_mask & ~ctrl_mask),
+                "assistant_tokens": assistant_mask,
+                "user_tokens": user_tokens_mask,
+                "bos": bos_mask,
+            }
+            # assert (
+            #     attn_mask.shape == cc_acts.shape[:-1]
+            # ), f"Shape mismatch: {attn_mask.shape} <> {cc_acts.shape[:-1]}"
+            # assert (
+            #     ctrl_mask.shape == cc_acts.shape[:-1]
+            # ), f"Shape mismatch: {ctrl_mask.shape} <> {cc_acts.shape[:-1]}"
+            # assert (
+            #     assistant_mask.shape == cc_acts.shape[:-1]
+            # ), f"Shape mismatch: {assistant_mask.shape} <> {cc_acts.shape[:-1]}"
+            # assert (
+            #     all_masks["ctrl_token_1"].shape == cc_acts.shape[:-1]
+            # ), f"Shape mismatch: {all_masks['ctrl_token_1'].shape} <> {cc_acts.shape[:-1]}"
+            for group_name, mask in all_masks.items():
+                stats.update(cc_acts, mask, group_name)
+
+            num_new_tokens = attn_mask.sum().item()
+            num_tokens += num_new_tokens
+            pbar.set_postfix_str(f"Tokens: {num_tokens}")
+            if num_tokens >= max_num_tokens:
+                break
+    finally:
+        computed_stats = stats.finish()
+        if save_path is not None:
+            save_path.mkdir(exist_ok=True)
+            computed_stats.save(save_path)
+    process_stats(computed_stats, crosscoder, save_path, verbose=1, test=test)
+    return computed_stats
 
 
 # python scripts/per_token_stats.py gemma-2-2b-L13-k100-lr1e-04-local-shuffling-CCLoss --latent-activation-cache-path /workspace/data/latent_activations

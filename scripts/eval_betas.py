@@ -22,6 +22,7 @@ __all__ = [
     "plot_rank_distributions",
 ]
 
+
 def load_betas_results(base_path, configs, not_dead_mask=None, to_numpy=True):
     """
     Load beta values and count of active instances from result files.
@@ -98,7 +99,8 @@ def add_possible_cols(df, indices, betas):
             df, indices, "beta_error_chat", betas["normal"]["chat"]["error"]
         )
         df["beta_ratio_error"] = df["beta_error_base"] / df["beta_error_chat"]
-
+    else:
+        print("No beta_error_base or beta_error_chat found")
     if (
         betas["normal"]["base"]["reconstruction"] is not None
         and betas["normal"]["chat"]["reconstruction"] is not None
@@ -118,6 +120,8 @@ def add_possible_cols(df, indices, betas):
         df["beta_ratio_reconstruction"] = (
             df["beta_reconstruction_base"] / df["beta_reconstruction_chat"]
         )
+    else:
+        print("No beta_reconstruction_base or beta_reconstruction_chat found")
 
     if (
         betas["normal"]["base"]["activation"] is not None
@@ -132,6 +136,8 @@ def add_possible_cols(df, indices, betas):
         df["beta_activation_ratio"] = (
             df["beta_activation_base"] / df["beta_activation_chat"]
         )
+    else:
+        print("No beta_activation_base or beta_activation_chat found")
 
     if (
         betas["normal"]["base"]["activation_no_bias"] is not None
@@ -152,12 +158,20 @@ def add_possible_cols(df, indices, betas):
         df["beta_activation_no_bias_ratio"] = (
             df["beta_activation_no_bias_base"] / df["beta_activation_no_bias_chat"]
         )
+    else:
+        print("No beta_activation_no_bias_base or beta_activation_no_bias_chat found")
 
     return df
 
 
 def plot_beta_ratios_template_perc(target_df, filtered_df, plots_dir):
-    """Plot histograms of beta ratios for template percentage"""
+    """Plot histograms of beta ratios for template percentage
+    
+    Args:
+        target_df: DataFrame containing all chat-only latents
+        filtered_df: DataFrame containing latents with high template percentage
+        plots_dir: Directory to save plots
+    """
     if (
         "lmsys_ctrl_%" in target_df.columns
         and "beta_ratio_error" in target_df.columns
