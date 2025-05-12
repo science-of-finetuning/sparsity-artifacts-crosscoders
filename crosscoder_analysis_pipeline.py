@@ -394,7 +394,7 @@ if __name__ == "__main__":
         chat_model=chat_model,
         tokenizer=tokenizer,
         dataset_name="science-of-finetuning/ultrachat_200k_gemma-2-2b-it-generated",
-        dataset_col="text",
+        dataset_col="messages",
         split="train",
         latent_df=df,
         chat_only_indices=effective_chat_latents_indices,
