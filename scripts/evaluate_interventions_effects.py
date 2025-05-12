@@ -5,7 +5,7 @@ from argparse import ArgumentParser
 from collections import defaultdict
 from pathlib import Path
 from tqdm.auto import tqdm
-from transformers import AutoModelForCausalLM, GemmaForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, Gemma2ForCausalLM, AutoTokenizer
 import wandb
 from datasets import load_dataset
 import torch as th
@@ -165,7 +165,7 @@ def evaluate_interventions(
     k_first: int = 10,
     save_path: Path | None = None,
 ):
-    assert isinstance(base_model, GemmaForCausalLM), "Current implementation only supports GemmaForCausalLM"
+    assert isinstance(base_model, Gemma2ForCausalLM), f"Current implementation only supports Gemma2ForCausalLM, got {type(base_model)}"
     if save_path is not None:
         save_path.mkdir(parents=True, exist_ok=True)
     # Initialize metric trackers for each subset
@@ -397,6 +397,7 @@ def kl_experiment(
     dictionary: Dictionary,
     base_model: AutoModelForCausalLM,
     chat_model: AutoModelForCausalLM,
+    tokenizer: AutoTokenizer,
     # Dataset parameters
     dataset_name: str,
     split: str,
@@ -490,6 +491,7 @@ def kl_experiment(
     result = evaluate_interventions(
         base_model,
         chat_model,
+        tokenizer,
         dataset,
         fn_dict,
         layer_to_stop=layer_to_stop,

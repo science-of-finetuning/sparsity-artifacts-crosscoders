@@ -301,16 +301,13 @@ class CrossCoderReconstruction(IdentityPreprocessFn):
         ).float()  # b, s, 2, d
         cc_input = einops.rearrange(cc_input, "b s m d -> (b s) m d")
         f = self.crosscoder.encode(cc_input)  # (b s) D
-        reconstruction = th.einsum(
-            "bD, Dd->bd",
-            f,
-            self.crosscoder.decoder.weight[0 if self.reconstruct_with == "base" else 1],
-        )  # (b s) d
-        reconstruction = (
-            einops.rearrange(
-                reconstruction, "(b s) d -> b s d", b=base_activations.shape[0]
-            )
-            + self.crosscoder.decoder.bias[0 if self.reconstruct_with == "base" else 1]
+        reconstruction = self.crosscoder.decode(f)  # (b s) 2 d
+        if self.reconstruct_with == "base":
+            reconstruction = reconstruction[:, 0, :]
+        else:
+            reconstruction = reconstruction[:, 1, :]
+        reconstruction = einops.rearrange(
+            reconstruction, "(b s) d -> b s d", b=base_activations.shape[0]
         )
         return self.continue_with_model(reconstruction.to(self.model_dtype))
 
@@ -406,6 +403,11 @@ class CrossCoderSteeringLatent(IdentityPreprocessFn):
         f = self.crosscoder.encode(
             cc_input, select_features=self.monitored_latents
         )  # (b s) f
+        if self.crosscoder.decoupled_code:
+            if self.steer_with_latents_from == "base":
+                f = f[:, 0, :]
+            else:
+                f = f[:, 1, :]
         if base_activations.dim() == 3:
             f = einops.rearrange(f, "(b s) f -> b s f", b=base_activations.shape[0])
         mask = None
