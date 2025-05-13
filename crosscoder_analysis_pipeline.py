@@ -13,7 +13,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
 import os
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoTokenizer
 
 from tools.utils import dict_to_args, auto_device, load_hf_model
 from tools.tokenization_utils import patch_tokenizer
@@ -34,7 +34,7 @@ from scripts.eval_betas import (
     plot_beta_distribution_histograms,
     plot_correlation_with_frequency,
     plot_rank_distributions,
-    plot_beta_ratios_template_perc
+    plot_beta_ratios_template_perc,
 )
 from tools.cache_utils import LatentActivationCache
 from loguru import logger
@@ -238,6 +238,8 @@ if __name__ == "__main__":
     parser.add_argument("--tokenizer", type=str, default=None)
     parser.add_argument("--layer", type=int, required=True)
     parser.add_argument("--no-upload", action="store_false", dest="upload_to_hub")
+    parser.add_argument("--lmsys-col", type=str, default="")
+    parser.add_argument("--kl-dataset", type=str, default="science-of-finetuning/ultrachat_200k_gemma-2-2b-it-generated", help="Dataset to use for KL experiment")
     parser.add_argument(
         "--num-effective-chat-only-latents",
         type=int,
@@ -251,46 +253,25 @@ if __name__ == "__main__":
         help="Index of the chat model in the stacked activation cache",
     )
     args = parser.parse_args()
+    if args.chat_model_idx != 1:
+        c = input(
+            f"Chat model idx set to {args.chat_model_idx} != 1. Some of the analysis pipeline will not work as expected (e.g. kl experiment). Continue? y/(n)"
+        )
+        if c != "y":
+            exit()
+
     latent_activations_dir = args.data_dir / "latent_activations"
     activation_store_dir = args.data_dir / "activations"
     if args.tokenizer is None:
         args.tokenizer = args.chat_model
-    # compute_latent_activations(
-    #     dictionary_model=args.crosscoder,
-    #     latent_activations_dir=latent_activations_dir,
-    #     base_model=args.base_model,
-    #     chat_model=args.chat_model,
-    #     layer=args.layer,
-    #     upload_to_hub=args.upload_to_hub,
-    #     split="validation",
-    #     load_from_disk=True
-    # )
     # run_notebook(
     #     notebook="eval_crosscoder",
     #     crosscoder=args.crosscoder,
-    #     extra_args=dict_to_args(upload=True)
+    #     extra_args=dict_to_args(upload=args.upload_to_hub, overwrite=True),
     # )
-    latent_activation_cache = LatentActivationCache(
-        latent_activations_dir / args.crosscoder, expand=False, use_sparse_tensor=False
+    scaler_lmsys_split = (
+        "train" if args.lmsys_col is None else f"train-col{args.lmsys_col}"
     )
-    # tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
-    # collect_activating_examples(
-    #     crosscoder=args.crosscoder,
-    #     bos_token_id=tokenizer.bos_token_id,
-    #     latent_activation_cache=latent_activation_cache,
-    #     n=100,
-    #     min_threshold=1e-4,
-    #     quantiles=[0.25, 0.5, 0.75, 0.95, 1.0],
-    #     save_path=Path("results/quantile_examples"),
-    #     test=args.test,
-    #     only_upload=True
-    # )
-    # compute_latent_stats(
-    #     crosscoder=args.crosscoder,
-    #     latent_activation_cache=latent_activation_cache,
-    #     layer=args.layer,
-    #     confirm=False
-    # )
     # compute_scalers(
     #     dictionary_model=args.crosscoder,
     #     layer=args.layer,
@@ -298,6 +279,7 @@ if __name__ == "__main__":
     #     results_dir=args.results_dir,
     #     base_model=args.base_model,
     #     chat_model=args.chat_model,
+    #     lmsys_split=scaler_lmsys_split,
     #     target_model_idx=1,
     #     chat_activation=True,
     #     base_activation=True,
@@ -309,14 +291,17 @@ if __name__ == "__main__":
     #     base_error=False,
     # )
     df = load_latent_df(args.crosscoder)
-    effective_chat_latents_indices = (
-        df.sort_values(by="dec_norm_diff", ascending=True)
-        .head(args.num_effective_chat_only_latents)
-        .index.tolist()
-    )
+    if args.num_effective_chat_only_latents == -1:
+        effective_chat_latents_indices = df.query("tag == 'Chat only'").index.tolist()
+    else:
+        effective_chat_latents_indices = (
+            df.sort_values(by="dec_norm_diff", ascending=True)
+            .head(args.num_effective_chat_only_latents)
+            .index.tolist()
+        )
     shared_baseline_indices = (
         df[df["tag"] == "Shared"]
-        .sample(n=args.num_effective_chat_only_latents, random_state=42)
+        .sample(n=len(effective_chat_latents_indices), random_state=42)
         .index.tolist()
     )
     # compute_scalers(
@@ -328,9 +313,10 @@ if __name__ == "__main__":
     #     chat_model=args.chat_model,
     #     target_model_idx=1,
     #     chat_error=True,
-    #     base_error=True,
+    #     # base_error=True,
     #     latent_indices=effective_chat_latents_indices,
     #     latent_indices_name="effective_chat_only_latents",
+    #     lmsys_split=scaler_lmsys_split,
     # )
     # compute_scalers(
     #     dictionary_model=args.crosscoder,
@@ -341,9 +327,10 @@ if __name__ == "__main__":
     #     chat_model=args.chat_model,
     #     target_model_idx=1,
     #     chat_error=True,
-    #     base_error=True,
+    #     # base_error=True,
     #     latent_indices=shared_baseline_indices,
     #     latent_indices_name="shared_baseline_latents",
+    #     lmsys_split=scaler_lmsys_split,
     # )
     # df = make_beta_df(
     #     args.crosscoder,
@@ -366,6 +353,38 @@ if __name__ == "__main__":
     #     shared_baseline_indices,
     #     args.results_dir / "closed_form_scalars" / args.crosscoder,
     # )
+    # compute_latent_activations(
+    #     dictionary_model=args.crosscoder,
+    #     latent_activations_dir=latent_activations_dir,
+    #     base_model=args.base_model,
+    #     chat_model=args.chat_model,
+    #     layer=args.layer,
+    #     upload_to_hub=args.upload_to_hub,
+    #     split="validation",
+    #     lmsys_col=args.lmsys_col,
+    # )
+    # latent_activation_cache = LatentActivationCache(
+    #     latent_activations_dir / args.crosscoder, expand=False, use_sparse_tensor=False
+    # )
+    # tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
+    # collect_activating_examples(
+    #     crosscoder=args.crosscoder,
+    #     bos_token_id=tokenizer.bos_token_id,
+    #     latent_activation_cache=latent_activation_cache,
+    #     n=100,
+    #     min_threshold=1e-4,
+    #     quantiles=[0.25, 0.5, 0.75, 0.95, 1.0],
+    #     save_path=Path("results/quantile_examples"),
+    #     test=args.test,
+    #     only_upload=True,
+    # )
+    # compute_latent_stats(
+    #     crosscoder=args.crosscoder,
+    #     latent_activation_cache=latent_activation_cache,
+    #     layer=args.layer,
+    #     confirm=False,
+    # )
+
     tokenizer = patch_tokenizer(
         AutoTokenizer.from_pretrained(args.chat_model), args.chat_model
     )
@@ -393,11 +412,12 @@ if __name__ == "__main__":
         base_model=base_model,
         chat_model=chat_model,
         tokenizer=tokenizer,
-        dataset_name="science-of-finetuning/ultrachat_200k_gemma-2-2b-it-generated",
-        dataset_col="text",
+        # dataset_name="science-of-finetuning/ultrachat_200k_gemma-2-2b-it-generated",
+        dataset_name="science-of-finetuning/lmsys-chat-1m-chat-formatted",
         split="train",
         latent_df=df,
         chat_only_indices=effective_chat_latents_indices,
         layer_to_stop=args.layer,
         max_seq_len=1024,
+        dataset_col=args.lmsys_col
     )

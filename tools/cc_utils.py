@@ -229,6 +229,8 @@ def push_dictionary_model(model_path: Path, author=HF_NAME):
     Args:
         model_path: The path to the model to push
     """
+    if isinstance(model_path, str):
+        model_path = Path(model_path)
     model_name = model_path_to_name(model_path)
     repo_id = f"{author}/{model_name}"
     model_dir = model_path.parent
