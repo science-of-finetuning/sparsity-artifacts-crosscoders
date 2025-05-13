@@ -419,5 +419,5 @@ if __name__ == "__main__":
         chat_only_indices=effective_chat_latents_indices,
         layer_to_stop=args.layer,
         max_seq_len=1024,
-        dataset_col=args.lmsys_col
+        dataset_col=args.lmsys_col if args.lmsys_col else "messages"
     )

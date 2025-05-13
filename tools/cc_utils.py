@@ -737,7 +737,7 @@ class QuantileExamplesDB:
         return feature_idx in self._feature_indices
 
 
-def offline_dashboard(crosscoder, max_example_per_quantile=20, tokenizer=None):
+def offline_dashboard(crosscoder, max_example_per_quantile=20, tokenizer=None, db_path=None):
     """
     Returns an offline_dashboard showing activations from different quantile
 
@@ -745,12 +745,16 @@ def offline_dashboard(crosscoder, max_example_per_quantile=20, tokenizer=None):
       crosscoder: The crosscoder to take the max activating examples
       max_example_per_quantile: the maximimum number of examples per quantile
     """
-    db_path = hf_hub_download(
-        repo_id=stats_repo_id(crosscoder),
-        repo_type="dataset",
-        filename="examples.db",
-    )
+    if db_path is None:
+        db_path = hf_hub_download(
+            repo_id=stats_repo_id(crosscoder),
+            repo_type="dataset",
+            filename="examples.db",
+        )
+    else:
+        db_path = db_path / crosscoder / "examples.db"
     if tokenizer is None:
+        assert "gemma-2" in crosscoder, "Tokenizer must be provided for non-gemma models"
         tokenizer = AutoTokenizer.from_pretrained("google/gemma-2-2b-it")
     activation_examples = QuantileExamplesDB(
         db_path, tokenizer, max_example_per_quantile=max_example_per_quantile
