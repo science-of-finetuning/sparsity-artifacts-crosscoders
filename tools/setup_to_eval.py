@@ -403,6 +403,21 @@ def threshold_half_fns(
     return {f"patch_all_{op_name}_{column}-{direction}{threshold}-cchat": interv}, infos
 
 
+def baselines_half_fns():
+    half_fns = {
+        "vanilla_base": IdentityPreprocessFn(continue_with="base"),
+        "vanilla_chat": IdentityPreprocessFn(continue_with="chat"),
+        "vanilla_base2chat": SwitchPreprocessFn(continue_with="chat"),
+        "vanilla_chat2base": SwitchPreprocessFn(continue_with="base"),
+    }
+    for continue_with in ["base", "chat"]:
+        half_fns[f"patch_base-ctrl_c{continue_with}"] = PatchCtrl(
+            continue_with=continue_with,
+            patch_target="base",
+            activation_processor=None,
+        )
+    return half_fns
+
 def arxiv_paper_half_fns(
     crosscoder: CrossCoder,
     full_df: pd.DataFrame,
@@ -418,13 +433,7 @@ def arxiv_paper_half_fns(
     half_fns = {}
     infos = {}
     # --- Vanilla configurations ---
-    half_fns.update(
-        {
-            "vanilla_base": IdentityPreprocessFn(continue_with="base"),
-            "vanilla_chat": IdentityPreprocessFn(continue_with="chat"),
-            "vanilla_base2chat": SwitchPreprocessFn(continue_with="chat"),
-        }
-    )
+    half_fns.update(baselines_half_fns())
     # --- Error and all ----
     for error_from in ["base", "chat"]:
         add_reconstruction_of = "base" if error_from == "chat" else "chat"

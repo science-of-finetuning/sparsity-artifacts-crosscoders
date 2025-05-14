@@ -27,13 +27,23 @@ class IncompleteTokenizerProxy:
             )
         return getattr(self.tokenizer, name)
 
+    def __setattr__(self, name, value):
+        if name == "tokenizer":
+            super().__setattr__(name, value)
+            return
+        return setattr(self.tokenizer, name, value)
+
 
 template_path = Path(__file__).parent.parent / "templates"
 with open(template_path / "gemma_chat_template.jinja", "r") as f:
     GEMMA_CHAT_TEMPLATE = f.read()
     chat_template = GEMMA_CHAT_TEMPLATE  # for backwards compatibility
+with open(template_path / "llama3.1_chat_template.jinja", "r") as f:
+    LLAMA3_1_CHAT_TEMPLATE = f.read()
 with open(template_path / "gemma_chat_template_ctrl_tokens.jinja", "r") as f:
-    CTRL_TEMPLATE = f.read()
+    GEMMA_CTRL_TEMPLATE = f.read()
+with open(template_path / "llama3.1_chat_template_ctrl_tokens.jinja", "r") as f:
+    LLAMA3_1_CTRL_TEMPLATE = f.read()
 with open(template_path / "customizable_gemma_chat_template.jinja", "r") as f:
     CUSTOMIZABLE_CHAT_TEMPLATE = f.read()
 with open(
@@ -84,45 +94,61 @@ def patch_tokenizer(
 ):
     if "gemma-2" in model_name:
         tokenizer.chat_template = GEMMA_CHAT_TEMPLATE
-        tokenizer.ctrl_template = CTRL_TEMPLATE
+        tokenizer.ctrl_template = GEMMA_CTRL_TEMPLATE
         tokenizer.start_of_turn_token = GEMMA_START_OF_TURN_TOKEN
         tokenizer.end_of_turn_token = GEMMA_END_OF_TURN_TOKEN
-    else:
-        use_proxy = False
-        if chat_template is not None:
-            tokenizer.chat_template = chat_template
+        return
+    elif "meta-llama/Meta-Llama-3.1".lower() in model_name.lower():
+        if chat_template is None:
+            chat_template = LLAMA3_1_CHAT_TEMPLATE
         if ctrl_template is None:
-            warnings.warn(
-                f"No control template provided, you won't be able to use the control token mask for {model_name}"
-            )
-            tokenizer.ctrl_template = None
-            use_proxy = True
-        else:
-            tokenizer.ctrl_template = ctrl_template
-        if tokenizer.chat_template is None:
-            raise ValueError(
-                "Tokenizer has no chat template, please provide one in the tokenizer_kwargs"
-            )
-        generation_pattern = re.compile(r"\{%\s*generation\s*%\}")
-        if not generation_pattern.search(tokenizer.chat_template):
-            raise ValueError(
-                f"Chat template for {model_name}"
-                " does not contain {% generation %} keyword"
-            )
-        tokenizer.end_of_turn_token = end_of_turn_token
-        if end_of_turn_token is None:
-            warnings.warn(
-                "No end of turn token provided, you won't be able to use tokenizer.end_of_turn_token"
-            )
-            use_proxy = True
-        tokenizer.start_of_turn_token = start_of_turn_token
-        if start_of_turn_token is None:
-            warnings.warn(
-                "No start of turn token provided, you won't be able to use tokenizer.start_of_turn_token"
-            )
-            use_proxy = True
-        if use_proxy:
-            tokenizer = IncompleteTokenizerProxy(tokenizer)
+            ctrl_template = LLAMA3_1_CTRL_TEMPLATE
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = (
+            tokenizer.eos_token
+            if tokenizer.eos_token is not None
+            else tokenizer.bos_token
+        )
+        tokenizer.pad_token_id = (
+            tokenizer.eos_token_id
+            if tokenizer.eos_token is not None
+            else tokenizer.bos_token_id
+        )
+    use_proxy = False
+    if chat_template is not None:
+        tokenizer.chat_template = chat_template
+    if ctrl_template is None:
+        warnings.warn(
+            f"No control template provided, you won't be able to use the control token mask for {model_name}"
+        )
+        tokenizer.ctrl_template = None
+        use_proxy = True
+    else:
+        tokenizer.ctrl_template = ctrl_template
+    if tokenizer.chat_template is None:
+        raise ValueError(
+            "Tokenizer has no chat template, please provide one in the tokenizer_kwargs"
+        )
+    generation_pattern = re.compile(r"\{%\s*generation\s*%\}")
+    if not generation_pattern.search(tokenizer.chat_template):
+        raise ValueError(
+            f"Chat template for {model_name}"
+            " does not contain {% generation %} keyword"
+        )
+    tokenizer.end_of_turn_token = end_of_turn_token
+    if end_of_turn_token is None:
+        warnings.warn(
+            "No end of turn token provided, you won't be able to use tokenizer.end_of_turn_token"
+        )
+        use_proxy = True
+    tokenizer.start_of_turn_token = start_of_turn_token
+    if start_of_turn_token is None:
+        warnings.warn(
+            "No start of turn token provided, you won't be able to use tokenizer.start_of_turn_token"
+        )
+        use_proxy = True
+    if use_proxy:
+        tokenizer = IncompleteTokenizerProxy(tokenizer)
     return tokenizer
 
 
@@ -253,7 +279,7 @@ def custom_chat_template(
         .replace("model", sanitize(assistant_token))
     )
     if ctrl_tokens:
-        original_template = CTRL_TEMPLATE
+        original_template = GEMMA_CTRL_TEMPLATE
     else:
         original_template = GEMMA_CHAT_TEMPLATE
     if enforce_length:

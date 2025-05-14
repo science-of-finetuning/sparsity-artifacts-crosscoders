@@ -1,19 +1,24 @@
 import torch
-from typing import Optional, Union, Tuple, List
+from typing import Optional, Union, Tuple
+from dataclasses import dataclass
 from transformers.models.gemma.modeling_gemma import (
     BaseModelOutputWithPast,
     CausalLMOutputWithPast,
     GemmaForCausalLM,
 )
+from transformers import Gemma2ForCausalLM, AutoModelForCausalLM, AutoTokenizer
 from transformers.cache_utils import Cache as HybridCache
 from loguru import logger
 from torch.nn import CrossEntropyLoss
 from types import MethodType
 from typing import Callable
+from nnsight import LanguageModel
+from nnterp.nnsight_utils import get_layer_output, get_layer, get_logits
 
 
 def model_first_half_forward(
     self,
+    layer_idx: int,
     input_ids: torch.LongTensor = None,
     attention_mask: Optional[torch.Tensor] = None,
     position_ids: Optional[torch.LongTensor] = None,
@@ -24,7 +29,6 @@ def model_first_half_forward(
     output_hidden_states: Optional[bool] = None,
     return_dict: Optional[bool] = None,
     cache_position: Optional[torch.LongTensor] = None,
-    layer_idx: int = 13,
     **kwargs,
 ) -> Union[Tuple, BaseModelOutputWithPast]:
     if (input_ids is None) ^ (inputs_embeds is not None):
@@ -109,7 +113,7 @@ def model_second_half_forward(
     hidden_states,
     causal_mask,
     position_ids,
-    layer_idx: int = 13,
+    layer_idx: int,
     return_dict: bool = False,
     all_layers_process_fn: Callable[[torch.Tensor], torch.Tensor] | None = None,
     cache_position: Optional[torch.LongTensor] = None,
@@ -163,6 +167,7 @@ def model_second_half_forward(
 
 def causal_lm_first_half_forward(
     self,
+    layer_idx: int,
     input_ids: torch.LongTensor = None,
     attention_mask: Optional[torch.Tensor] = None,
     position_ids: Optional[torch.LongTensor] = None,
@@ -173,7 +178,6 @@ def causal_lm_first_half_forward(
     output_hidden_states: Optional[bool] = None,
     return_dict: Optional[bool] = None,
     cache_position: Optional[torch.LongTensor] = None,
-    layer_idx: int = 13,
     **kwargs,
 ) -> Union[Tuple, CausalLMOutputWithPast]:
     r"""
@@ -226,7 +230,12 @@ def causal_lm_first_half_forward(
         return_dict if return_dict is not None else self.config.use_return_dict
     )
     # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
-    outputs = self.model.first_half_forward(
+    (
+        activations,
+        causal_mask_raw,
+        position_ids,
+        cache_position,
+    ) = self.model.first_half_forward(
         input_ids=input_ids,
         attention_mask=attention_mask,
         position_ids=position_ids,
@@ -240,21 +249,23 @@ def causal_lm_first_half_forward(
         layer_idx=layer_idx,
         **kwargs,
     )
-    return outputs
+    if cache_position is None:
+        cache_position = torch.arange(activations.shape[1], device=activations.device)
+    return activations, (causal_mask_raw, position_ids, cache_position)
 
 
 def causal_lm_second_half_forward(
     self,
     hidden_states,
-    causal_mask,
-    position_ids,
+    first_half_args,
+    layer_idx: int,
     labels: Optional[torch.LongTensor] = None,
     num_logits_to_keep: int = 0,
     return_dict: bool = False,
-    layer_idx: int = 13,
     all_layers_process_fn: Callable[[torch.Tensor], torch.Tensor] | None = None,
     **kwargs,
 ):
+    (causal_mask, position_ids, cache_position) = first_half_args
     outputs = self.model.second_half_forward(
         hidden_states=hidden_states,
         causal_mask=causal_mask,
@@ -262,6 +273,7 @@ def causal_lm_second_half_forward(
         layer_idx=layer_idx,
         return_dict=return_dict,
         all_layers_process_fn=all_layers_process_fn,
+        cache_position=cache_position,
         **kwargs,
     )
     hidden_states = outputs[0]
@@ -301,6 +313,12 @@ def causal_lm_second_half_forward(
     )
 
 
+def full_forward_collect_hidden_states(self, *args, **kwargs):
+    activations, first_half_args = self.first_half_forward(*args, **kwargs)
+    outputs = self.second_half_forward(activations, first_half_args, **kwargs)
+    return outputs, activations, first_half_args
+
+
 def compute_loss(self, logits, labels, already_shifted=False):
     """
     Compute the loss for a given logits and labels.
@@ -327,4 +345,62 @@ def split_gemma(model: GemmaForCausalLM):
     model.first_half_forward = MethodType(causal_lm_first_half_forward, model)
     model.second_half_forward = MethodType(causal_lm_second_half_forward, model)
     model.compute_loss = MethodType(compute_loss, model)
+    model.full_forward_collect_hidden_states = MethodType(
+        full_forward_collect_hidden_states, model
+    )
     return model
+
+
+def split_model(model: AutoModelForCausalLM, tokenizer: AutoTokenizer | None = None):
+    if isinstance(model, (Gemma2ForCausalLM, GemmaForCausalLM)):
+        return split_gemma(model)
+    else:
+        if tokenizer is None:
+            raise ValueError("Tokenizer is required for non-Gemma models")
+        nn_model = LanguageModel(model, tokenizer=tokenizer)
+
+        def first_half_forward(
+            self, input_ids, attention_mask, layer_idx: int, **kwargs
+        ):
+            with self.trace(
+                dict(input_ids=input_ids, attention_mask=attention_mask), **kwargs
+            ):
+                activations = get_layer_output(self, layer_idx).save()
+                get_layer(self, layer_idx).output.stop()
+                return activations, (
+                    dict(input_ids=input_ids, attention_mask=attention_mask),
+                    kwargs,
+                )
+
+        def second_half_forward(
+            self, activations, other_args, layer_idx: int, **kwargs
+        ):
+            (inputs, prev_kwargs) = other_args
+            kwargs = {**prev_kwargs, **kwargs}
+            with self.trace(inputs, **kwargs):
+                get_layer(self, layer_idx).output = (activations, )
+                outputs = self.output.save()
+            return outputs
+
+        def full_forward_collect_hidden_states(
+            self, input_ids, attention_mask, layer_idx: int, **kwargs
+        ):
+            with self.trace(
+                dict(input_ids=input_ids, attention_mask=attention_mask), **kwargs
+            ):
+                activations = get_layer_output(self, layer_idx).save()
+                outputs = self.output.save()
+            return (
+                outputs,
+                activations,
+                (dict(input_ids=input_ids, attention_mask=attention_mask), kwargs),
+            )
+
+        nn_model.first_half_forward = MethodType(first_half_forward, nn_model)
+        nn_model.second_half_forward = MethodType(second_half_forward, nn_model)
+        nn_model.compute_loss = MethodType(compute_loss, nn_model)
+        nn_model.full_forward_collect_hidden_states = MethodType(
+            full_forward_collect_hidden_states, nn_model
+        )
+        nn_model.config = model.config
+        return nn_model

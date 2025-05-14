@@ -21,7 +21,7 @@ from tools.setup_to_eval import (
     CrossCoderSteeringFeature,
     CrossCoderOutProjection,
 )
-from tools.split_gemma import split_gemma
+from tools.split_model import split_model
 
 
 CHAT_TEMPLATE = open("templates/gemma_chat_template.jinja").read()
@@ -137,8 +137,8 @@ def chat_with_interventions(
         base_model is not None and instruct_model is not None
     ), "base_model and instruct_model must be provided"
 
-    base_model = split_gemma(base_model)
-    instruct_model = split_gemma(instruct_model)
+    base_model = split_model(base_model)
+    instruct_model = split_model(instruct_model)
     tokenizer = instruct_model.tokenizer
 
     conversation = []
