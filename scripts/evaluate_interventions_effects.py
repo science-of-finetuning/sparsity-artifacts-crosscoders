@@ -160,6 +160,7 @@ def evaluate_interventions(
     dataset,
     preprocess_before_last_half_fns: dict[str, HalfStepPreprocessFn],
     layer_to_stop,
+    run_name: str,
     batch_size=8,
     device="cuda",
     max_seq_len=1024,
@@ -392,7 +393,7 @@ def evaluate_interventions(
                     )
 
             if i % checkpoint_every == 0 and save_path is not None and i != 0:
-                with open(save_path / f"{wandb.run.name}_{i}_result.json", "w") as f:
+                with open(save_path / f"{run_name}_{i}_result.json", "w") as f:
                     result = compute_result()
                     result = add_random_means(result)
                     json.dump(result, f)
@@ -482,7 +483,7 @@ def kl_experiment(
     wandb.init(project=project, name=run_name)
 
     # Setup save directory
-    run_save_path = save_path / wandb.run.name
+    run_save_path = save_path / run_name
     run_save_path.mkdir(parents=True, exist_ok=True)
 
     # Process chat_only_indices if provided
@@ -550,6 +551,7 @@ def kl_experiment(
         checkpoint_every=checkpoint_every,
         token_level_replacement=token_level_replacement,
         max_num_tokens=max_num_tokens,
+        run_name=run_name,
     )
     metadata["total_num_tokens"] = total_num_tokens
     with open(run_save_path / "metadata.json", "w") as f:
@@ -560,7 +562,7 @@ def kl_experiment(
 
     # Add mean across random seeds and save results
     result = add_random_means(result)
-    with open(save_path / f"{wandb.run.name}_result.json", "w") as f:
+    with open(save_path / f"{run_name}_result.json", "w") as f:
         json.dump(result, f)
     wandb.finish()
 
