@@ -132,7 +132,10 @@ def closed_form_scalars(
         else:
             assert Y_batch.shape == (batch_size_current, dim_model)
         latent_activations = latent_activations[:, latent_indices]
-        assert latent_activations.shape == (batch_size_current, num_latent_vectors)
+        assert latent_activations.shape == (
+            batch_size_current,
+            num_latent_vectors,
+        ), f"Latent activation has weird shape: {latent_activations.shape}, expected {(batch_size_current, num_latent_vectors)}. Latent indices length: {len(latent_indices)}"
 
         non_zero_mask = (latent_activations != 0).sum(dim=0)
         assert non_zero_mask.shape == (num_latent_vectors,)
