@@ -35,6 +35,7 @@ def get_positive_activations(sequences, ranges, dataset, cc, latent_ids):
 
     # Initialize tensors to track max activations for each latent
     max_activations = th.zeros(len(latent_ids), device="cuda")
+    # print(f"Computing {len(latent_ids)} latent activations for {len(sequences)} sequences and ranges {ranges}")
 
     for seq_idx in trange(len(sequences)):
         activations = th.stack(
@@ -149,6 +150,7 @@ def compute_latent_activations(
     upload_to_hub: bool = False,
     split: str = "validation",
     load_from_disk: bool = False,
+    lmsys_col: str = "",
 ) -> None:
     """
     Compute and save latent activations for a given dictionary model.
@@ -191,6 +193,7 @@ def compute_latent_activations(
             base_model=base_model.split("/")[-1],
             instruct_model=chat_model.split("/")[-1],
             layer=layer,
+            lmsys_split=split + f"-col{lmsys_col}" if lmsys_col else split,
             split=split,
         )
         tokens_fineweb = fineweb_cache.tokens[0]
