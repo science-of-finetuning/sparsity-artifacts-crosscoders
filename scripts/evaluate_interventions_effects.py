@@ -196,7 +196,12 @@ def evaluate_interventions(
         }
 
     total_num_tokens = 0
-    for i in tqdm(range(0, len(dataset), batch_size)):
+    pbar = (
+        tqdm(range(0, len(dataset), batch_size))
+        if max_num_tokens is None
+        else tqdm(range(0, len(dataset), batch_size), total=max_num_tokens)
+    )
+    for i in pbar:
         batch = dataset[i : i + batch_size]
         try:
             batch_tokens = tokenize_with_ctrl_mask(
@@ -223,7 +228,8 @@ def evaluate_interventions(
             base_input_ids = input_ids
         attn_mask = batch_tokens["attention_mask"].to(device)
         assistant_mask = batch_tokens["assistant_masks"]
-        total_num_tokens += assistant_mask.sum()
+        new_tokens = assistant_mask.sum().item()
+        total_num_tokens += new_tokens
         ctrl_mask = batch_tokens["ctrl_mask"].to(device)
         # shift the assistant mask to the left by 1 to have the token at which you make the prediction rather than the token you need to predict
         assistant_pred_mask = th.zeros_like(assistant_mask)
@@ -390,13 +396,18 @@ def evaluate_interventions(
                     result = compute_result()
                     result = add_random_means(result)
                     json.dump(result, f)
-        wandb.log(
-            {
-                "total_num_tokens": total_num_tokens,
-            },
-            step=i,
-        )
-        if max_num_tokens is not None and total_num_tokens >= max_num_tokens:
+        if i % log_every == 0:
+            wandb.log(
+                {
+                    "total_num_tokens": total_num_tokens,
+                },
+                step=i,
+            )
+        if max_num_tokens is None:
+            pbar.set_postfix(total_num_tokens=total_num_tokens)
+        else:
+            pbar.update(new_tokens)
+        if total_num_tokens >= max_num_tokens:
             break
     logger.info(f"Total number of tokens: {total_num_tokens}")
     return compute_result(), total_num_tokens
@@ -459,7 +470,12 @@ def kl_experiment(
             name += f"-{dataset_col}"
 
     # Generate unique run name
-    run_name = str(int(time.time())) + "_" + name + ("_" + generate_slug(2) if add_coolname else "")
+    run_name = (
+        str(int(time.time()))
+        + "_"
+        + name
+        + ("_" + generate_slug(2) if add_coolname else "")
+    )
 
     # Initialize wandb
     project = "perplexity-comparison" + ("-test" if test else "")
@@ -495,25 +511,23 @@ def kl_experiment(
         )
 
     # Save metadata
-    metadata = (
-        {
-            "infos": infos,
-            "parameters": {
-                "layer_to_stop": layer_to_stop,
-                "batch_size": batch_size,
-                "max_seq_len": max_seq_len,
-                "device": str(device),
-                "num_seeds": num_seeds,
-                "percentages": percentages,
-                "is_sae": is_sae,
-                "test": test,
-                "name": name,
-                "dictionary_name": dictionary_name,
-                "model_name": model_name,
-                "max_num_tokens": max_num_tokens,
-            },
+    metadata = {
+        "infos": infos,
+        "parameters": {
+            "layer_to_stop": layer_to_stop,
+            "batch_size": batch_size,
+            "max_seq_len": max_seq_len,
+            "device": str(device),
+            "num_seeds": num_seeds,
+            "percentages": percentages,
+            "is_sae": is_sae,
+            "test": test,
+            "name": name,
+            "dictionary_name": dictionary_name,
+            "model_name": model_name,
+            "max_num_tokens": max_num_tokens,
         },
-    )
+    }
     with open(run_save_path / "metadata.json", "w") as f:
         json.dump(
             metadata,
@@ -548,6 +562,7 @@ def kl_experiment(
     result = add_random_means(result)
     with open(save_path / f"{wandb.run.name}_result.json", "w") as f:
         json.dump(result, f)
+    wandb.finish()
 
     return result
 
