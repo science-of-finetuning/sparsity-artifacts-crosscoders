@@ -652,6 +652,7 @@ if __name__ == "__main__":
     #     add_base_only_latents=args.add_base_only_latents,
     # )
     if dictionary is not None:
+        chat_only_indices = None
         if args.df_path is not None:
             print(f"Loading df from {args.df_path}")
             df = load_latent_df(args.df_path)
