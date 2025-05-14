@@ -16,7 +16,7 @@ sys.path.append(str(Path(__file__).parent.parent))
 from scripts.utils.edit_eval_results import add_random_means
 from tools.compute_utils import RunningMeanStd, chunked_kl
 from tools.setup_to_eval import HalfStepPreprocessFn
-from tools.split_gemma import split_gemma
+from tools.split_model import split_model
 from tools.tokenization_utils import tokenize_with_ctrl_mask, patch_tokenizer
 from tools.utils import mask_k_first_ones_vec, load_hf_model
 from tools.setup_to_eval import (
@@ -26,10 +26,13 @@ from tools.setup_to_eval import (
     # create_acl_crosscoder_half_fns,
     arxiv_paper_half_fns,
     sae_steering_half_fns,
+    baselines_half_fns,
 )
+from tools.configs import MODEL_CONFIGS
 from dictionary_learning.dictionary import CrossCoder
 from tools.cc_utils import load_dictionary_model, load_latent_df
 from coolname import generate_slug
+from loguru import logger
 
 
 def compute_metrics_for_subset(
@@ -153,10 +156,10 @@ def compute_final_metrics(metrics_dict, preprocess_before_last_half_fns):
 def evaluate_interventions(
     base_model,
     chat_model,
-    tokenizer,
+    tokenizer_name,
     dataset,
     preprocess_before_last_half_fns: dict[str, HalfStepPreprocessFn],
-    layer_to_stop=13,
+    layer_to_stop,
     batch_size=8,
     device="cuda",
     max_seq_len=1024,
@@ -164,8 +167,9 @@ def evaluate_interventions(
     checkpoint_every=2000,
     k_first: int = 10,
     save_path: Path | None = None,
+    token_level_replacement: str | None = None,
+    max_num_tokens: int | None = None,
 ):
-    assert isinstance(base_model, Gemma2ForCausalLM), f"Current implementation only supports Gemma2ForCausalLM, got {type(base_model)}"
     if save_path is not None:
         save_path.mkdir(parents=True, exist_ok=True)
     # Initialize metric trackers for each subset
@@ -173,12 +177,12 @@ def evaluate_interventions(
     metrics_kfirst = create_metrics_dict()
     metrics_post_k_first = create_metrics_dict()
 
-    base_model = split_gemma(base_model)
-    chat_model = split_gemma(chat_model)
-    patch_tokenizer(
-        tokenizer,
-        "google/gemma-2-2b-it",
+    tokenizer = patch_tokenizer(
+        AutoTokenizer.from_pretrained(tokenizer_name),
+        tokenizer_name,
     )
+    base_model = split_model(base_model, tokenizer)
+    chat_model = split_model(chat_model, tokenizer)
 
     def compute_result():
         return {
@@ -191,20 +195,35 @@ def evaluate_interventions(
             ),
         }
 
+    total_num_tokens = 0
     for i in tqdm(range(0, len(dataset), batch_size)):
         batch = dataset[i : i + batch_size]
-        batch_tokens = tokenize_with_ctrl_mask(
-            batch,
-            tokenizer=tokenizer,
-            return_dict=True,
-            return_tensors="pt",
-            padding=True,
-            truncation=True,
-            max_length=max_seq_len,
-        )
+        try:
+            batch_tokens = tokenize_with_ctrl_mask(
+                batch,
+                tokenizer=tokenizer,
+                return_dict=True,
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=max_seq_len,
+            )
+        except Exception as e:
+            print(f"Error tokenizing batch {i}: {e}")
+            print(batch[0])
+            print()
+            print(batch)
+            raise
         input_ids = batch_tokens["input_ids"].to(device)
+        if token_level_replacement is not None:
+            base_input_ids = input_ids.clone()
+            for old_token_id, new_token_id in token_level_replacement.items():
+                base_input_ids[base_input_ids == old_token_id] = new_token_id
+        else:
+            base_input_ids = input_ids
         attn_mask = batch_tokens["attention_mask"].to(device)
         assistant_mask = batch_tokens["assistant_masks"]
+        total_num_tokens += assistant_mask.sum()
         ctrl_mask = batch_tokens["ctrl_mask"].to(device)
         # shift the assistant mask to the left by 1 to have the token at which you make the prediction rather than the token you need to predict
         assistant_pred_mask = th.zeros_like(assistant_mask)
@@ -216,53 +235,27 @@ def evaluate_interventions(
         next_ass_toks_mask = assistant_pred_mask & ~k_first_pred_toks_mask
         if not assistant_pred_mask.any():
             continue
+        (
+            base_outputs,
+            base_activations,
+            base_first_half_args,
+        ) = base_model.full_forward_collect_hidden_states(
+            input_ids=base_input_ids,
+            attention_mask=attn_mask,
+            layer_idx=layer_to_stop,
+        )
 
         (
-            base_activations,
-            base_causal_mask_raw,
-            base_position_ids,
-            base_cache_position,
-        ) = base_model.first_half_forward(
+            instruct_outputs,
+            instruct_activations,
+            instruct_first_half_args,
+        ) = chat_model.full_forward_collect_hidden_states(
             input_ids=input_ids,
             attention_mask=attn_mask,
             layer_idx=layer_to_stop,
         )
-        if base_cache_position is None:
-            base_cache_position = th.arange(
-                base_activations.shape[1], device=base_activations.device
-            )
-
-        (
-            instruct_activations,
-            instruct_causal_mask_raw,
-            instruct_position_ids,
-            instruct_cache_position,
-        ) = chat_model.first_half_forward(
-            input_ids=input_ids,
-            attention_mask=attn_mask,
-            layer_idx=layer_to_stop,
-        )
-        if instruct_cache_position is None:
-            instruct_cache_position = th.arange(
-                instruct_activations.shape[1], device=instruct_activations.device
-            )
-
-        base_logits_raw = base_model.second_half_forward(
-            base_activations,
-            base_causal_mask_raw,
-            base_position_ids,
-            layer_idx=layer_to_stop,
-            return_dict=True,
-            cache_position=base_cache_position,
-        ).logits
-        instruct_logits_raw = chat_model.second_half_forward(
-            instruct_activations,
-            instruct_causal_mask_raw,
-            instruct_position_ids,
-            layer_idx=layer_to_stop,
-            return_dict=True,
-            cache_position=instruct_cache_position,
-        ).logits
+        base_logits_raw = base_outputs.logits
+        instruct_logits_raw = instruct_outputs.logits
 
         for fn_name, preprocess_fn in preprocess_before_last_half_fns.items():
             base_activations_edited, instruct_activations_edited, mask = preprocess_fn(
@@ -274,46 +267,55 @@ def evaluate_interventions(
                 k_first_pred_toks_mask=k_first_pred_toks_mask,
             )
 
-            if mask is not None:
-                base_logits = base_logits_raw[mask]
-                instruct_logits = instruct_logits_raw[mask]
-                base_causal_mask = base_causal_mask_raw[mask]
-                instruct_causal_mask = instruct_causal_mask_raw[mask]
-                effective_assistant_mask = assistant_pred_mask[mask]
-                effective_k_first = k_first_pred_toks_mask[mask]
-                effective_post_k_first = next_ass_toks_mask[mask]
-                labels = input_ids[mask]
+            if mask is not None:  # todo: add a apply_mask method in split_model
+                raise NotImplementedError(
+                    "Mask are deprecated temporarily, see todo above"
+                )
+            #     base_logits = base_logits_raw[mask]
+            #     instruct_logits = instruct_logits_raw[mask]
+            #     base_causal_mask = base_causal_mask_raw[mask]
+            #     instruct_causal_mask = instruct_causal_mask_raw[mask]
+            #     effective_assistant_mask = assistant_pred_mask[mask]
+            #     effective_k_first = k_first_pred_toks_mask[mask]
+            #     effective_post_k_first = next_ass_toks_mask[mask]
+            #     labels = input_ids[mask]
             else:
                 base_logits = base_logits_raw
                 instruct_logits = instruct_logits_raw
-                base_causal_mask = base_causal_mask_raw
-                instruct_causal_mask = instruct_causal_mask_raw
+                # base_causal_mask = base_causal_mask_raw
+                # instruct_causal_mask = instruct_causal_mask_raw
                 effective_assistant_mask = assistant_pred_mask
                 effective_k_first = k_first_pred_toks_mask
                 effective_post_k_first = next_ass_toks_mask
-                labels = input_ids
+                labels = None
+                if instruct_activations_edited is not None:
+                    labels = input_ids
+                elif base_activations_edited is not None:
+                    labels = base_input_ids
 
-            final_out = None
+            final_logits = None
             if base_activations_edited is not None:
-                final_out = base_model.second_half_forward(
+                assert (
+                    base_activations_edited.shape == base_activations.shape
+                ), f"Base activations edited shape {base_activations_edited.shape} does not match base activations shape {base_activations.shape} for fn {fn_name}"
+                final_logits = base_model.second_half_forward(
                     base_activations_edited,
-                    base_causal_mask,
-                    base_position_ids,
-                    layer_idx=layer_to_stop,
+                    base_first_half_args,
                     return_dict=True,
-                    cache_position=base_cache_position,
-                )
+                    layer_idx=layer_to_stop,
+                ).logits
             elif instruct_activations_edited is not None:
-                final_out = chat_model.second_half_forward(
+                assert (
+                    instruct_activations_edited.shape == instruct_activations.shape
+                ), f"Instruct activations edited shape {instruct_activations_edited.shape} does not match instruct activations shape {instruct_activations.shape} for fn {fn_name}"
+                final_logits = chat_model.second_half_forward(
                     instruct_activations_edited,
-                    instruct_causal_mask,
-                    instruct_position_ids,
-                    layer_idx=layer_to_stop,
+                    instruct_first_half_args,
                     return_dict=True,
-                    cache_position=instruct_cache_position,
-                )
+                    layer_idx=layer_to_stop,
+                ).logits
 
-            if final_out is not None:
+            if final_logits is not None:
                 # Compute metrics for all tokens
                 for metrics_dict, prefix, mask in [
                     (metrics_all, "", effective_assistant_mask),
@@ -322,7 +324,7 @@ def evaluate_interventions(
                 ]:
                     if mask.any():
                         metrics = compute_metrics_for_subset(
-                            final_out.logits,
+                            final_logits,
                             labels,
                             base_logits,
                             instruct_logits,
@@ -388,27 +390,35 @@ def evaluate_interventions(
                     result = compute_result()
                     result = add_random_means(result)
                     json.dump(result, f)
-
-    return compute_result()
+        wandb.log(
+            {
+                "total_num_tokens": total_num_tokens,
+            },
+            step=i,
+        )
+        if max_num_tokens is not None and total_num_tokens >= max_num_tokens:
+            break
+    logger.info(f"Total number of tokens: {total_num_tokens}")
+    return compute_result(), total_num_tokens
 
 
 def kl_experiment(
     # Model parameters
-    dictionary: Dictionary,
+    dictionary: Dictionary | None,
     base_model: AutoModelForCausalLM,
     chat_model: AutoModelForCausalLM,
-    tokenizer: AutoTokenizer,
+    tokenizer_name: str,
     # Dataset parameters
     dataset_name: str,
     split: str,
     dataset_col: str,
+    layer_to_stop,
     # Dictionary parameters
-    latent_df: pd.DataFrame,
+    latent_df: pd.DataFrame | None,
     chat_only_indices: list[int] | None = None,
     add_base_only_latents: bool = False,
     is_sae: bool = False,
     # Evaluation parameters
-    layer_to_stop: int = 13,
     batch_size: int = 6,
     device: str = "cuda",
     max_seq_len: int = 1024,
@@ -420,11 +430,19 @@ def kl_experiment(
     # Output parameters
     save_path: Path = Path("results/interv_effects"),
     name: str | None = None,
+    dictionary_name: str | None = None,
+    model_name: str | None = None,
     test: bool = False,
+    token_level_replacement: str | None = None,
+    max_num_tokens: int | None = None,
+    add_coolname: bool = True,
 ) -> dict:
     """
     Main function to evaluate interventions effects.
     """
+    if dictionary is None:
+        name = (name or "") + "-baselines"
+
     dataset = load_dataset(dataset_name, split=split)[dataset_col]
     if test:
         name = name or "test"
@@ -432,11 +450,16 @@ def kl_experiment(
         dataset = dataset[:120]  # Limit dataset size for testing
     else:
         dataset = dataset[: min(30_000, len(dataset))]
+    if name is None:
+        name = dictionary_name.split("/")[-1] if dictionary_name else "unnamed"
+        if model_name:
+            name += "-" + model_name.split("/")[-1]
+        name += f"-{split}"
+        if dataset_col:
+            name += f"-{dataset_col}"
 
     # Generate unique run name
-    run_name = (
-        str(int(time.time())) + ("_" + name if name else "") + "_" + generate_slug(2)
-    )
+    run_name = str(int(time.time())) + "_" + name + ("_" + generate_slug(2) if add_coolname else "")
 
     # Initialize wandb
     project = "perplexity-comparison" + ("-test" if test else "")
@@ -447,15 +470,18 @@ def kl_experiment(
     run_save_path.mkdir(parents=True, exist_ok=True)
 
     # Process chat_only_indices if provided
-    if chat_only_indices is not None:
+    if chat_only_indices is not None and latent_df is not None:
         latent_df = latent_df.iloc[chat_only_indices]
         latent_df["tag"] = "Chat only"
-
-    print(f"len df: {len(latent_df)}")
+    if latent_df is not None:
+        print(f"len df: {len(latent_df)}")
 
     # Generate function dictionary based on model type
     seeds = list(range(num_seeds))
-    if not isinstance(dictionary, CrossCoder):
+    if dictionary is None:
+        fn_dict = baselines_half_fns()
+        infos = {}
+    elif not isinstance(dictionary, CrossCoder):
         fn_dict, infos = sae_steering_half_fns(
             dictionary,
             seeds,
@@ -469,29 +495,36 @@ def kl_experiment(
         )
 
     # Save metadata
+    metadata = (
+        {
+            "infos": infos,
+            "parameters": {
+                "layer_to_stop": layer_to_stop,
+                "batch_size": batch_size,
+                "max_seq_len": max_seq_len,
+                "device": str(device),
+                "num_seeds": num_seeds,
+                "percentages": percentages,
+                "is_sae": is_sae,
+                "test": test,
+                "name": name,
+                "dictionary_name": dictionary_name,
+                "model_name": model_name,
+                "max_num_tokens": max_num_tokens,
+            },
+        },
+    )
     with open(run_save_path / "metadata.json", "w") as f:
         json.dump(
-            {
-                "infos": infos,
-                "parameters": {
-                    "layer_to_stop": layer_to_stop,
-                    "batch_size": batch_size,
-                    "max_seq_len": max_seq_len,
-                    "device": str(device),
-                    "num_seeds": num_seeds,
-                    "percentages": percentages,
-                    "is_sae": is_sae,
-                    "test": test,
-                },
-            },
+            metadata,
             f,
         )
 
     # Run evaluation
-    result = evaluate_interventions(
+    result, total_num_tokens = evaluate_interventions(
         base_model,
         chat_model,
-        tokenizer,
+        tokenizer_name,
         dataset,
         fn_dict,
         layer_to_stop=layer_to_stop,
@@ -501,7 +534,15 @@ def kl_experiment(
         log_every=log_every,
         save_path=run_save_path,
         checkpoint_every=checkpoint_every,
+        token_level_replacement=token_level_replacement,
+        max_num_tokens=max_num_tokens,
     )
+    metadata["total_num_tokens"] = total_num_tokens
+    with open(run_save_path / "metadata.json", "w") as f:
+        json.dump(
+            metadata,
+            f,
+        )
 
     # Add mean across random seeds and save results
     result = add_random_means(result)
@@ -545,7 +586,12 @@ if __name__ == "__main__":
     parser.add_argument("--split", type=str, default="train")
     parser.add_argument("--base-device", type=str, default="cuda")
     parser.add_argument("--chat-device", type=str, default="cuda")
-    parser.add_argument("--dictionary", type=str, required=True)
+    parser.add_argument(
+        "--dictionary",
+        type=str,
+        default=None,
+        help="Dictionary to use for interventions. If None, will only run baselines.",
+    )
     parser.add_argument("--num-seeds", type=int, default=5)
     parser.add_argument("--name", type=str, default=None)
     parser.add_argument("--log-every", type=int, default=10)
@@ -560,6 +606,8 @@ if __name__ == "__main__":
     parser.add_argument("--is-sae", action="store_true")
     parser.add_argument("--base-model", type=str, default="google/gemma-2-2b")
     parser.add_argument("--chat-model", type=str, default="google/gemma-2-2b-it")
+    parser.add_argument("--max-num-tokens", type=int, default=None)
+    parser.add_argument("--skip-token-level-replacement", action="store_true")
     # parser.add_argument(
     #     "--columns",
     #     nargs="+",
@@ -585,7 +633,12 @@ if __name__ == "__main__":
         else "cuda" if th.cuda.is_available() else "cpu"
     )
     seeds = list(range(args.num_seeds))
-    dictionary = load_dictionary_model(args.dictionary, is_sae=args.is_sae).to(device)
+    if args.dictionary is not None:
+        dictionary = load_dictionary_model(args.dictionary, is_sae=args.is_sae).to(
+            device
+        )
+    else:
+        dictionary = None
     percentages = args.percentage
     # fn_dict, infos = create_acl_half_fns(
     #     dictionary,
@@ -598,23 +651,41 @@ if __name__ == "__main__":
     #     skip_patching=args.skip_patching,
     #     add_base_only_latents=args.add_base_only_latents,
     # )
-    if args.df_path is not None:
-        print(f"Loading df from {args.df_path}")
-        df = load_latent_df(args.df_path)
+    if dictionary is not None:
+        if args.df_path is not None:
+            print(f"Loading df from {args.df_path}")
+            df = load_latent_df(args.df_path)
+        else:
+            print(f"Loading df from dictionary {args.dictionary}")
+            df = load_latent_df(args.dictionary)
+        if args.chat_only_indices is not None:
+            chat_only_indices = th.load(args.chat_only_indices).tolist()
+            df = df.iloc[chat_only_indices]
+            df["tag"] = "Chat only"
+        print(f"len df: {len(df)}")
     else:
-        print(f"Loading df from dictionary {args.dictionary}")
-        df = load_latent_df(args.dictionary)
-    if args.chat_only_indices is not None:
-        chat_only_indices = th.load(args.chat_only_indices).tolist()
-        df = df.iloc[chat_only_indices]
-        df["tag"] = "Chat only"
-
-    print(f"len df: {len(df)}")
+        df = None
+        chat_only_indices = None
+    if args.base_model in MODEL_CONFIGS and not args.skip_token_level_replacement:
+        token_level_replacement = MODEL_CONFIGS[args.base_model][
+            "token_level_replacement"
+        ]
+        logger.info(f"Using token level replacement: {token_level_replacement}")
+    else:
+        if args.base_model in MODEL_CONFIGS:
+            logger.info(
+                f"Skipping token level replacement for {args.base_model} as --skip-token-level-replacement flag is set"
+            )
+        else:
+            logger.info(
+                f"Skipping token level replacement for {args.base_model} as it is not in MODEL_CONFIGS"
+            )
+        token_level_replacement = None
     result = kl_experiment(
         dictionary=dictionary,
         base_model=load_hf_model(args.base_model),
         chat_model=load_hf_model(args.chat_model),
-        tokenizer=AutoTokenizer.from_pretrained(args.chat_model),
+        tokenizer_name=args.chat_model,
         dataset_name=args.dataset,
         split=args.split,
         dataset_col=args.dataset_col,
@@ -633,5 +704,9 @@ if __name__ == "__main__":
         percentages=args.percentage,
         save_path=args.save_path,
         name=args.name,
+        dictionary_name=args.dictionary,
+        model_name=args.chat_model,
         test=args.test,
+        max_num_tokens=args.max_num_tokens,
+        token_level_replacement=token_level_replacement,
     )
