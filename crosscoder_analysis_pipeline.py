@@ -7,12 +7,13 @@ Analyze a given crosscoder as shown in the paper.
 
 from run_notebook import run_notebook
 import time
+import os
 from argparse import ArgumentParser
 from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
-import os
+import torch as th
 from transformers import AutoTokenizer
 
 from tools.utils import dict_to_args, auto_device, load_hf_model
@@ -26,6 +27,7 @@ from scripts import (
     kl_experiment,
     compute_latents_template_stats,
 )
+from tools.configs import MODEL_CONFIGS
 from scripts.eval_betas import (
     load_betas_results,
     add_possible_cols,
@@ -239,7 +241,12 @@ if __name__ == "__main__":
     parser.add_argument("--layer", type=int, required=True)
     parser.add_argument("--no-upload", action="store_false", dest="upload_to_hub")
     parser.add_argument("--lmsys-col", type=str, default="")
-    parser.add_argument("--kl-dataset", type=str, default="science-of-finetuning/ultrachat_200k_gemma-2-2b-it-generated", help="Dataset to use for KL experiment")
+    parser.add_argument(
+        "--kl-dataset",
+        type=str,
+        default="science-of-finetuning/ultrachat_200k_gemma-2-2b-it-generated",
+        help="Dataset to use for KL experiment",
+    )
     parser.add_argument(
         "--num-effective-chat-only-latents",
         type=int,
@@ -252,6 +259,8 @@ if __name__ == "__main__":
         default=1,
         help="Index of the chat model in the stacked activation cache",
     )
+    parser.add_argument("--batch-size-kl", type=int, default=6)
+    parser.add_argument("--skip-token-level-replacement", action="store_true")
     args = parser.parse_args()
     if args.chat_model_idx != 1:
         c = input(
@@ -405,19 +414,40 @@ if __name__ == "__main__":
     #     args.results_dir / args.crosscoder,
     # )
     dictionary = load_dictionary_model(args.crosscoder).to(auto_device())
-    base_model = load_hf_model(args.base_model)
-    chat_model = load_hf_model(args.chat_model)
+    base_model = load_hf_model(args.base_model, torch_dtype=th.bfloat16)
+    chat_model = load_hf_model(args.chat_model, torch_dtype=th.bfloat16)
+    if args.base_model in MODEL_CONFIGS and not args.skip_token_level_replacement:
+        token_level_replacement = MODEL_CONFIGS[args.base_model][
+            "token_level_replacement"
+        ]
+        logger.info(f"Using token level replacement: {token_level_replacement}")
+    else:
+        if args.base_model in MODEL_CONFIGS:
+            logger.info(
+                f"Skipping token level replacement for {args.base_model} as --skip-token-level-replacement flag is set"
+            )
+        else:
+            logger.info(
+                f"Skipping token level replacement for {args.base_model} as it is not in MODEL_CONFIGS"
+            )
+        token_level_replacement = None
     kl_experiment(
         dictionary=dictionary,
         base_model=base_model,
         chat_model=chat_model,
-        tokenizer=tokenizer,
+        tokenizer_name=args.chat_model,
+        dictionary_name=args.crosscoder,
+        # model_name=args.chat_model,
         # dataset_name="science-of-finetuning/ultrachat_200k_gemma-2-2b-it-generated",
         dataset_name="science-of-finetuning/lmsys-chat-1m-chat-formatted",
-        split="train",
+        split="validation",
         latent_df=df,
         chat_only_indices=effective_chat_latents_indices,
         layer_to_stop=args.layer,
         max_seq_len=1024,
-        dataset_col=args.lmsys_col if args.lmsys_col else "messages"
+        # dataset_col="messages",
+        dataset_col="conversation",
+        batch_size=args.batch_size_kl,
+        test=args.test,
+        token_level_replacement=token_level_replacement,
     )
