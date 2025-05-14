@@ -97,7 +97,7 @@ def patch_tokenizer(
         tokenizer.ctrl_template = GEMMA_CTRL_TEMPLATE
         tokenizer.start_of_turn_token = GEMMA_START_OF_TURN_TOKEN
         tokenizer.end_of_turn_token = GEMMA_END_OF_TURN_TOKEN
-        return
+        return tokenizer
     elif "meta-llama/Meta-Llama-3.1".lower() in model_name.lower():
         if chat_template is None:
             chat_template = LLAMA3_1_CHAT_TEMPLATE

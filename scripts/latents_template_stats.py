@@ -721,7 +721,7 @@ def compute_latents_template_stats(
 if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("crosscoder", type=str)
-    parser.add_argument("--latent-activation-cache-path", type=Path, required=True)
+    parser.add_argument("--latent-activation-cache-path", type=Path, default="./data/latent_activations")
     parser.add_argument("--test", "-t", action="store_true")
     parser.add_argument("--use-precomputed-stats", "--skip", action="store_true")
     parser.add_argument("--name", type=str, default="")

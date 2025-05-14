@@ -161,6 +161,7 @@ def collect_dictionary_activations(
     upload_to_hub: bool = False,
     split: str = "validation",
     load_from_disk: bool = False,
+    lmsys_col: str = "",
     is_sae: bool = False,
 ) -> None:
     """
@@ -204,6 +205,7 @@ def collect_dictionary_activations(
             base_model=base_model.split("/")[-1],
             instruct_model=chat_model.split("/")[-1],
             layer=layer,
+            lmsys_split=split + f"-col{lmsys_col}" if lmsys_col else split,
             split=split,
         )
         tokens_fineweb = fineweb_cache.tokens[0]

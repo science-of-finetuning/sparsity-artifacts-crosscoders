@@ -12,8 +12,7 @@ from collections import defaultdict
 import numpy as np
 import torch as th
 from tqdm import tqdm
-from huggingface_hub import hf_api
-from huggingface_hub.errors import EntryNotFoundError
+from huggingface_hub import hf_api, repo_exists, file_exists
 import wandb
 import time
 
@@ -484,7 +483,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("crosscoder", type=str)
-    parser.add_argument("--latent-activation-cache-path", type=Path, required=True)
+    parser.add_argument("--latent-activation-cache-path", type=Path, default="./data/latent_activations")
     parser.add_argument("--bos-token-id", type=int, default=2)
     parser.add_argument("--n", type=int, default=100)
     parser.add_argument("--min-threshold", type=float, default=1e-4)
