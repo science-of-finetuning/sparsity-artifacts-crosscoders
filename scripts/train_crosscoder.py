@@ -93,6 +93,7 @@ if __name__ == "__main__":
         "--type", type=str, default="relu", choices=["batch-top-k", "relu"]
     )
     parser.add_argument("--surname", type=str, default=None)
+    parser.add_argument("--auxk-alpha", type=float, default=1/32)
     args = parser.parse_args()
 
     print(f"Training args: {args}")
@@ -273,7 +274,7 @@ if __name__ == "__main__":
             "wandb_name": name,
             "k": args.k,
             "steps": args.max_steps,
-            "auxk_alpha": 1 / 32,
+            "auxk_alpha": args.auxk_alpha,
             "dict_class_kwargs": {
                 "same_init_for_all_layers": args.same_init_for_all_layers,
                 "norm_init_scale": args.norm_init_scale,
