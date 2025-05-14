@@ -462,62 +462,66 @@ def plot_beta_distribution_histograms(target_df, plots_dir):
         chat_col = f"beta_{beta_type}_chat"
 
         if chat_col in target_df.columns and base_col in target_df.columns:
-            plt.figure(figsize=(10, 6))
-            plt.rcParams["text.usetex"] = True
-            plt.rcParams.update({"font.size": 16})
+            try:
+                plt.figure(figsize=(10, 6))
+                plt.rcParams["text.usetex"] = True
+                plt.rcParams.update({"font.size": 16})
 
-            if beta_type == "reconstruction":
-                zoom = [-100, 100]
-                # Apply zoom to focus on a specific range
-                chat_zoomed = target_df[chat_col].clip(zoom[0], zoom[1])
-                base_zoomed = target_df[base_col].clip(zoom[0], zoom[1])
+                if beta_type == "reconstruction":
+                    zoom = [-100, 100]
+                    # Apply zoom to focus on a specific range
+                    chat_zoomed = target_df[chat_col].clip(zoom[0], zoom[1])
+                    base_zoomed = target_df[base_col].clip(zoom[0], zoom[1])
 
-                # Plot zoomed histograms
-                plt.hist(
-                    chat_zoomed,
-                    bins=50,
-                    alpha=0.7,
-                    label=f"Chat (zoomed to {zoom})",
-                    color="blue",
-                    density=True,
-                )
-                plt.hist(
-                    base_zoomed,
-                    bins=50,
-                    alpha=0.7,
-                    label=f"Base (zoomed to {zoom})",
-                    color="red",
-                    density=True,
-                )
+                    # Plot zoomed histograms
+                    plt.hist(
+                        chat_zoomed,
+                        bins=50,
+                        alpha=0.7,
+                        label=f"Chat (zoomed to {zoom})",
+                        color="blue",
+                        density=True,
+                    )
+                    plt.hist(
+                        base_zoomed,
+                        bins=50,
+                        alpha=0.7,
+                        label=f"Base (zoomed to {zoom})",
+                        color="red",
+                        density=True,
+                    )
 
-                # Add a note about zooming
-                plt.text(
-                    0.05,
-                    0.95,
-                    f"Values clipped to range {zoom}",
-                    transform=plt.gca().transAxes,
-                    fontsize=12,
-                    verticalalignment="top",
-                    bbox=dict(boxstyle="round", facecolor="white", alpha=0.7),
-                )
-            else:
-                # Plot regular histograms
-                plt.hist(
-                    target_df[chat_col],
-                    bins=50,
-                    alpha=0.7,
-                    label=f"Beta {beta_type.capitalize()} Chat",
-                    color="blue",
-                    density=True,
-                )
-                plt.hist(
-                    target_df[base_col],
-                    bins=50,
-                    alpha=0.7,
-                    label=f"Beta {beta_type.capitalize()} Base",
-                    color="red",
-                    density=True,
-                )
+                    # Add a note about zooming
+                    plt.text(
+                        0.05,
+                        0.95,
+                        f"Values clipped to range {zoom}",
+                        transform=plt.gca().transAxes,
+                        fontsize=12,
+                        verticalalignment="top",
+                        bbox=dict(boxstyle="round", facecolor="white", alpha=0.7),
+                    )
+                else:
+                    # Plot regular histograms
+                    plt.hist(
+                        target_df[chat_col],
+                        bins=50,
+                        alpha=0.7,
+                        label=f"Beta {beta_type.capitalize()} Chat",
+                        color="blue",
+                        density=True,
+                    )
+                    plt.hist(
+                        target_df[base_col],
+                        bins=50,
+                        alpha=0.7,
+                        label=f"Beta {beta_type.capitalize()} Base",
+                        color="red",
+                        density=True,
+                    )
+            except Exception as e:
+                print(f"Error plotting {beta_type}: {e}")
+                continue
 
             # Add labels and title
             plt.xlabel(f"Beta {beta_type.capitalize()}")

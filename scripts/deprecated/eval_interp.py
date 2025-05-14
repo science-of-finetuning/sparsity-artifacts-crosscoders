@@ -13,7 +13,7 @@ import einops
 
 sys.path.append(".")
 
-from tools.split_gemma import split_gemma
+from tools.split_model import split_model
 
 
 @th.inference_mode()
@@ -44,8 +44,8 @@ def evaluate_interpretation(
         device: The device to use for evaluation.
         layer_to_stop: The layer to take the activations from.
     """
-    base_model = split_gemma(base_model)
-    instruct_model = split_gemma(instruct_model)
+    base_model = split_model(base_model)
+    instruct_model = split_model(instruct_model)
     true_activations = []
     false_activations = []
     for i in tqdm(range(0, len(dataset), batch_size)):
