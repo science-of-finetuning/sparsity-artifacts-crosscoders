@@ -12,7 +12,7 @@ import numpy as np
 from pandas.io.formats.printing import pprint_thing
 import torch as th
 from transformers import AutoTokenizer
-from huggingface_hub import hf_hub_download, hf_api
+from huggingface_hub import hf_hub_download, hf_api, repo_exists, file_exists
 from huggingface_hub import HfApi
 
 from dictionary_learning.dictionary import BatchTopKCrossCoder, CrossCoder
@@ -57,16 +57,15 @@ def load_latent_df(crosscoder_or_path=None, author=HF_NAME):
         df_path = Path(crosscoder_or_path)
     else:
         repo_id = stats_repo_id(crosscoder_or_path)
-        try:
-            df_path = hf_hub_download(
-                repo_id=repo_id,
-                filename="feature_df.csv",
-                repo_type="dataset",
-            )
-        except Exception as e:
-            raise ValueError(
-                f"Failed to download latent_df for {crosscoder_or_path}: {e}"
-            )
+        if not repo_exists(repo_id=repo_id, repo_type="dataset"):
+            raise ValueError(f"Repository {repo_id} does not exist, can't load latent_df")
+        if not file_exists(repo_id=repo_id, filename="feature_df.csv", repo_type="dataset"):
+            raise ValueError(f"File feature_df.csv does not exist in repository {repo_id}, can't load latent_df")
+        df_path = hf_hub_download(
+            repo_id=repo_id,
+            filename="feature_df.csv",
+            repo_type="dataset",
+        )
     df = pd.read_csv(df_path, index_col=0)
     return df
 
@@ -95,77 +94,76 @@ def push_latent_df(
     """
     if crosscoder is None:
         crosscoder = "l13_crosscoder"
-    if not force or confirm:
-        try:
-            original_df = load_latent_df(crosscoder)
-            original_columns = set(original_df.columns)
-            new_columns = set(df.columns)
-            allow_remove_columns = (
-                set(allow_remove_columns) if allow_remove_columns is not None else set()
+    if not force or confirm and repo_exists(repo_id=stats_repo_id(crosscoder), repo_type="dataset"):
+        original_df = load_latent_df(crosscoder)
+        original_columns = set(original_df.columns)
+        new_columns = set(df.columns)
+        allow_remove_columns = (
+            set(allow_remove_columns) if allow_remove_columns is not None else set()
+        )
+        missing_columns = original_columns - new_columns
+        added_columns = new_columns - original_columns
+        shared_columns = original_columns & new_columns
+        duplicated_columns = df.columns.duplicated()
+        if duplicated_columns.any():
+            raise ValueError(
+                f"Duplicated columns in uploaded df: {df.columns[duplicated_columns]}"
             )
-            missing_columns = original_columns - new_columns
-            added_columns = new_columns - original_columns
-            shared_columns = original_columns & new_columns
-            duplicated_columns = df.columns.duplicated()
-            if duplicated_columns.any():
+        if len(missing_columns) > 0:
+            real_missing_columns = missing_columns - allow_remove_columns
+            if len(real_missing_columns) > 0 and not force:
                 raise ValueError(
-                    f"Duplicated columns in uploaded df: {df.columns[duplicated_columns]}"
+                    f"Missing columns in uploaded df: {missing_columns}\n"
+                    "If you want to upload the df anyway, set allow_remove_columns=your_removed_columns"
+                    " or force=True"
                 )
-            if len(missing_columns) > 0:
-                real_missing_columns = missing_columns - allow_remove_columns
-                if len(real_missing_columns) > 0 and not force:
-                    raise ValueError(
-                        f"Missing columns in uploaded df: {missing_columns}\n"
-                        "If you want to upload the df anyway, set allow_remove_columns=your_removed_columns"
-                        " or force=True"
-                    )
-                elif len(missing_columns) > 0 and len(real_missing_columns) == 0:
-                    print(f"Removed columns in uploaded df: {missing_columns}")
-                else:
-                    warnings.warn(
-                        f"Missing columns in uploaded df: {missing_columns}\n"
-                        "Force=True -> Upload df anyway"
-                    )
+            elif len(missing_columns) > 0 and len(real_missing_columns) == 0:
+                print(f"Removed columns in uploaded df: {missing_columns}")
+            else:
+                warnings.warn(
+                    f"Missing columns in uploaded df: {missing_columns}\n"
+                    "Force=True -> Upload df anyway"
+                )
 
-            if len(added_columns) > 0 and not force:
-                print(f"Added columns in uploaded df: {added_columns}")
+        if len(added_columns) > 0 and not force:
+            print(f"Added columns in uploaded df: {added_columns}")
 
-            for column in shared_columns:
-                if original_df[column].dtype != df[column].dtype:
-                    warnings.warn(
-                        f"Column {column} has different dtype in original and new df"
-                    )
-                # diff the columns
+        for column in shared_columns:
+            if original_df[column].dtype != df[column].dtype:
+                warnings.warn(
+                    f"Column {column} has different dtype in original and new df"
+                )
+            # diff the columns
+            if "float" in str(original_df[column].dtype):
+                equal = np.allclose(
+                    original_df[column].values, df[column].values, equal_nan=True
+                )
+            else:
+                equal = original_df[column].equals(df[column])
+            if not equal:
+                print(
+                    f"Column {column} has different values in original and new df:"
+                )
                 if "float" in str(original_df[column].dtype):
-                    equal = np.allclose(
-                        original_df[column].values, df[column].values, equal_nan=True
-                    )
+                    diff_ratio = (
+                        ~np.isclose(
+                            original_df[column].values,
+                            df[column].values,
+                            equal_nan=True,
+                        )
+                    ).mean() * 100
                 else:
-                    equal = original_df[column].equals(df[column])
-                if not equal:
-                    print(
-                        f"Column {column} has different values in original and new df:"
-                    )
-                    if "float" in str(original_df[column].dtype):
-                        diff_ratio = (
-                            ~np.isclose(
-                                original_df[column].values,
-                                df[column].values,
-                                equal_nan=True,
-                            )
-                        ).mean() * 100
-                    else:
-                        diff_ratio = (original_df[column] != df[column]).mean() * 100
-                    print(f"% of different values: {diff_ratio:.2f}%")
+                    diff_ratio = (original_df[column] != df[column]).mean() * 100
+                print(f"% of different values: {diff_ratio:.2f}%")
 
-                    print(f"Original: {pprint_thing(original_df[column].values)}")
-                    print(f"New     : {pprint_thing(df[column].values)}")
-                    print("=" * 20 + "\n", flush=True)
-        except Exception as e:
-            if not create_repo_if_missing:
-                raise e
-            print(f"Failed to load original df: {e}")
-            print("Will create a new repository.")
+                print(f"Original: {pprint_thing(original_df[column].values)}")
+                print(f"New     : {pprint_thing(df[column].values)}")
+                print("=" * 20 + "\n", flush=True)
+    if not repo_exists(repo_id=stats_repo_id(crosscoder), repo_type="dataset"):
+        if not create_repo_if_missing:
+            raise ValueError(f"Repository {stats_repo_id(crosscoder)} does not exist, can't push latent_df. P")
+        print("Will create a new repository.")
+    
 
     if confirm:
         print(f"Commit message: {commit_message}")
@@ -477,8 +475,6 @@ def load_dictionary_model(
                 return BatchTopKSAE.from_pretrained(model_id, from_hub=True)
             else:
                 return CrossCoder.from_pretrained(model_id, from_hub=True)
-        except Exception as e:
-            raise e
     else:
         # Local model
         model_path = Path(model_name)

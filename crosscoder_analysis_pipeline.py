@@ -20,7 +20,7 @@ from tools.utils import dict_to_args, auto_device, load_hf_model
 from tools.tokenization_utils import patch_tokenizer
 from tools.cc_utils import load_latent_df, push_latent_df, load_dictionary_model
 from scripts import (
-    compute_latent_activations,
+    collect_dictionary_activations,
     collect_activating_examples,
     compute_latent_stats,
     compute_scalers,
@@ -362,7 +362,7 @@ if __name__ == "__main__":
     #     shared_baseline_indices,
     #     args.results_dir / "closed_form_scalars" / args.crosscoder,
     # )
-    # compute_latent_activations(
+    # collect_dictionary_activations(
     #     dictionary_model=args.crosscoder,
     #     latent_activations_dir=latent_activations_dir,
     #     base_model=args.base_model,

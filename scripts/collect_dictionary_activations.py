@@ -8,7 +8,7 @@ from argparse import ArgumentParser
 from tools.utils import load_activation_dataset, load_dictionary_model
 from transformers import AutoTokenizer
 from CONFIG import HF_NAME
-
+from huggingface_hub import repo_exists
 
 @th.no_grad()
 def get_positive_activations(sequences, ranges, dataset, cc, latent_ids):
@@ -35,7 +35,6 @@ def get_positive_activations(sequences, ranges, dataset, cc, latent_ids):
 
     # Initialize tensors to track max activations for each latent
     max_activations = th.zeros(len(latent_ids), device="cuda")
-    # print(f"Computing {len(latent_ids)} latent activations for {len(sequences)} sequences and ranges {ranges}")
 
     for seq_idx in trange(len(sequences)):
         activations = th.stack(
@@ -98,6 +97,18 @@ def split_into_sequences(tokenizer, tokens):
     return sequences, index_to_seq_pos, ranges
 
 
+def add_get_activations_sae(sae, model_idx):
+    def get_activation(x: th.Tensor, select_features=None, **kwargs):
+        assert x.ndim == 3 and x.shape[1] == 2
+        f = sae.encode(x[:, model_idx])
+        if select_features is not None:
+            f = f[:, select_features]
+        return f
+
+    sae.get_activations = get_activation
+    return sae
+
+
 def load_latent_activations(
     repo_id="science-of-finetuning/autointerp-data-gemma-2-2b-l13-mu4.1e-02-lr1e-04",
 ):
@@ -139,8 +150,8 @@ def load_latent_activations(
     return activations, indices, sequences, latent_ids
 
 
-def compute_latent_activations(
-    dictionary_model: str,
+def collect_dictionary_activations(
+    dictionary_model_name: str,
     activation_store_dir: str = "/workspace/data/activations/",
     base_model: str = "google/gemma-2-2b",
     chat_model: str = "google/gemma-2-2b-it",
@@ -150,7 +161,7 @@ def compute_latent_activations(
     upload_to_hub: bool = False,
     split: str = "validation",
     load_from_disk: bool = False,
-    lmsys_col: str = "",
+    is_sae: bool = False,
 ) -> None:
     """
     Compute and save latent activations for a given dictionary model.
@@ -183,7 +194,7 @@ def compute_latent_activations(
     Returns:
         None
     """
-    out_dir = Path(latent_activations_dir) / f"{dictionary_model}"
+    out_dir = Path(latent_activations_dir) / f"{dictionary_model_name}"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # Load the activation dataset
@@ -193,14 +204,17 @@ def compute_latent_activations(
             base_model=base_model.split("/")[-1],
             instruct_model=chat_model.split("/")[-1],
             layer=layer,
-            lmsys_split=split + f"-col{lmsys_col}" if lmsys_col else split,
             split=split,
         )
         tokens_fineweb = fineweb_cache.tokens[0]
         tokens_lmsys = lmsys_cache.tokens[0]
 
         # Load the dictionary model
-        dictionary_model = load_dictionary_model(dictionary_model).to("cuda")
+        dictionary_model = load_dictionary_model(dictionary_model_name, is_sae=is_sae).to(
+            "cuda"
+        )
+        if is_sae:
+            dictionary_model = add_get_activations_sae(dictionary_model, model_idx=1)
         if latent_ids is None:
             latent_ids = th.arange(dictionary_model.dict_size)
 
@@ -285,15 +299,13 @@ def compute_latent_activations(
         api = HfApi()
 
         # Define repository ID for the dataset
-        repo_id = f"{HF_NAME}/latent-activations-{dictionary_model}"
+        repo_id = f"{HF_NAME}/latent-activations-{dictionary_model_name}"
         # Check if repository exists, create it if it doesn't
-        try:
-            # Try to get repository info to check if it exists
-            api.repo_info(repo_id=repo_id, repo_type="dataset")
+        if repo_exists(repo_id=repo_id, repo_type="dataset"):
             print(f"Repository {repo_id} already exists")
-        except Exception as e:
+        else:
             # Repository doesn't exist, create it
-            print(f"Repository {repo_id} doesn't exist (error: {e}), creating it...")
+            print(f"Repository {repo_id}, creating it...")
             api.create_repo(
                 repo_id=repo_id,
                 repo_type="dataset",
@@ -356,7 +368,7 @@ if __name__ == "__main__":
     parser.add_argument("--base-model", type=str, default="google/gemma-2-2b")
     parser.add_argument("--chat-model", type=str, default="google/gemma-2-2b-it")
     parser.add_argument("--layer", type=int, default=13)
-    parser.add_argument("--dictionary-model", type=str, required=True)
+    parser.add_argument("dictionary_model", type=str)
     parser.add_argument("--target-set", type=str, nargs="+", default=[])
     parser.add_argument(
         "--latent-activations-dir",
@@ -365,20 +377,37 @@ if __name__ == "__main__":
     )
     parser.add_argument("--upload-to-hub", action="store_true")
     parser.add_argument("--split", type=str, default="validation")
-    parser.add_argument("--load-from-disk", action="store_true")
+    parser.add_argument(
+        "--load-from-disk",
+        action="store_true",
+        help="Load precomputed activations from disk instead of recomputing. Useful if you forgot to upload to hub in previous run.",
+    )
+    parser.add_argument(
+        "--is-chat-sae", action="store_true"
+    )  # TODO: allow base sae by changing the model_idx in add_get_activations_sae
     args = parser.parse_args()
+    indices_root = Path(args.indices_root)
+    if len(args.target_set) == 0:
+        latent_ids = None
+    else:
+        indices = []
+        for target_set in args.target_set:
+            indices.append(
+                th.load(indices_root / f"{target_set}.pt", weights_only=True)
+            )
+        latent_ids = th.cat(indices)
 
-    compute_latent_activations(
-        dictionary_model=args.dictionary_model,
+    collect_dictionary_activations(
+        dictionary_model_name=args.dictionary_model,
         activation_store_dir=args.activation_store_dir,
-        indices_root=args.indices_root,
         base_model=args.base_model,
         chat_model=args.chat_model,
         layer=args.layer,
-        target_set=args.target_set,
+        latent_ids=latent_ids,
         latent_activations_dir=args.latent_activations_dir,
         upload_to_hub=args.upload_to_hub,
         split=args.split,
         load_from_disk=args.load_from_disk,
+        is_sae=args.is_chat_sae,
     )
 
