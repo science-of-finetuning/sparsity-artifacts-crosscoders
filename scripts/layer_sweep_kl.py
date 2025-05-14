@@ -9,6 +9,7 @@ from tools.configs import MODEL_CONFIGS
 from coolname import generate_slug
 from nnterp.nnsight_utils import get_num_layers
 from loguru import logger
+
 if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("--batch-size", type=int, default=6)
@@ -60,10 +61,12 @@ if __name__ == "__main__":
             logger.info(
                 f"Skipping token level replacement for {args.base_model} as it is not in MODEL_CONFIGS"
             )
+    slug = generate_slug(2)
+    base_model = load_hf_model(args.base_model, torch_dtype=args.model_dtype)
     for layer in range(0, num_layers, args.layer_step):
         kl_experiment(
             dictionary=None,
-            base_model=load_hf_model(args.base_model, torch_dtype=args.model_dtype),
+            base_model=base_model,
             chat_model=chat_model,
             tokenizer_name=args.chat_model,
             dataset_name=args.dataset,
@@ -77,10 +80,10 @@ if __name__ == "__main__":
             log_every=args.log_every,
             k_first=args.k_first,
             checkpoint_every=args.checkpoint,
-            save_path=args.save_path,
+            save_path=args.save_path / (slug + args.base_model.split("/")[-1]),
             test=args.test,
             max_num_tokens=args.max_num_tokens,
-            name=f"{generate_slug(2)}_layer_{layer}",
+            name=f"{slug}_layer_{layer}",
             add_coolname=False,
             token_level_replacement=token_level_replacement,
         )

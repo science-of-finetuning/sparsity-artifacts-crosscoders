@@ -475,7 +475,7 @@ def kl_experiment(
         str(int(time.time()))
         + "_"
         + name
-        + ("_" + generate_slug(2) if add_coolname else "")
+        + (("_" + generate_slug(2)) if add_coolname else "")
     )
 
     # Initialize wandb
