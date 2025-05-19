@@ -6,9 +6,9 @@ set -x
 CHAT_DATASET=science-of-finetuning/lmsys-chat-1m-chat-formatted
 FINEWEB_DATASET=science-of-finetuning/fineweb-1m-sample
 ACTIVATION_STORE_DIR=/workspace/data/activations
-BATCH_SIZE=128
-CHAT_MODEL=meta-llama/Meta-Llama-3.1-8B-Instruct
-BASE_MODEL=meta-llama/Meta-Llama-3.1-8B
+BATCH_SIZE=512
+CHAT_MODEL=meta-llama/Llama-3.2-1B-Instruct
+BASE_MODEL=meta-llama/Llama-3.2-1B
 TEXT_COLUMN=text
 
 # Initialize variables for command-line arguments
@@ -68,7 +68,7 @@ COMMON_FLAGS="--dtype bfloat16 \
 --disable-multiprocessing \
 --store-tokens \
 --batch-size $BATCH_SIZE \
---layers 16 \
+--layers 8 \
 --dataset $DATASET \
 --dataset-split $SPLIT \
 --activation-store-dir $ACTIVATION_STORE_DIR \
@@ -77,5 +77,5 @@ COMMON_FLAGS="--dtype bfloat16 \
 --overwrite"
 
 # Run activation collection for both base and chat models
-python scripts/collect_activations.py $COMMON_FLAGS --model $BASE_MODEL
-# python scripts/collect_activations.py $COMMON_FLAGS --model $CHAT_MODEL
+# python scripts/collect_activations.py $COMMON_FLAGS --model $BASE_MODEL 
+python scripts/collect_activations.py $COMMON_FLAGS --model $CHAT_MODEL
