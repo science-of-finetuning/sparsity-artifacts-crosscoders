@@ -18,7 +18,12 @@ from transformers import AutoTokenizer
 
 from tools.utils import dict_to_args, auto_device, load_hf_model
 from tools.tokenization_utils import patch_tokenizer
-from tools.cc_utils import load_latent_df, push_latent_df, load_dictionary_model
+from tools.cc_utils import (
+    load_latent_df,
+    push_latent_df,
+    load_dictionary_model,
+    push_dictionary_model,
+)
 from scripts import (
     collect_dictionary_activations,
     collect_activating_examples,
@@ -229,6 +234,14 @@ def make_betas_plots(
     )
 
 
+def push_crosscoder_to_hub(crosscoder_path: Path):
+    assert crosscoder_path.endswith(".pt"), f"Crosscoder path must end with .pt, got {crosscoder_path}"
+    repo_id = push_dictionary_model(crosscoder_path)
+    return repo_id
+
+
+
+
 # python crosscoder_analysis_pipeline.py gemma-2-2b-L13-k100-lr1e-04-local-shuffling-Decoupled --layer 13 --data-dir /workspace/data/ --results-dir /workspace/data/results
 if __name__ == "__main__":
     parser = ArgumentParser()
@@ -274,6 +287,21 @@ if __name__ == "__main__":
     parser.add_argument("--run-kl-experiment", action="store_true")
     args = parser.parse_args()
     print(args)
+
+    if args.upload_to_hub:
+        # Check if crosscoder is a local path that exists
+        crosscoder_path = Path(args.crosscoder)
+        if crosscoder_path.exists():
+            logger.info(f"Found local crosscoder at {crosscoder_path}. Uploading first...")
+            if crosscoder_path.is_file() and crosscoder_path.suffix == ".pt":
+                # Upload dictionary model
+                repo_id = push_dictionary_model(crosscoder_path)
+                # Update args.crosscoder to use the model name
+                args.crosscoder = repo_id
+                print(f"Using crosscoder name: {args.crosscoder}")
+            else:
+                raise ValueError(f"Crosscoder path must be a .pt file, got {crosscoder_path}")
+
     if args.chat_model_idx != 1:
         c = input(
             f"Chat model idx set to {args.chat_model_idx} != 1. Some of the analysis pipeline will not work as expected (e.g. kl experiment). Continue? y/(n)"
@@ -393,7 +421,9 @@ if __name__ == "__main__":
             lmsys_col=args.lmsys_col,
         )
         latent_activation_cache = LatentActivationCache(
-            latent_activations_dir / args.crosscoder, expand=False, use_sparse_tensor=False
+            latent_activations_dir / args.crosscoder,
+            expand=False,
+            use_sparse_tensor=False,
         )
         tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
         collect_activating_examples(
