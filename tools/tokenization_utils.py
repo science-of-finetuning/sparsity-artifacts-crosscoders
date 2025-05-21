@@ -92,13 +92,16 @@ def patch_tokenizer(
     end_of_turn_token: int = None,
     start_of_turn_token: int = None,
 ):
-    if "gemma-2" in model_name:
+    if "google/gemma-2" in model_name:
         tokenizer.chat_template = GEMMA_CHAT_TEMPLATE
         tokenizer.ctrl_template = GEMMA_CTRL_TEMPLATE
         tokenizer.start_of_turn_token = GEMMA_START_OF_TURN_TOKEN
         tokenizer.end_of_turn_token = GEMMA_END_OF_TURN_TOKEN
         return tokenizer
-    elif "meta-llama/Meta-Llama-3.1".lower() in model_name.lower():
+    elif (
+        "meta-llama/Meta-Llama-3.1".lower() in model_name.lower()
+        or "meta-llama/Llama-3.2".lower() in model_name.lower()
+    ):
         if chat_template is None:
             chat_template = LLAMA3_1_CHAT_TEMPLATE
         if ctrl_template is None:
