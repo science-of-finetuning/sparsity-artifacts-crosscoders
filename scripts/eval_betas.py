@@ -23,7 +23,9 @@ __all__ = [
 ]
 
 
-def load_betas_results(base_path, configs, not_dead_mask=None, to_numpy=True):
+def load_betas_results(
+    base_path, configs, not_dead_mask=None, to_numpy=True, num_samples=None
+):
     """
     Load beta values and count of active instances from result files.
 
@@ -36,6 +38,8 @@ def load_betas_results(base_path, configs, not_dead_mask=None, to_numpy=True):
     Returns:
         Tuple of (betas_out, count_active_out) dictionaries
     """
+    if num_samples is None:
+        num_samples = 50_000_000
     betas_out = {
         config: {
             model: {target: None for target in configs[config][model]}
@@ -58,6 +62,7 @@ def load_betas_results(base_path, configs, not_dead_mask=None, to_numpy=True):
                         base_path,
                         computation=configs[config][model][target][0],
                         suffix=configs[config][model][target][1],
+                        num_samples=num_samples,
                     )
                 except FileNotFoundError as e:
                     # legacy naming (chat -> it)
@@ -166,7 +171,7 @@ def add_possible_cols(df, indices, betas):
 
 def plot_beta_ratios_template_perc(target_df, filtered_df, plots_dir):
     """Plot histograms of beta ratios for template percentage
-    
+
     Args:
         target_df: DataFrame containing all chat-only latents
         filtered_df: DataFrame containing latents with high template percentage
