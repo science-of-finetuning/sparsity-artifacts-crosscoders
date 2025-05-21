@@ -64,6 +64,7 @@ if __name__ == "__main__":
     slug = generate_slug(2)
     base_model = load_hf_model(args.base_model, torch_dtype=args.model_dtype)
     for layer in range(0, num_layers, args.layer_step):
+        print(f"Running layer {layer} of {num_layers}")
         kl_experiment(
             dictionary=None,
             base_model=base_model,
@@ -83,7 +84,9 @@ if __name__ == "__main__":
             save_path=args.save_path / (slug + args.base_model.split("/")[-1]),
             test=args.test,
             max_num_tokens=args.max_num_tokens,
-            name=f"{slug}_layer_{layer}",
+            name=f"{slug}_layer_{layer}"
+            + ("_skip_tok_replace" if token_level_replacement else "")
+            + ("_test" if args.test else ""),
             add_coolname=False,
             token_level_replacement=token_level_replacement,
         )

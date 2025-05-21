@@ -142,6 +142,7 @@ def make_beta_df(
     results_dir: Path,
     chat_specific_indices: list[int],
     shared_indices: list[int],
+    num_samples: int,
 ):
     betas_dir = data_dir / "results" / "closed_form_scalars"
     cc_name = crosscoder.replace("/", "_")
@@ -165,13 +166,17 @@ def make_beta_df(
 
     df = load_latent_df(crosscoder)
     all_betas, count_active = load_betas_results(
-        betas_dir / cc_name / "all_latents", configs
+        betas_dir / cc_name / "all_latents", configs, num_samples=num_samples
     )
     chat_error_betas, count_active_chat = load_betas_results(
-        betas_dir / cc_name / "effective_chat_only_latents", configs
+        betas_dir / cc_name / "effective_chat_only_latents",
+        configs,
+        num_samples=num_samples,
     )
     shared_error_betas, count_active_shared = load_betas_results(
-        betas_dir / cc_name / "shared_baseline_latents", configs
+        betas_dir / cc_name / "shared_baseline_latents",
+        configs,
+        num_samples=num_samples,
     )
 
     df = add_possible_cols(df, df.index.tolist(), all_betas)
@@ -240,7 +245,7 @@ if __name__ == "__main__":
     parser.add_argument("--tokenizer", type=str, default=None)
     parser.add_argument("--layer", type=int, required=True)
     parser.add_argument("--no-upload", action="store_false", dest="upload_to_hub")
-    parser.add_argument("--lmsys-col", type=str, default="")
+    parser.add_argument("--lmsys-col", type=str, default=None)
     parser.add_argument(
         "--kl-dataset",
         type=str,
@@ -259,9 +264,16 @@ if __name__ == "__main__":
         default=1,
         help="Index of the chat model in the stacked activation cache",
     )
+    parser.add_argument("--skip-notebook", action="store_true")
+    parser.add_argument("--skip-recon-scalars", action="store_true")
+    parser.add_argument("--skip-error-scalars", action="store_true")
     parser.add_argument("--batch-size-kl", type=int, default=6)
     parser.add_argument("--skip-token-level-replacement", action="store_true")
+    parser.add_argument("--num-samples-betas", type=int, default=50_000_000)
+    parser.add_argument("--compute-latent-stats", action="store_true")
+    parser.add_argument("--run-kl-experiment", action="store_true")
     args = parser.parse_args()
+    print(args)
     if args.chat_model_idx != 1:
         c = input(
             f"Chat model idx set to {args.chat_model_idx} != 1. Some of the analysis pipeline will not work as expected (e.g. kl experiment). Continue? y/(n)"
@@ -273,32 +285,35 @@ if __name__ == "__main__":
     activation_store_dir = args.data_dir / "activations"
     if args.tokenizer is None:
         args.tokenizer = args.chat_model
-    # run_notebook(
-    #     notebook="eval_crosscoder",
-    #     crosscoder=args.crosscoder,
-    #     extra_args=dict_to_args(upload=args.upload_to_hub, overwrite=True),
-    # )
+    if not args.skip_notebook:
+        run_notebook(
+            notebook="eval_crosscoder",
+            crosscoder=args.crosscoder,
+            extra_args=dict_to_args(upload=args.upload_to_hub, overwrite=True),
+        )
     scaler_lmsys_split = (
         "train" if args.lmsys_col is None else f"train-col{args.lmsys_col}"
     )
-    # compute_scalers(
-    #     dictionary_model=args.crosscoder,
-    #     layer=args.layer,
-    #     activation_store_dir=activation_store_dir,
-    #     results_dir=args.results_dir,
-    #     base_model=args.base_model,
-    #     chat_model=args.chat_model,
-    #     lmsys_split=scaler_lmsys_split,
-    #     target_model_idx=1,
-    #     chat_activation=True,
-    #     base_activation=True,
-    #     chat_reconstruction=True,
-    #     base_reconstruction=True,
-    #     chat_activation_no_bias=True,
-    #     base_activation_no_bias=True,
-    #     chat_error=False,
-    #     base_error=False,
-    # )
+    if not args.skip_recon_scalars:
+        compute_scalers(
+            dictionary_model=args.crosscoder,
+            layer=args.layer,
+            activation_store_dir=activation_store_dir,
+            results_dir=args.results_dir,
+            base_model=args.base_model,
+            chat_model=args.chat_model,
+            lmsys_split=scaler_lmsys_split,
+            target_model_idx=1,
+            chat_activation=True,
+            base_activation=True,
+            chat_reconstruction=True,
+            base_reconstruction=True,
+            chat_activation_no_bias=True,
+            base_activation_no_bias=True,
+            chat_error=False,
+            base_error=False,
+            num_samples=args.num_samples_betas,
+        )
     df = load_latent_df(args.crosscoder)
     if args.num_effective_chat_only_latents == -1:
         effective_chat_latents_indices = df.query("tag == 'Chat only'").index.tolist()
@@ -313,141 +328,147 @@ if __name__ == "__main__":
         .sample(n=len(effective_chat_latents_indices), random_state=42)
         .index.tolist()
     )
-    # compute_scalers(
-    #     dictionary_model=args.crosscoder,
-    #     layer=args.layer,
-    #     activation_store_dir=activation_store_dir,
-    #     results_dir=args.results_dir,
-    #     base_model=args.base_model,
-    #     chat_model=args.chat_model,
-    #     target_model_idx=1,
-    #     chat_error=True,
-    #     # base_error=True,
-    #     latent_indices=effective_chat_latents_indices,
-    #     latent_indices_name="effective_chat_only_latents",
-    #     lmsys_split=scaler_lmsys_split,
-    # )
-    # compute_scalers(
-    #     dictionary_model=args.crosscoder,
-    #     layer=args.layer,
-    #     activation_store_dir=activation_store_dir,
-    #     results_dir=args.results_dir,
-    #     base_model=args.base_model,
-    #     chat_model=args.chat_model,
-    #     target_model_idx=1,
-    #     chat_error=True,
-    #     # base_error=True,
-    #     latent_indices=shared_baseline_indices,
-    #     latent_indices_name="shared_baseline_latents",
-    #     lmsys_split=scaler_lmsys_split,
-    # )
-    # df = make_beta_df(
-    #     args.crosscoder,
-    #     args.data_dir,
-    #     args.results_dir,
-    #     effective_chat_latents_indices,
-    #     shared_baseline_indices,
-    # )
-    # chat_only_indices = df[df["tag"] == "Chat only"].index.tolist()
-    # if args.upload_to_hub:
-    #     push_latent_df(
-    #         df,
-    #         crosscoder=args.crosscoder,
-    #         confirm=False,
-    #         commit_message="Added betas columns to df",
-    #     )
-    # make_betas_plots(
-    #     df,
-    #     chat_only_indices,
-    #     shared_baseline_indices,
-    #     args.results_dir / "closed_form_scalars" / args.crosscoder,
-    # )
-    # collect_dictionary_activations(
-    #     dictionary_model=args.crosscoder,
-    #     latent_activations_dir=latent_activations_dir,
-    #     base_model=args.base_model,
-    #     chat_model=args.chat_model,
-    #     layer=args.layer,
-    #     upload_to_hub=args.upload_to_hub,
-    #     split="validation",
-    #     lmsys_col=args.lmsys_col,
-    # )
-    # latent_activation_cache = LatentActivationCache(
-    #     latent_activations_dir / args.crosscoder, expand=False, use_sparse_tensor=False
-    # )
-    # tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
-    # collect_activating_examples(
-    #     crosscoder=args.crosscoder,
-    #     bos_token_id=tokenizer.bos_token_id,
-    #     latent_activation_cache=latent_activation_cache,
-    #     n=100,
-    #     min_threshold=1e-4,
-    #     quantiles=[0.25, 0.5, 0.75, 0.95, 1.0],
-    #     save_path=Path("results/quantile_examples"),
-    #     test=args.test,
-    #     only_upload=True,
-    # )
-    # compute_latent_stats(
-    #     crosscoder=args.crosscoder,
-    #     latent_activation_cache=latent_activation_cache,
-    #     layer=args.layer,
-    #     confirm=False,
-    # )
+    if not args.skip_error_scalars:
+        compute_scalers(
+            dictionary_model=args.crosscoder,
+            layer=args.layer,
+            activation_store_dir=activation_store_dir,
+            results_dir=args.results_dir,
+            base_model=args.base_model,
+            chat_model=args.chat_model,
+            target_model_idx=1,
+            chat_error=True,
+            base_error=True,
+            latent_indices=effective_chat_latents_indices,
+            latent_indices_name="effective_chat_only_latents",
+            lmsys_split=scaler_lmsys_split,
+            num_samples=args.num_samples_betas,
+        )
+        compute_scalers(
+            dictionary_model=args.crosscoder,
+            layer=args.layer,
+            activation_store_dir=activation_store_dir,
+            results_dir=args.results_dir,
+            base_model=args.base_model,
+            chat_model=args.chat_model,
+            target_model_idx=1,
+            chat_error=True,
+            base_error=True,
+            latent_indices=shared_baseline_indices,
+            latent_indices_name="shared_baseline_latents",
+            lmsys_split=scaler_lmsys_split,
+            num_samples=args.num_samples_betas,
+        )
+    df = make_beta_df(
+        args.crosscoder,
+        args.data_dir,
+        args.results_dir,
+        effective_chat_latents_indices,
+        shared_baseline_indices,
+        num_samples=args.num_samples_betas,
+    )
+    chat_only_indices = df[df["tag"] == "Chat only"].index.tolist()
+    if args.upload_to_hub:
+        push_latent_df(
+            df,
+            crosscoder=args.crosscoder,
+            confirm=False,
+            commit_message="Added betas columns to df",
+        )
+    make_betas_plots(
+        df,
+        chat_only_indices,
+        shared_baseline_indices,
+        args.results_dir / "closed_form_scalars" / args.crosscoder,
+    )
+    if args.compute_latent_stats:
+        collect_dictionary_activations(
+            dictionary_model=args.crosscoder,
+            latent_activations_dir=latent_activations_dir,
+            base_model=args.base_model,
+            chat_model=args.chat_model,
+            layer=args.layer,
+            upload_to_hub=args.upload_to_hub,
+            split="validation",
+            lmsys_col=args.lmsys_col,
+        )
+        latent_activation_cache = LatentActivationCache(
+            latent_activations_dir / args.crosscoder, expand=False, use_sparse_tensor=False
+        )
+        tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
+        collect_activating_examples(
+            crosscoder=args.crosscoder,
+            bos_token_id=tokenizer.bos_token_id,
+            latent_activation_cache=latent_activation_cache,
+            n=100,
+            min_threshold=1e-4,
+            quantiles=[0.25, 0.5, 0.75, 0.95, 1.0],
+            save_path=Path("results/quantile_examples"),
+            test=args.test,
+            only_upload=True,
+        )
+        compute_latent_stats(
+            crosscoder=args.crosscoder,
+            latent_activation_cache=latent_activation_cache,
+            layer=args.layer,
+            confirm=False,
+        )
 
-    tokenizer = patch_tokenizer(
-        AutoTokenizer.from_pretrained(args.chat_model), args.chat_model
-    )
-    # compute_latents_template_stats(
-    #     tokenizer=tokenizer,
-    #     crosscoder=args.crosscoder,
-    #     latent_activation_cache=latent_activation_cache,
-    #     max_activations=latent_activation_cache.max_activations,
-    #     save_path=args.results_dir / "latents_template_stats",
-    #     test=args.test,
-    # )
-    # df = pd.read_csv(
-    #     args.results_dir / "latents_template_stats" / "latent_stats_global.csv"
-    # )
-    # plot_beta_ratios_template_perc(
-    #     df.query("tag == 'Chat only'"),
-    #     df[df["lmsys_ctrl_%"] > 0.5].query("tag == 'Chat only'"),
-    #     args.results_dir / args.crosscoder,
-    # )
-    dictionary = load_dictionary_model(args.crosscoder).to(auto_device())
-    base_model = load_hf_model(args.base_model, torch_dtype=th.bfloat16)
-    chat_model = load_hf_model(args.chat_model, torch_dtype=th.bfloat16)
-    if args.base_model in MODEL_CONFIGS and not args.skip_token_level_replacement:
-        token_level_replacement = MODEL_CONFIGS[args.base_model][
-            "token_level_replacement"
-        ]
-        logger.info(f"Using token level replacement: {token_level_replacement}")
-    else:
-        if args.base_model in MODEL_CONFIGS:
-            logger.info(
-                f"Skipping token level replacement for {args.base_model} as --skip-token-level-replacement flag is set"
-            )
+        tokenizer = patch_tokenizer(
+            AutoTokenizer.from_pretrained(args.chat_model), args.chat_model
+        )
+        compute_latents_template_stats(
+            tokenizer=tokenizer,
+            crosscoder=args.crosscoder,
+            latent_activation_cache=latent_activation_cache,
+            max_activations=latent_activation_cache.max_activations,
+            save_path=args.results_dir / "latents_template_stats",
+            test=args.test,
+        )
+        df = pd.read_csv(
+            args.results_dir / "latents_template_stats" / "latent_stats_global.csv"
+        )
+        plot_beta_ratios_template_perc(
+            df.query("tag == 'Chat only'"),
+            df[df["lmsys_ctrl_%"] > 0.5].query("tag == 'Chat only'"),
+            args.results_dir / args.crosscoder,
+        )
+        dictionary = load_dictionary_model(args.crosscoder).to(auto_device())
+        base_model = load_hf_model(args.base_model, torch_dtype=th.bfloat16)
+        chat_model = load_hf_model(args.chat_model, torch_dtype=th.bfloat16)
+        if args.base_model in MODEL_CONFIGS and not args.skip_token_level_replacement:
+            token_level_replacement = MODEL_CONFIGS[args.base_model][
+                "token_level_replacement"
+            ]
+            logger.info(f"Using token level replacement: {token_level_replacement}")
         else:
-            logger.info(
-                f"Skipping token level replacement for {args.base_model} as it is not in MODEL_CONFIGS"
-            )
-        token_level_replacement = None
-    kl_experiment(
-        dictionary=dictionary,
-        base_model=base_model,
-        chat_model=chat_model,
-        tokenizer_name=args.chat_model,
-        dictionary_name=args.crosscoder,
-        # model_name=args.chat_model,
-        # dataset_name="science-of-finetuning/ultrachat_200k_gemma-2-2b-it-generated",
-        dataset_name="science-of-finetuning/lmsys-chat-1m-chat-formatted",
-        split="validation",
-        latent_df=df,
-        chat_only_indices=effective_chat_latents_indices,
-        layer_to_stop=args.layer,
-        max_seq_len=1024,
-        # dataset_col="messages",
-        dataset_col="conversation",
-        batch_size=args.batch_size_kl,
-        test=args.test,
-        token_level_replacement=token_level_replacement,
-    )
+            if args.base_model in MODEL_CONFIGS:
+                logger.info(
+                    f"Skipping token level replacement for {args.base_model} as --skip-token-level-replacement flag is set"
+                )
+            else:
+                logger.info(
+                    f"Skipping token level replacement for {args.base_model} as it is not in MODEL_CONFIGS"
+                )
+            token_level_replacement = None
+    if args.run_kl_experiment:
+        kl_experiment(
+            dictionary=dictionary,
+            base_model=base_model,
+            chat_model=chat_model,
+            tokenizer_name=args.chat_model,
+            dictionary_name=args.crosscoder,
+            # model_name=args.chat_model,
+            # dataset_name="science-of-finetuning/ultrachat_200k_gemma-2-2b-it-generated",
+            dataset_name="science-of-finetuning/lmsys-chat-1m-chat-formatted",
+            split="validation",
+            latent_df=df,
+            chat_only_indices=effective_chat_latents_indices,
+            layer_to_stop=args.layer,
+            max_seq_len=1024,
+            # dataset_col="messages",
+            dataset_col="conversation",
+            batch_size=args.batch_size_kl,
+            test=args.test,
+            token_level_replacement=token_level_replacement,
+        )

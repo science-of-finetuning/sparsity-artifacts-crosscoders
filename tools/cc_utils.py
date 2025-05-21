@@ -40,11 +40,16 @@ df_hf_repo_legacy = {
 def stats_repo_id(crosscoder, author=HF_NAME):
     return f"{author}/diffing-stats-{crosscoder}"
 
+def latent_df_exists(crosscoder_or_path, author=HF_NAME):
+    if crosscoder_or_path in df_hf_repo_legacy:
+        return file_exists(repo_id=df_hf_repo_legacy[crosscoder_or_path], filename="feature_df.csv", repo_type="dataset")
+    elif Path(crosscoder_or_path).exists():
+        return True
+    else:
+        return file_exists(repo_id=stats_repo_id(crosscoder_or_path), filename="feature_df.csv", repo_type="dataset")
 
-def load_latent_df(crosscoder_or_path=None, author=HF_NAME):
+def load_latent_df(crosscoder_or_path, author=HF_NAME):
     """Load the latent_df for the given crosscoder."""
-    if crosscoder_or_path is None:
-        crosscoder_or_path = "l13_crosscoder"
     if crosscoder_or_path in df_hf_repo_legacy:
         # LEGACY SUPPORT
         df_path = hf_hub_download(
@@ -94,7 +99,7 @@ def push_latent_df(
     """
     if crosscoder is None:
         crosscoder = "l13_crosscoder"
-    if not force or confirm and repo_exists(repo_id=stats_repo_id(crosscoder), repo_type="dataset"):
+    if (not force or confirm) and latent_df_exists(crosscoder):
         original_df = load_latent_df(crosscoder)
         original_columns = set(original_df.columns)
         new_columns = set(df.columns)
