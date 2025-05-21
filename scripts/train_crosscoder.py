@@ -89,6 +89,8 @@ if __name__ == "__main__":
     )
     parser.add_argument("--use-mse-loss", action="store_true")
     parser.add_argument("--k", type=int, default=100)
+    parser.add_argument("--k-max", type=int, default=2048)
+    parser.add_argument("--k-annealing-steps", type=int, default=0)
     parser.add_argument(
         "--type", type=str, default="relu", choices=["batch-top-k", "relu"]
     )
@@ -273,6 +275,8 @@ if __name__ == "__main__":
             "lm_name": f"{args.chat_model}-{args.base_model}",
             "wandb_name": name,
             "k": args.k,
+            "k_max": args.k_max,
+            "k_annealing_steps": args.k_annealing_steps,
             "steps": args.max_steps,
             "auxk_alpha": args.auxk_alpha,
             "dict_class_kwargs": {
