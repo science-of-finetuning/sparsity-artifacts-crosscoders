@@ -237,9 +237,10 @@ def make_betas_plots(
 def push_crosscoder_to_hub(crosscoder_path: Path):
     assert crosscoder_path.endswith(".pt"), f"Crosscoder path must end with .pt, got {crosscoder_path}"
     repo_id = push_dictionary_model(crosscoder_path)
+    if repo_id.startswith("science-of-finetuning/"):
+        # Remove the science-of-finetuning/ prefix (as this improves folder structure and the loading function automatically adds it back)
+        repo_id = repo_id[len("science-of-finetuning/"):]
     return repo_id
-
-
 
 
 # python crosscoder_analysis_pipeline.py gemma-2-2b-L13-k100-lr1e-04-local-shuffling-Decoupled --layer 13 --data-dir /workspace/data/ --results-dir /workspace/data/results
