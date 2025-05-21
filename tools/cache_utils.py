@@ -283,6 +283,7 @@ class LatentActivationCache:
         expand=True,
         offset=0,
         use_sparse_tensor=False,
+        device: th.device = None,
     ):
         if isinstance(latent_activations_dir, str):
             latent_activations_dir = Path(latent_activations_dir)
@@ -334,6 +335,9 @@ class LatentActivationCache:
         self.expand = expand
         self.offset = offset
         self.use_sparse_tensor = use_sparse_tensor
+        self.device = device
+        if device is not None:
+            self.to(device)
 
     def __len__(self):
         return len(self.padded_sequences) - self.offset
@@ -410,4 +414,5 @@ class LatentActivationCache:
         self.max_activations = self.max_activations.to(device)
         self.latent_ids = self.latent_ids.to(device)
         self.padded_sequences = self.padded_sequences.to(device)
+        self.device = device
         return self

@@ -1,7 +1,7 @@
 import torch as th
 from pathlib import Path
 import numpy as np
-
+from warnings import warn
 from tools.cc_utils import CCLatent
 
 
@@ -18,11 +18,16 @@ def load_betas(
     )
     if not (betas_dir_path / betas_filename).exists() and "_chat_" in betas_filename:
         # legacy naming (chat -> it)
+        warn(
+            "Betas file not found, trying to load legacy naming (chat -> it)..."
+        )
         betas_filename = betas_filename.replace("_chat_", "_it_")
         count_active_filename = count_active_filename.replace("_chat_", "_it_")
 
     if not (betas_dir_path / betas_filename).exists():
-        raise FileNotFoundError(f"Betas file not found: {betas_filename}.")
+        raise FileNotFoundError(
+            f"Betas file not found: {betas_dir_path / betas_filename}."
+        )
 
     betas = th.load(betas_dir_path / betas_filename, weights_only=True).cpu()
     count_active = th.load(

@@ -4,7 +4,7 @@ from typing import List
 import torch as th
 from datasets import load_dataset
 from dictionary_learning.cache import PairedActivationCache
-
+from transformers import AutoModelForCausalLM
 from tools.compute_utils import *
 from tools.cc_utils import *
 from tools.plotting_utils import *
@@ -161,8 +161,33 @@ def save_json(data, path: Path):
         json.dump(data, f)
 
 
-def auto_device(device: str):
-    if device == "auto":
+def auto_device(device: str | None = None):
+    if device is None or device == "auto":
         return "cuda" if th.cuda.is_available() else "cpu"
     else:
         return device
+
+
+def dict_to_args(**d):
+    """
+    Convert a dictionary to a list of strings of the form "--key value"
+    """
+
+    def preproc(k, val):
+        k = f"--{k}"
+        if isinstance(val, bool):
+            return [k] if val else []
+        elif isinstance(val, list):
+            return [k, *[str(v) for v in val]]
+        else:
+            return [k, str(val)]
+
+    return list(sum([preproc(k, v) for k, v in d.items()], []))
+
+
+def load_hf_model(model_name: str, device: str = "auto", **kwargs):
+    if "gemma" in model_name:
+        kwargs["attn_implementation"] = "eager"
+        kwargs["torch_dtype"] = th.bfloat16
+    return AutoModelForCausalLM.from_pretrained(model_name, device_map="auto", **kwargs)
+

@@ -4,7 +4,6 @@ MODEL_CONFIGS = {
         "text_column": "text_qwen2_5",
         "attn_implementation": None,
         "token_level_replacement": None,
-        "token_level_replacement": None,
     },
     "google/gemma-2-2b": {
         "ignore_first_n_tokens_per_sample": 0,
@@ -16,7 +15,6 @@ MODEL_CONFIGS = {
         "ignore_first_n_tokens_per_sample": 25,
         "text_column": "text_llama3",
         "attn_implementation": None,
-        "token_level_replacement": None,
         "token_level_replacement": None,
     },
     "meta-llama/Llama-3.2-1B": {

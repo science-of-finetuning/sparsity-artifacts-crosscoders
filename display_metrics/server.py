@@ -7,7 +7,7 @@ from pathlib import Path
 import plotly.graph_objects as go
 import numpy as np
 import os
-import traceback  # Add traceback for better error reporting
+import traceback
 from shared import (
     load_metrics,
     normalize_key,

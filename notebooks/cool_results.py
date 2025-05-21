@@ -4,6 +4,8 @@ import sys
 sys.path.append("..")
 from tools.utils import get_available_models, load_dictionary_model, chunked_max_cosim
 from torch.nn.functional import cosine_similarity
+import matplotlib.pyplot as plt
+import numpy as np
 import torch as th
 
 th.set_grad_enabled(False)
@@ -25,9 +27,6 @@ chat_cosim = cosine_similarity(
     model1.decoder.weight[1], model2.decoder.weight[1], dim=1
 )
 print(base_cosim.shape, chat_cosim.shape)
-# %%
-import matplotlib.pyplot as plt
-import numpy as np
 
 
 def cosim_hist(cosim_base, cosim_chat):
@@ -64,13 +63,51 @@ max_cosim_chat = chunked_max_cosim(
 cosim_hist(max_cosim_base, max_cosim_chat)
 # %%
 from tools.cc_utils import load_latent_df
+import matplotlib.pyplot as plt
+import numpy as np
 
 df1 = load_latent_df("gemma-2-2b-L13-k100-lr1e-04-local-shuffling-CCLoss")
 df2 = load_latent_df("gemma-2-2b-L13-k100-lr1e-04-local-shuffling-SAELoss")
+df3 = load_latent_df("gemma-2-2b-L13-k100-lr1e-04-local-shuffling-Decoupled")
 co_idx1 = set(df1.query("tag == 'Chat only'").index)
 co_idx2 = set(df2.query("tag == 'Chat only'").index)
+co_idx3 = set(df3.query("tag == 'Chat only'").index)
 
-print(f"num chat only in CCLoss: {len(co_idx1)}")
-print(f"num chat only in SAELoss: {len(co_idx2)}")
-print(f"num chat only in both: {len(co_idx1 & co_idx2)}")
+# Prepare pairwise intersection counts for heatmap
+labels = ["CCLoss", "SAELoss", "Decoupled"]
+sets = [co_idx1, co_idx2, co_idx3]
+n = len(sets)
+heatmap = np.zeros((n, n), dtype=int)
+
+for i in range(n):
+    for j in range(n):
+        if i == j:
+            heatmap[i, j] = len(sets[i])
+        else:
+            heatmap[i, j] = len(sets[i] & sets[j])
+
+fig, ax = plt.subplots(figsize=(6, 5))
+im = ax.imshow(heatmap, cmap="Blues")
+
+# Show all ticks and label them
+ax.set_xticks(np.arange(n))
+ax.set_yticks(np.arange(n))
+ax.set_xticklabels(labels)
+ax.set_yticklabels(labels)
+
+# Rotate the tick labels and set alignment.
+plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
+
+# Loop over data dimensions and create text annotations.
+for i in range(n):
+    for j in range(n):
+        ax.text(j, i, heatmap[i, j], ha="center", va="center", color="black")
+
+ax.set_title("Chat-only Latent Overlap Heatmap")
+fig.tight_layout()
+plt.savefig("results/num_chat_only_overlap.png", dpi=300)
+plt.show()
+
+# Optionally, print the triple overlap as well
+print(f"num chat only in all: {len(co_idx1 & co_idx2 & co_idx3)}")
 # %%

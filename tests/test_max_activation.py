@@ -7,9 +7,9 @@ from unittest.mock import patch
 # Add the parent directory to the path so we can import the modules
 sys.path.append(str(Path(__file__).parent.parent))
 
-from scripts.compute_max_activation import (
-    compute_max_activation,
-    compute_max_activation_from_latent_cache,
+from scripts.compute_latent_stats import (
+    compute_stats,
+    compute_stats_from_latent_cache,
 )
 
 
@@ -125,7 +125,7 @@ def test_max_activation_computation(activation_test_params):
     )
 
     # Compute max activations
-    max_acts_latent = compute_max_activation_from_latent_cache(latent_cache, device)
+    max_acts_latent = compute_stats_from_latent_cache(latent_cache, device)
 
     # Verify results
     assert th.allclose(
@@ -173,7 +173,7 @@ def test_max_activation_computation(activation_test_params):
         ]
 
         # Compute max activations
-        max_acts_paired = compute_max_activation(
+        max_acts_paired = compute_stats(
             crosscoder, cache, device, batch_size, num_workers=0
         )
 

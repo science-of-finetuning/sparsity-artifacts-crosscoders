@@ -11,7 +11,7 @@ import bisect
 project_root = Path(__file__).parent.parent
 sys.path.append(str(project_root))
 
-from scripts.collect_max_activating_examples import (
+from scripts.collect_activating_examples import (
     compute_quantile_activating_examples,
     quantile_examples_to_db,
 )

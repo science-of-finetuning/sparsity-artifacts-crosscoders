@@ -85,7 +85,7 @@ if __name__ == "__main__":
         "--code-normalization",
         type=str,
         default="crosscoder",
-        choices=["crosscoder", "sae", "mixed", "DECOUPLED"],
+        choices=["crosscoder", "sae", "mixed", "decoupled", "none"],
     )
     parser.add_argument("--use-mse-loss", action="store_true")
     parser.add_argument("--k", type=int, default=100)

@@ -1,10 +1,16 @@
+"""
+This script collects and stores activations from specified layers of a language model
+The script supports different data types, handles large datasets efficiently
+through sharding, and includes options for storing tokens alongside activations.
+"""
+
 import sys
 
 sys.path.append(".")
 import argparse
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from dictionary_learning.cache import ActivationCache
-from datasets import load_from_disk, load_dataset
+from datasets import load_dataset
 from loguru import logger
 import torch as th
 from nnsight import LanguageModel
@@ -20,7 +26,11 @@ th.set_float32_matmul_precision("medium")
 
 if __name__ == "__main__":
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        description="Collect and store neural network activations from specified layers of a language "
+        "model while processing text data. Supports various models and datasets, with configurable "
+        "parameters for activation collection, storage, and processing."
+    )
     parser.add_argument("--model", type=str, required=True)
     parser.add_argument("--wandb", action="store_true")
     parser.add_argument("--wandb-entity", default="jkminder")
