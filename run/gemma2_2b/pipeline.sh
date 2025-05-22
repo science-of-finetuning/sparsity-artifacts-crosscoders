@@ -1,9 +1,9 @@
 set -x
 
 # Model configuration
-LAYER=16
-CHAT_MODEL=meta-llama/Meta-Llama-3.1-8B-Instruct
-BASE_MODEL=meta-llama/Meta-Llama-3.1-8B
-TEXT_COLUMN="text_llama3"
+LAYER=13
+CHAT_MODEL=google/gemma-2-2b-it
+BASE_MODEL=google/gemma-2-2b
+TEXT_COLUMN="text"
 
 python crosscoder_analysis_pipeline.py $@ --base-model $BASE_MODEL --chat-model $CHAT_MODEL --layer $LAYER --lmsys-col $TEXT_COLUMN --data-dir $DATASTORE --results-dir $DATASTORE/results

@@ -77,5 +77,5 @@ COMMON_FLAGS="--dtype bfloat16 \
 --overwrite"
 
 # Run activation collection for both base and chat models
-#python scripts/collect_activations.py $COMMON_FLAGS --model $BASE_MODEL
+python scripts/collect_activations.py $COMMON_FLAGS --model $BASE_MODEL
 python scripts/collect_activations.py $COMMON_FLAGS --model $CHAT_MODEL
