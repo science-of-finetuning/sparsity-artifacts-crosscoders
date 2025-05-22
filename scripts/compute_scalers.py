@@ -27,6 +27,7 @@ from tools.latent_scaler.closed_form import (
     run_tests,
     identity_fn,
 )
+from tools.paths import DATA_ROOT
 
 
 def load_base_activation(batch, **kwargs):
@@ -437,7 +438,7 @@ if __name__ == "__main__":
         default="Butanium/gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04",
     )
     parser.add_argument(
-        "--activation-store-dir", type=Path, default="/workspace/data/activations/"
+        "--activation-store-dir", type=Path, default=DATA_ROOT / "activations/"
     )
     parser.add_argument("--dataset-split", type=str, default="train")
     parser.add_argument("--batch-size", type=int, default=128)
@@ -454,7 +455,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--results-dir",
         type=Path,
-        default="/workspace/data/results/closed_form_scalars",
+        default=DATA_ROOT / "results/closed_form_scalars",
     )
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--num-workers", type=int, default=32)

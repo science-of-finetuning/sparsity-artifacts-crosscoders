@@ -243,7 +243,6 @@ def push_crosscoder_to_hub(crosscoder_path: Path):
     return repo_id
 
 
-# python crosscoder_analysis_pipeline.py gemma-2-2b-L13-k100-lr1e-04-local-shuffling-Decoupled --layer 13 --data-dir /workspace/data/ --results-dir /workspace/data/results
 if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("crosscoder", type=str)

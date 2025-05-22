@@ -16,6 +16,7 @@ from torchmetrics import MeanSquaredError
 import os
 from tools.utils import load_activation_dataset, load_crosscoder
 from tools.compute_utils import BucketedStats, RunningMeanStd
+from tools.paths import DATA_ROOT
 
 th.set_grad_enabled(False)
 th.set_float32_matmul_precision("highest")
@@ -325,7 +326,7 @@ def main():
     parser.add_argument(
         "--latent-indices-path",
         type=Path,
-        default="/workspace/data/latent_indices/Butanium_gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04/chat_only_indices.pt",
+        default=DATA_ROOT / "latent_indices/Butanium_gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04/chat_only_indices.pt",
     )
     parser.add_argument("--base-model", type=str, default="google/gemma-2-2b")
     parser.add_argument("--chat-model", type=str, default="google/gemma-2-2b-it")
@@ -348,7 +349,7 @@ def main():
     parser.add_argument(
         "--results-dir",
         type=Path,
-        default="/workspace/data/results/closed_form_scalars",
+        default=DATA_ROOT / "results/closed_form_scalars",
     )
     parser.add_argument("--threshold-active-latents", type=float, default=None)
     parser.add_argument("--chat-error", action="store_true")

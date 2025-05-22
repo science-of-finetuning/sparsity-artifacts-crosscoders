@@ -568,25 +568,6 @@ def kl_experiment(
 
     return result
 
-
-# python scripts/evaluate_interventions_effects.py --dataset science-of-finetuning/lmsys-chat-1m-chat-formatted --dataset-col conversation --split validation --name lmsys-chat-1m-validation-beta-cols --columns beta_ratio_reconstruction beta_ratio_error
-
-# python scripts/evaluate_interventions_effects.py --dataset science-of-finetuning/lmsys-chat-1m-chat-formatted --dataset-col conversation --split validation --name lmsys-chat-1m-validation-others-cols --columns rank_sum "base uselessness score"
-
-
-# python scripts/evaluate_interventions_effects.py --name ultrachat-gemma-all-columns
-
-
-# python scripts/evaluate_interventions_effects.py --name ultrachat-gemma-all-new-columns --skip-target-patch --skip-vanilla --skip-patching --columns "dec_norm_diff" "lmsys_freq" "lmsys_ctrl_%" "lmsys_ctrl_freq" "lmsys_avg_act" "beta_activation_ratio" "beta_activation_chat" "beta_activation_base" "beta_error_chat" "beta_error_base"
-# python scripts/evaluate_interventions_effects.py --name ultrachat-gemma-concat-sae --df-path results/eval_crosscoder/gemma-2-2b-L13-mu5.2e-02-lr1e-04-local-shuffling-SAEloss_model_final.pt/data/feature_df.csv --chat-only-indices /workspace/data/latent_indices/gemma-2-2b-L13-mu5.2e-02-lr1e-04-local-shuffling-SAEloss/low_norm_diff_indices_2839.pt --crosscoder /workspace/julian/repositories/representation-structure-comparison/checkpoints/gemma-2-2b-L13-mu5.2e-02-lr1e-04-local-shuffling-SAEloss/model_final.pt
-
-# python scripts/evaluate_interventions_effects.py --name ultrachat-gemma-minicc --df-path results/eval_crosscoder/gemma-2-2b-L13-mu4.1e-02-lr1e-04-local-shuffling-CCloss_model_final.pt/data/feature_df.csv --crosscoder /workspace/julian/repositories/representation-structure-comparison/checkpoints/gemma-2-2b-L13-mu4.1e-02-lr1e-04-local-shuffling-CCloss/model_final.pt
-
-# python scripts/evaluate_interventions_effects.py --name ultrachat-gemma-sae --crosscoder /workspace/julian/repositories/representation-structure-comparison/checkpoints/SAE-chat-gemma-2-2b-L13-k100-lr1e-04-local-shuffling/model_final.pt --df-path /workspace/julian/repositories/representation-structure-comparison/checkpoints/SAE-chat-gemma-2-2b-L13-k100-lr1e-04-local-shuffling/SAE-chat-gemma-2-2b-L13-k100-lr1e-04-local-shuffling.csv
-
-# python scripts/evaluate_interventions_effects.py --name ultrachat-gemma-concat-sae-200M --df-path /workspace/julian/repositories/representation-structure-comparison/results/eval_crosscoder/gemma-2-2b-L13-mu5.2e-02-lr1e-04-2x100M-local-shuffling-SAELoss_model_final.pt/data/feature_df.csv --chat-only-indices /workspace/data/latent_indices/gemma-2-2b-L13-mu5.2e-02-lr1e-04-2x100M-local-shuffling-SAELoss/low_norm_diff_indices_3176.pt --crosscoder /workspace/julian/repositories/representation-structure-comparison/checkpoints/gemma-2-2b-L13-mu5.2e-02-lr1e-04-2x100M-local-shuffling-SAELoss/model_final.pt
-
-# python scripts/evaluate_interventions_effects.py --name ultrachat-gemma-batchtopk-CC --df-path /workspace/julian/repositories/representation-structure-comparison/results/eval_crosscoder/gemma-2-2b-L13-k100-lr1e-04-local-shuffling-CCLoss_model_final.pt/data/feature_df.csv --chat-only-indices /workspace/data/latent_indices/gemma-2-2b-L13-k100-lr1e-04-local-shuffling-CCLoss/low_norm_diff_indices_3176.pt --crosscoder /workspace/julian/repositories/representation-structure-comparison/checkpoints/gemma-2-2b-L13-k100-lr1e-04-local-shuffling-CCLoss/model_final.pt
 if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("--layer-to-stop", type=int, default=13)

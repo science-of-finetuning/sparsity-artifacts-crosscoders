@@ -4,7 +4,7 @@ set -x
 
 # Define datasets and other constants
 CHAT_DATASET=science-of-finetuning/lmsys-chat-1m-gemma-formatted
-ACTIVATION_STORE_DIR=/workspace/data/activations
+ACTIVATION_STORE_DIR=$DATASTORE/activations
 BATCH_SIZE=128
 CHAT_MODEL=google/gemma-2-2b-it
 BASE_MODEL=google/gemma-2-2b

@@ -2,7 +2,7 @@ from dictionary_learning.cache import PairedActivationCache, ActivationCache
 import torch as th
 from pathlib import Path
 from tqdm.auto import tqdm
-
+from tools.paths import DATA_ROOT
 
 class DifferenceCache:
     def __init__(self, cache_1: ActivationCache, cache_2: ActivationCache):
@@ -42,7 +42,7 @@ class TokenCache:
         from tools.utils import load_activation_dataset
 
         fineweb_cache, lmsys_cache = load_activation_dataset(
-            activation_store_dir="/workspace/data/activations/",
+            activation_store_dir=DATA_ROOT / "activations/",
             base_model="gemma-2-2b",
             instruct_model="gemma-2-2b-it",
             layer=13,
@@ -184,7 +184,7 @@ class SampleCache:
         from tools.utils import load_activation_dataset
 
         fineweb_cache, lmsys_cache = load_activation_dataset(
-            activation_store_dir="/workspace/data/activations/",
+            activation_store_dir="$DATASTORE/activations/",
             base_model="gemma-2-2b",
             instruct_model="gemma-2-2b-it",
             layer=13,

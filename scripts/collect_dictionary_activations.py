@@ -10,6 +10,8 @@ from transformers import AutoTokenizer
 from CONFIG import HF_NAME
 from huggingface_hub import repo_exists
 
+from tools.paths import DATA_ROOT
+
 @th.no_grad()
 def get_positive_activations(sequences, ranges, dataset, cc, latent_ids):
     """
@@ -152,12 +154,12 @@ def load_latent_activations(
 
 def collect_dictionary_activations(
     dictionary_model_name: str,
-    activation_store_dir: str = "/workspace/data/activations/",
+    activation_store_dir: str = DATA_ROOT / "activations/",
     base_model: str = "google/gemma-2-2b",
     chat_model: str = "google/gemma-2-2b-it",
     layer: int = 13,
     latent_ids: th.Tensor | None = None,
-    latent_activations_dir: str = "/workspace/data/latent_activations/",
+    latent_activations_dir: str = DATA_ROOT / "latent_activations/",
     upload_to_hub: bool = False,
     split: str = "validation",
     load_from_disk: bool = False,
@@ -174,7 +176,7 @@ def collect_dictionary_activations(
     Args:
         dictionary_model (str): Path or identifier for the dictionary (crosscoder) model to use.
         activation_store_dir (str, optional): Directory containing the raw activation datasets.
-            Defaults to "/workspace/data/activations/".
+            Defaults to $DATASTORE/activations/.
         base_model (str, optional): Name or path of the base model (e.g., "google/gemma-2-2b").
             Defaults to "google/gemma-2-2b".
         chat_model (str, optional): Name or path of the chat/instruct model.
@@ -184,7 +186,7 @@ def collect_dictionary_activations(
         latent_ids (th.Tensor or None, optional): Tensor of latent indices to compute activations for.
             If None, uses all latents in the dictionary model.
         latent_activations_dir (str, optional): Directory to save computed latent activations.
-            Defaults to "/workspace/data/latent_activations/".
+            Defaults to $DATASTORE/latent_activations/.
         upload_to_hub (bool, optional): Whether to upload the computed activations to the Hugging Face Hub.
             Defaults to False.
         split (str, optional): Dataset split to use (e.g., "validation").
@@ -362,10 +364,10 @@ if __name__ == "__main__":
         description="Compute positive and maximum activations for latent features"
     )
     parser.add_argument(
-        "--activation-store-dir", type=str, default="/workspace/data/activations/"
+        "--activation-store-dir", type=str, default=DATA_ROOT / "activations/"
     )
     parser.add_argument(
-        "--indices-root", type=str, default="/workspace/data/latent_indices/"
+        "--indices-root", type=str, default=DATA_ROOT / "latent_indices/"
     )
     parser.add_argument("--base-model", type=str, default="google/gemma-2-2b")
     parser.add_argument("--chat-model", type=str, default="google/gemma-2-2b-it")
@@ -375,7 +377,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--latent-activations-dir",
         type=str,
-        default="/workspace/data/latent_activations/",
+        default=DATA_ROOT / "latent_activations/",
     )
     parser.add_argument("--upload-to-hub", action="store_true")
     parser.add_argument("--split", type=str, default="validation")
