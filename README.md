@@ -34,9 +34,10 @@ Check out `notebooks/art.py` for generating the more complex plots.
 
 ## Code structure
 
-The repository is organized into two main directories:
+The code that implements the actual crosscoders is found in our [`dictionary_learning`](https://github.com/jkminder/dictionary_learning) fork.
+This repository is organized into two main directories:
 
-The folder `scripts/` contains the main execution scripts
+The folder [`scripts`](scripts/) contains the main execution scripts
 - [`train_crosscoder.py`](scripts/train_crosscoder.py) - **Primary crosscoder training script**. Trains crosscoders on paired activations from base and chat models with support for various architectures (ReLU, batch-top-k) and normalization schemes.
 - [`compute_scalers.py`](scripts/compute_scalers.py) - **Computes Latent Scalers using closed-form solution**. Calculates beta values for a given crosscoder.
 
