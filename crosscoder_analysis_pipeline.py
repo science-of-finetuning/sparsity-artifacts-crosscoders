@@ -46,6 +46,7 @@ from scripts.eval_betas import (
 from tools.cache_utils import LatentActivationCache
 from loguru import logger
 
+from tools.configs import HF_NAME
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -237,9 +238,9 @@ def make_betas_plots(
 def push_crosscoder_to_hub(crosscoder_path: Path):
     assert crosscoder_path.endswith(".pt"), f"Crosscoder path must end with .pt, got {crosscoder_path}"
     repo_id = push_dictionary_model(crosscoder_path)
-    if repo_id.startswith("science-of-finetuning/"):
-        # Remove the science-of-finetuning/ prefix (as this improves folder structure and the loading function automatically adds it back)
-        repo_id = repo_id[len("science-of-finetuning/"):]
+    if repo_id.startswith(HF_NAME):
+        # Remove the HF_NAME/ prefix (as this improves folder structure and the loading function automatically adds it back)
+        repo_id = repo_id[len(HF_NAME) + 1:]
     return repo_id
 
 
@@ -262,7 +263,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--kl-dataset",
         type=str,
-        default="science-of-finetuning/ultrachat_200k_gemma-2-2b-it-generated",
+        default=f"{HF_NAME}/ultrachat_200k_gemma-2-2b-it-generated",
         help="Dataset to use for KL experiment",
     )
     parser.add_argument(
@@ -489,8 +490,8 @@ if __name__ == "__main__":
             tokenizer_name=args.chat_model,
             dictionary_name=args.crosscoder,
             # model_name=args.chat_model,
-            # dataset_name="science-of-finetuning/ultrachat_200k_gemma-2-2b-it-generated",
-            dataset_name="science-of-finetuning/lmsys-chat-1m-chat-formatted",
+            # dataset_name=f"{HF_NAME}/ultrachat_200k_gemma-2-2b-it-generated",
+            dataset_name=f"{HF_NAME}/lmsys-chat-1m-chat-formatted",
             split="validation",
             latent_df=df,
             chat_only_indices=effective_chat_latents_indices,

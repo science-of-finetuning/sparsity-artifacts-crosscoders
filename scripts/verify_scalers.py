@@ -16,7 +16,7 @@ from torchmetrics import MeanSquaredError
 import os
 from tools.utils import load_activation_dataset, load_crosscoder
 from tools.compute_utils import BucketedStats, RunningMeanStd
-from tools.paths import DATA_ROOT
+from tools.configs import DATA_ROOT
 
 th.set_grad_enabled(False)
 th.set_float32_matmul_precision("highest")

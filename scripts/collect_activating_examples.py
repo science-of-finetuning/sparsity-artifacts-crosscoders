@@ -19,7 +19,7 @@ import time
 sys.path.append(".")
 
 from tools.cache_utils import LatentActivationCache
-from CONFIG import HF_NAME
+from tools.configs import HF_NAME
 
 th.set_grad_enabled(False)
 

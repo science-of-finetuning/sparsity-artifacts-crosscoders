@@ -24,7 +24,7 @@ from .paths import REPO_ROOT
 
 sys.path.append(REPO_ROOT)
 
-from CONFIG import HF_NAME
+from tools.configs import HF_NAME
 
 dfs = defaultdict(lambda: None)
 df_hf_repo_legacy = {

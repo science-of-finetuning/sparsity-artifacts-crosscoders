@@ -2,7 +2,7 @@ from dictionary_learning.cache import PairedActivationCache, ActivationCache
 import torch as th
 from pathlib import Path
 from tqdm.auto import tqdm
-from tools.paths import DATA_ROOT
+from tools.configs import DATA_ROOT
 
 class DifferenceCache:
     def __init__(self, cache_1: ActivationCache, cache_2: ActivationCache):

@@ -4,9 +4,9 @@ from transformers import AutoTokenizer
 from tqdm.auto import tqdm
 from collections import defaultdict
 from argparse import ArgumentParser
-
-source_dataset = "science-of-finetuning/lmsys-chat-1m-chat-formatted"
-target_dataset = "science-of-finetuning/lmsys-chat-1m-chat-formatted"
+from tools.configs import HF_NAME
+source_dataset = f"{HF_NAME}/lmsys-chat-1m-chat-formatted"
+target_dataset = f"{HF_NAME}/lmsys-chat-1m-chat-formatted"
 
 
 # %%

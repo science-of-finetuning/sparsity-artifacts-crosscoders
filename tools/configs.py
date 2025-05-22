@@ -1,3 +1,14 @@
+from pathlib import Path
+import os
+
+
+
+HF_NAME = os.environ.get("HF_NAME", "science-of-finetuning")
+VERSION = "040225"
+DATA_ROOT = Path(os.environ["DATASTORE"])
+REPO_ROOT = Path(__file__).resolve().parent.parent
+PLOTS = DATA_ROOT / "plots"
+
 MODEL_CONFIGS = {
     "Qwen/Qwen2.5-1.5B": {
         "ignore_first_n_tokens_per_sample": 21,

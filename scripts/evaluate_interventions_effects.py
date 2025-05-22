@@ -34,6 +34,7 @@ from tools.cc_utils import load_dictionary_model, load_latent_df
 from coolname import generate_slug
 from loguru import logger
 
+from tools.configs import HF_NAME
 
 def compute_metrics_for_subset(
     logits, labels, base_logits, instruct_logits, subset_mask, chat_model
@@ -578,7 +579,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--dataset",
         type=str,
-        default="science-of-finetuning/ultrachat_200k_gemma-2-2b-it-generated",
+        default=f"{HF_NAME}/ultrachat_200k_gemma-2-2b-it-generated",
     )
     parser.add_argument("--dataset-col", type=str, default="messages")
     parser.add_argument("--split", type=str, default="train")

@@ -11,6 +11,7 @@ from tools.plotting_utils import *
 from tools.tokenization_utils import *
 
 
+
 def apply_masks(values: th.Tensor, masks: List[th.Tensor]) -> th.Tensor:
     """
     Apply the masks to the indices.
@@ -145,7 +146,7 @@ def mask_k_first_ones_vec(bool_tensor, k):
 
 def load_lmsys_formatted(split: str):
     dataset = load_dataset(
-        "science-of-finetuning/lmsys-chat-1m-chat-formatted",
+        f"{HF_NAME}/lmsys-chat-1m-chat-formatted",
         split=split,
     )
     return dataset

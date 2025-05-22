@@ -27,7 +27,7 @@ from tools.latent_scaler.closed_form import (
     run_tests,
     identity_fn,
 )
-from tools.paths import DATA_ROOT
+from tools.configs import DATA_ROOT
 
 
 def load_base_activation(batch, **kwargs):

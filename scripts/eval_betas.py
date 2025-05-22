@@ -8,7 +8,7 @@ from argparse import ArgumentParser
 import scipy.stats
 from tools.utils import load_latent_df, push_latent_df
 from tools.latent_scaler.utils import load_betas
-from tools.paths import DATA_ROOT
+from tools.configs import DATA_ROOT
 
 __all__ = [
     "load_betas_results",

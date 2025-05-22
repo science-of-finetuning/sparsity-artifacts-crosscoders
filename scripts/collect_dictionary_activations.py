@@ -7,10 +7,11 @@ from tqdm.auto import trange
 from argparse import ArgumentParser
 from tools.utils import load_activation_dataset, load_dictionary_model
 from transformers import AutoTokenizer
-from CONFIG import HF_NAME
+from tools.configs import HF_NAME
 from huggingface_hub import repo_exists
 
-from tools.paths import DATA_ROOT
+from tools.configs import DATA_ROOT
+from tools.configs import HF_NAME
 
 @th.no_grad()
 def get_positive_activations(sequences, ranges, dataset, cc, latent_ids):
@@ -112,7 +113,7 @@ def add_get_activations_sae(sae, model_idx):
 
 
 def load_latent_activations(
-    repo_id="science-of-finetuning/autointerp-data-gemma-2-2b-l13-mu4.1e-02-lr1e-04",
+    repo_id=f"{HF_NAME}/autointerp-data-gemma-2-2b-l13-mu4.1e-02-lr1e-04",
 ):
     """
     Load the autointerp data from Hugging Face Hub.

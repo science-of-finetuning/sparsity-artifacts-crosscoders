@@ -14,7 +14,7 @@ from tools.cc_utils import (
     shared_latent_indices,
     load_latent_df,
 )
-from tools.paths import DATA_ROOT
+from tools.configs import DATA_ROOT
 
 def main():
     parser = argparse.ArgumentParser(
