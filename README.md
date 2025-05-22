@@ -15,7 +15,7 @@ pip install -r requirements.txt
 We cache model activations to disk. Our code assumes that you have around 4TB of storage per model available and that the environment variable `DATASTORE` points to it. The training scripts will log progress to [wandb](https://wandb.ai/). All models will be checkpointed to the `checkpoints` folder. The resulting plots will be generated in `$DATASTORE/results`.
 The code requires that the environment variable `HF_HOME` points to a Hugging Face account or organization that you have write access to, as it will automatically upload multiple models and datasets to Hugging Face Hub during training and evaluation.
 
-Due to anonymization, you first need to regenerate the data with [`scripts/data/format_lmsys.py`](scripts/data/format_lmsys.py) and [`scripts/data/generate_validation_datasets.py`](scripts/data/generate_validation_datasets.py), which upload it to your Hugging Face.
+Due to anonymization, you first need to regenerate the data with [`scripts/data/format_lmsys.py`](scripts/data/format_lmsys.py) and [`scripts/data/generate_validation_datasets.py`](scripts/data/generate_validation_datasets.py), which uploads it to your Hugging Face.
 
 For Gemma 2 2b:
 ```bash
