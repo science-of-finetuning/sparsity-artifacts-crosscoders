@@ -1,12 +1,10 @@
-from pycolors import TailwindColorPalette
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import numpy as np
 
-COLORS = TailwindColorPalette()
-RATIO_COLOR = COLORS.get_shade(5, 500)
-BASE_COLOR = COLORS.get_shade(2, 600)
-CHAT_COLOR = COLORS.get_shade(7, 600)
+RATIO_COLOR = '#ee9b00'
+BASE_COLOR = '#0ed3d7'
+CHAT_COLOR = '#f95104'
 
 
 def plot_scaler_histograms(

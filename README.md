@@ -6,14 +6,15 @@ This repository contains the code for the **Overcoming Sparsity Artifacts in Cro
 
 ## Requirements
 
-Our code heavily relies on an adapted version of the [`dictionary_learning`](https://github.com/jkminder/dictionary_learning) library. Install requirements with 
+Our code heavily relies on an adapted version of the `dictionary_learning` library. This code is separately provided. Install requirements with 
 ```bash
 pip install -r requirements.txt
 ```
 
 ## Reproduce experiments
 
-We cache model activations to disk. Our code assumes that you have around 4TB of storage per model available and that the environment variable `$DATASTORE` points to it. The training scripts will log progress to [wandb](https://wandb.ai/). All models will be checkpointed to the `checkpoints` folder. The resulting plots will be generated in `$DATASTORE/results`.
+We cache model activations to disk. Our code assumes that you have around 4TB of storage per model available and that the environment variable `DATASTORE` points to it. The training scripts will log progress to [wandb](https://wandb.ai/). All models will be checkpointed to the `checkpoints` folder. The resulting plots will be generated in `$DATASTORE/results`.
+The code requires that the environment variable `HF_HOME` points to a Hugging Face account or organization that you have write access to, as it will automatically upload multiple models and datasets to Hugging Face Hub during training and evaluation.
 
 For Gemma 2 2b:
 ```bash
@@ -34,7 +35,7 @@ Check out `notebooks/art.py` for generating the more complex plots.
 
 ## Code structure
 
-The code that implements the actual crosscoders is found in our [`dictionary_learning`](https://github.com/jkminder/dictionary_learning) fork.
+The code that implements the actual crosscoders is found in our `dictionary_learning` fork.
 This repository is organized into two main directories:
 
 The folder [`scripts`](scripts/) contains the main execution scripts

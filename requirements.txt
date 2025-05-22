@@ -3,9 +3,7 @@ jupyter
 seaborn
 coolname
 papermill
-pycolors @ git+https://github.com/jkminder/pycolors.git
 torchmetrics
-dictionary_learning @ git+https://github.com/jkminder/dictionary_learning.git
 ipykernel
 tiny_dashboard
 datasets

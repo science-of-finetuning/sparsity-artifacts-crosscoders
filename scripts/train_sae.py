@@ -80,7 +80,7 @@ if __name__ == "__main__":
     parser.add_argument("--base-model", type=str, default="google/gemma-2-2b")
     parser.add_argument("--chat-model", type=str, default="google/gemma-2-2b-it")
     parser.add_argument("--layer", type=int, default=13)
-    parser.add_argument("--wandb-entity", type=str, default="jkminder")
+    parser.add_argument("--wandb-entity", type=str)
     parser.add_argument("--disable-wandb", action="store_true")
     parser.add_argument("--expansion-factor", type=int, default=32)
     parser.add_argument("--batch-size", type=int, default=2048)

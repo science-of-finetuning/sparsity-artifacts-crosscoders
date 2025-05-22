@@ -33,7 +33,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--model", type=str, required=True)
     parser.add_argument("--wandb", action="store_true")
-    parser.add_argument("--wandb-entity", default="jkminder")
+    parser.add_argument("--wandb-entity")
     parser.add_argument("--wandb-project", default="activation_collection")
     parser.add_argument("--activation-store-dir", type=str, required=True)
     parser.add_argument("--batch-size", type=int, default=64)
@@ -49,7 +49,7 @@ if __name__ == "__main__":
         "--dataset",
         type=str,
         required=True,
-        help="Dataset to collect activations from. Examples are 'science-of-finetuning/lmsys-chat-1m-gemma-2-it-formatted' and 'science-of-finetuning/fineweb-100m-sample-test-set'",
+        help="Dataset to collect activations from. Examples are '$HF_NAME/lmsys-chat-1m-gemma-2-it-formatted' and '$HF_NAME/fineweb-100m-sample-test-set'",
     )
     parser.add_argument(
         "--dataset-split",

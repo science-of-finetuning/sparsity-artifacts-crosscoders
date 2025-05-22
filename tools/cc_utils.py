@@ -28,12 +28,6 @@ from tools.configs import HF_NAME
 
 dfs = defaultdict(lambda: None)
 df_hf_repo_legacy = {
-    "l13_crosscoder": "science-of-finetuning/max-activating-examples-gemma-2-2b-l13-mu4.1e-02-lr1e-04",
-    "Butanium/gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04": "science-of-finetuning/max-activating-examples-gemma-2-2b-l13-mu4.1e-02-lr1e-04",
-    "connor": "science-of-finetuning/max-activating-examples-gemma-2-2b-l13-ckissane",
-    "ckkissane/crosscoder-gemma-2-2b-model-diff": "science-of-finetuning/max-activating-examples-gemma-2-2b-l13-ckissane",
-    "gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04": "science-of-finetuning/max-activating-examples-gemma-2-2b-l13-mu4.1e-02-lr1e-04",
-    "science-of-finetuning/diffing-stats-gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04": "science-of-finetuning/max-activating-examples-gemma-2-2b-l13-mu4.1e-02-lr1e-04",
 }
 
 
@@ -412,10 +406,9 @@ def load_crosscoder(crosscoder=None):
         crosscoder = "l13_crosscoder"
     if (
         crosscoder == "l13_crosscoder"
-        or crosscoder == "Butanium/gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04"
     ):
         return CrossCoder.from_pretrained(
-            "Butanium/gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04", from_hub=True
+            HF_NAME + "/gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04", from_hub=True
         )
     elif (
         crosscoder == "connor"
@@ -775,7 +768,7 @@ def get_available_models(author=HF_NAME):
         # Initialize the Hugging Face API
         api = HfApi()
 
-        # Get models from the science-of-finetuning organization
+        # Get models from the HF_NAME organization
         models = api.list_models(author=author)
 
         # Filter for CrossCoder models (you may need to adjust this filter)

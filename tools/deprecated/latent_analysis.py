@@ -7,7 +7,6 @@ import plotly.graph_objects as go
 import plotly.express as px
 import numpy as np
 from plotly.subplots import make_subplots
-from pycolors import TailwindColorPalette
 
 from .latent_utils import (
     filter_dead_latents,
@@ -16,7 +15,6 @@ from .latent_utils import (
     dead_latent_indices,
 )
 
-COLORS = TailwindColorPalette()
 
 th.set_float32_matmul_precision("high")
 
@@ -386,8 +384,8 @@ def plot_latent_diff(
     indices_path=None,
     save=True,
 ):
-    fineweb_color = COLORS.get_shade(3, 300)
-    lmsys_color = COLORS.get_shade(6, 600)
+    fineweb_color = "#3f977a"
+    lmsys_color = "#fd850d"
     # Create subplots
     fig = go.Figure()
     fig = make_subplots(rows=1, cols=1, shared_yaxes=False)
@@ -478,8 +476,8 @@ def plot_latent_freq(
     elif group_name == "base":
         title_suffix = " (Base Only Latents)"
 
-    fineweb_color = COLORS.get_shade(3, 300)
-    lmsys_color = COLORS.get_shade(6, 600)
+    fineweb_color = "#3f977a"
+    lmsys_color = "#fd850d"
     # Create subplots
     fig = go.Figure()
     fig = make_subplots(rows=1, cols=2, shared_yaxes=False, horizontal_spacing=0.05)

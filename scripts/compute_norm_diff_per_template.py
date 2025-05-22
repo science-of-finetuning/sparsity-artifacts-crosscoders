@@ -2,7 +2,7 @@ from pathlib import Path
 import json
 import sys
 import json
-
+import os
 import torch as th
 import torch.nn.functional as F
 from datasets import load_dataset
@@ -363,7 +363,7 @@ if __name__ == "__main__":
     testing = args.testing
     if testing:
         print("== Testing mode ==")
-    lmsys_test = load_dataset("Butanium/lmsys-chat-test-set-gemma")
+    lmsys_test = load_dataset(os.environ["HF_NAME"] + "/lmsys-chat-test-set-gemma")
 
     device_chat = args.device_chat
     device_base = args.device_base

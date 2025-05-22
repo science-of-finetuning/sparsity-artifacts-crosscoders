@@ -106,7 +106,7 @@ Relative Norm Difference
 """
 
 # dec_df = load_latent_df()
-dec_df = load_latent_df("gemma-2-2b-L13-k100-lr1e-04-local-shuffling-CCLoss") #pd.read_csv("/workspace/julian/repositories/representation-structure-comparison/results/eval_crosscoder/gemma-2-2b-L13-mu5.2e-02-lr1e-04-2x100M-local-shuffling-SAELoss/data/feature_df.csv")
+dec_df = load_latent_df("gemma-2-2b-L13-k100-lr1e-04-local-shuffling-CCLoss") 
 if "dead" not in dec_df.columns:
     print("no dead column")
     dec_df["dead"] = False
@@ -654,7 +654,7 @@ import plotly.io as pio
 pio.kaleido.scope.mathjax = None
 
 data_l1 = load_metrics(
-    "/workspace/clement/repos/representation-structure-comparison/results/interv_effects/all_l1_crosscoder_dogfish-bat-bison-octopus.json"
+    "../results/interv_effects/all_l1_crosscoder_dogfish-bat-bison-octopus.json"
 )
 data_batchtopk = load_metrics(
     "../results/interv_effects/1741127183_ultrachat-gemma-batchtopk-CC_cornflower-caterpillar_result.json"

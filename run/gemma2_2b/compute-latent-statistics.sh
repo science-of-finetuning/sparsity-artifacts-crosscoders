@@ -4,12 +4,12 @@ set -x
 
 SUBSET_SIZE=30000
 
-BASE_DATASET=jkminder/fineweb-1m-sample
-CHAT_DATASET=jkminder/lmsys-chat-1m-gemma-formatted
+BASE_DATASET=$HF_NAME/fineweb-1m-sample
+CHAT_DATASET=$HF_NAME/lmsys-chat-1m-gemma-formatted
 SPLIT=validation
 BATCH_SIZE=32
 
-FLAGS="--crosscoder-path Butanium/gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04 \
+FLAGS="--crosscoder-path $HF_NAME/gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04 \
     --base-dataset $BASE_DATASET \
     --chat-dataset $CHAT_DATASET \
     --dataset-split $SPLIT \

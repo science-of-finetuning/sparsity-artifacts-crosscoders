@@ -7,7 +7,7 @@ BATCH_SIZE=128
 WORKERS=32
 
 # Default values
-CROSSCODER_PATH="Butanium/gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04"
+CROSSCODER_PATH="$HF_NAME/gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04"
 LATENT_INDICES=""
 
 # Parse arguments

@@ -18,6 +18,8 @@ from tools.cc_utils import load_dictionary_model
 from dictionary_learning.dictionary import BatchTopKSAE, BatchTopKCrossCoder
 import os
 
+from tools.configs import HF_NAME
+
 th.set_grad_enabled(False)
 th.set_float32_matmul_precision("highest")
 
@@ -435,7 +437,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--dictionary-model",
         type=str,
-        default="Butanium/gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04",
+        default=HF_NAME + "/gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04",
     )
     parser.add_argument(
         "--activation-store-dir", type=Path, default=DATA_ROOT / "activations/"
