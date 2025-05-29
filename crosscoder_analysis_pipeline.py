@@ -436,7 +436,7 @@ if __name__ == "__main__":
             quantiles=[0.25, 0.5, 0.75, 0.95, 1.0],
             save_path=Path("results/quantile_examples"),
             test=args.test,
-            only_upload=True,
+            only_upload=False,
         )
         compute_latent_stats(
             crosscoder=args.crosscoder,
