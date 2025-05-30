@@ -2,6 +2,8 @@
 
 This repository contains the code for the **Overcoming Sparsity Artifacts in Crosscoders to  Interpret Chat-Tuning** paper.
 
+The trained models, along with statistics and maximally activating examples for each latent, are hosted at [our huggingface page](https://huggingface.co/science-of-finetuning). We also provide an interactive [Colab notebook](https://dub.sh/ccdm) and training logs in our [wandb](https://wandb.ai/jkminder/chat-crosscoders).
+
  
 
 ## Requirements
