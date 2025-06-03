@@ -313,9 +313,22 @@ def causal_lm_second_half_forward(
     )
 
 
-def full_forward_collect_hidden_states(self, *args, **kwargs):
-    activations, first_half_args = self.first_half_forward(*args, **kwargs)
-    outputs = self.second_half_forward(activations, first_half_args, **kwargs)
+def full_forward_collect_hidden_states_gemma(
+    self, input_ids, attention_mask, layer_idx, **kwargs
+):
+    activations, first_half_args = self.first_half_forward(
+        input_ids=input_ids,
+        attention_mask=attention_mask,
+        layer_idx=layer_idx,
+        **kwargs,
+    )
+    outputs = self.second_half_forward(
+        activations,
+        first_half_args,
+        layer_idx=layer_idx,
+        return_dict=True,
+        **kwargs,
+    )
     return outputs, activations, first_half_args
 
 
@@ -346,13 +359,14 @@ def split_gemma(model: GemmaForCausalLM):
     model.second_half_forward = MethodType(causal_lm_second_half_forward, model)
     model.compute_loss = MethodType(compute_loss, model)
     model.full_forward_collect_hidden_states = MethodType(
-        full_forward_collect_hidden_states, model
+        full_forward_collect_hidden_states_gemma, model
     )
     return model
 
 
 def split_model(model: AutoModelForCausalLM, tokenizer: AutoTokenizer | None = None):
     if isinstance(model, (Gemma2ForCausalLM, GemmaForCausalLM)):
+        logger.info("Using special faster split implementation for Gemma models")
         return split_gemma(model)
     else:
         if tokenizer is None:
@@ -378,7 +392,7 @@ def split_model(model: AutoModelForCausalLM, tokenizer: AutoTokenizer | None = N
             (inputs, prev_kwargs) = other_args
             kwargs = {**prev_kwargs, **kwargs}
             with self.trace(inputs, **kwargs):
-                get_layer(self, layer_idx).output = (activations, )
+                get_layer(self, layer_idx).output = (activations,)
                 outputs = self.output.save()
             return outputs
 
