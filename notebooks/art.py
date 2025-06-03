@@ -20,7 +20,7 @@ df = load_latent_df("l13_crosscoder")
 df = load_latent_df("gemma-2-2b-L13-k100-lr1e-04-local-shuffling-CCLoss")
 plt.rcParams["text.usetex"] = True
 plt.rcParams.update({"font.size": 18})
-mpl.rcParams['text.latex.preamble'] = r"\usepackage{amsmath}"
+mpl.rcParams["text.latex.preamble"] = r"\usepackage{amsmath}"
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -101,19 +101,23 @@ plot_twin_activation_divergence(merged_buckets, "merged", False)
 # %%
 """
 ========================
-Relative Norm Difference
+Relative Norm Difference (deprecated)
 ========================
 """
 
 # dec_df = load_latent_df()
-dec_df = load_latent_df("gemma-2-2b-L13-k100-lr1e-04-local-shuffling-CCLoss") #pd.read_csv("/workspace/julian/repositories/representation-structure-comparison/results/eval_crosscoder/gemma-2-2b-L13-mu5.2e-02-lr1e-04-2x100M-local-shuffling-SAELoss/data/feature_df.csv")
+dec_df = load_latent_df(
+    "gemma-2-2b-L13-k100-lr1e-04-local-shuffling-CCLoss"
+)  # pd.read_csv("/workspace/julian/repositories/representation-structure-comparison/results/eval_crosscoder/gemma-2-2b-L13-mu5.2e-02-lr1e-04-2x100M-local-shuffling-SAELoss/data/feature_df.csv")
 if "dead" not in dec_df.columns:
     print("no dead column")
     dec_df["dead"] = False
 green = "limegreen"
 dec_ratios = dec_df["dec_norm_diff"][dec_df["dead"] == False]
 ratio_error_values = dec_df["beta_ratio_error"][dec_df["dead"] == False]
-ratio_reconstruction_values = dec_df["beta_ratio_reconstruction"][dec_df["dead"] == False]
+ratio_reconstruction_values = dec_df["beta_ratio_reconstruction"][
+    dec_df["dead"] == False
+]
 values = 1 - dec_ratios
 plt.figure(figsize=(6, 4.0))
 hist, bins, _ = plt.hist(values, bins=100, color="lightgray", label="Other", log=True)
@@ -134,15 +138,32 @@ plt.hist(
 plt.hist(values[((values >= 0.9))], bins=bins, color="C0", label="Chat-only", log=True)
 # Define a range of thresholds with increasingly bright blue colors
 thresholds = [0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1, 0.05]
-blues = ['#000066', '#0000AA', '#0000DD', '#3333FF', '#6666FF', '#9999FF', '#CCCCFF', '#E6E6FF', '#F2F2FF', '#FCFCFF']  # Dark to bright blue
+blues = [
+    "#000066",
+    "#0000AA",
+    "#0000DD",
+    "#3333FF",
+    "#6666FF",
+    "#9999FF",
+    "#CCCCFF",
+    "#E6E6FF",
+    "#F2F2FF",
+    "#FCFCFF",
+]  # Dark to bright blue
 
 for i, thres in enumerate(thresholds):
     plt.hist(
-        values[((values >= 0.9) & (ratio_error_values < thres) & (ratio_reconstruction_values < thres))], 
-        bins=bins, 
-        color=blues[i], 
-        label=f"Chat-only (thres={thres})", 
-        log=True
+        values[
+            (
+                (values >= 0.9)
+                & (ratio_error_values < thres)
+                & (ratio_reconstruction_values < thres)
+            )
+        ],
+        bins=bins,
+        color=blues[i],
+        label=f"Chat-only (thres={thres})",
+        log=True,
     )
 
 plt.hist(values[(values <= 0.1)], bins=bins, color=green, label="Base-only", log=True)
@@ -194,11 +215,25 @@ plt.tight_layout()
 plt.savefig(Path("results") / "decoder_norm_diff.pdf", bbox_inches="tight")
 
 plt.show()
-#%%
-#%%
-def plot_decoder_norm_diff(crosscoder, thres_error=0.3, thres_reconstruction=0.3, no_legend=False, log=False, ylim=None):
-    chat_only_color = (0,0.6,1)
-    chat_specific_color = (0,0,0.65)
+
+
+# %%
+"""
+========================
+Relative Norm Difference
+========================
+"""
+def plot_decoder_norm_diff(
+    crosscoder,
+    thres_error=0.3,
+    thres_reconstruction=0.3,
+    no_legend=False,
+    log=False,
+    ylim=None,
+    figsize=(7, 4.0),
+):
+    chat_only_color = (0, 0.6, 1)
+    chat_specific_color = (0, 0, 0.65)
     dec_df = load_latent_df(crosscoder)
 
     if "dead" not in dec_df.columns:
@@ -207,9 +242,11 @@ def plot_decoder_norm_diff(crosscoder, thres_error=0.3, thres_reconstruction=0.3
     green = "limegreen"
     dec_ratios = dec_df["dec_norm_diff"][dec_df["dead"] == False]
     ratio_error_values = dec_df["beta_ratio_error"][dec_df["dead"] == False]
-    ratio_reconstruction_values = dec_df["beta_ratio_reconstruction"][dec_df["dead"] == False]
+    ratio_reconstruction_values = dec_df["beta_ratio_reconstruction"][
+        dec_df["dead"] == False
+    ]
     values = 1 - dec_ratios
-    plt.figure(figsize=(7, 4.))
+    plt.figure(figsize=figsize)
     hist, bins, _ = plt.hist(values, bins=100, color="lightgray", label=None, log=log)
 
     # Color specific regions
@@ -218,22 +255,46 @@ def plot_decoder_norm_diff(crosscoder, thres_error=0.3, thres_reconstruction=0.3
     mask_right = (bins[:-1] >= 0.0) & (bins[:-1] < 0.1)
     plt.hist(values, bins=bins, color="lightgray", log=log)  # Base gray histogram
     plt.hist(
-        values[((values >= 0.4) & (values < 0.6))], bins=bins, color="C1", label="shared", log=log
+        values[((values >= 0.4) & (values < 0.6))],
+        bins=bins,
+        color="C1",
+        label="shared",
+        log=log,
     )
-    plt.hist(values[((values >= 0.9))], bins=bins, color=chat_only_color, label="chat-only", log=log)
+    plt.hist(
+        values[((values >= 0.9))],
+        bins=bins,
+        color=chat_only_color,
+        label="chat-only",
+        log=log,
+    )
 
     plt.hist(
-        values[((values >= 0.9) & (ratio_error_values < thres_error) & (ratio_reconstruction_values < thres_reconstruction))], 
-        bins=bins, 
-        color=chat_specific_color, 
-        label=r'{\raggedleft chat-specific}\\{\fontsize{14pt}{3em}\selectfont{}$\nu^\epsilon < ' + str(thres_error) + r' $ \& $\nu^r < ' + str(thres_reconstruction) + r' $}'
+        values[
+            (
+                (values >= 0.9)
+                & (ratio_error_values < thres_error)
+                & (ratio_reconstruction_values < thres_reconstruction)
+            )
+        ],
+        bins=bins,
+        color=chat_specific_color,
+        label=r"{\raggedleft chat-specific}\\{\fontsize{14pt}{3em}\selectfont{}$\nu^\epsilon < "
+        + str(thres_error)
+        + r" $ \& $\nu^r < "
+        + str(thres_reconstruction)
+        + r" $}",
     )
-    plt.hist(values[(values <= 0.1)], bins=bins, color=green, label="base-only", log=log)
+    plt.hist(
+        values[(values <= 0.1)], bins=bins, color=green, label="base-only", log=log
+    )
 
     if log:
         # Update yticks for log scale
-        plt.yticks([1, 10, 100, 1000, 4000], 
-                   ["$10^0$", "$10^1$", "$10^2$", "$10^3$", r"$4\times10^3$"])
+        plt.yticks(
+            [1, 10, 100, 1000, 4000],
+            ["$10^0$", "$10^1$", "$10^2$", "$10^3$", r"$4\times10^3$"],
+        )
 
     plt.xticks([0, 0.1, 0.4, 0.5, 0.6, 0.9, 1])
     ax = plt.gca()
@@ -258,17 +319,18 @@ def plot_decoder_norm_diff(crosscoder, thres_error=0.3, thres_reconstruction=0.3
     # Plot the zoomed region
     bins = np.linspace(0.9, 1.0, 20)
     axins.hist(values, bins=bins, color="lightgray", log=log)
+    axins.hist(values[((values >= 0.9))], bins=bins, color=chat_only_color, log=log)
     axins.hist(
-        values[((values >= 0.9))], 
-        bins=bins, 
-        color=chat_only_color, 
-        log=log
-    )
-    axins.hist(
-        values[((values >= 0.9) & (ratio_error_values.abs() < thres_error) & (ratio_reconstruction_values.abs() < thres_reconstruction))], 
-        bins=bins, 
-        color=chat_specific_color, 
-        log=log
+        values[
+            (
+                (values >= 0.9)
+                & (ratio_error_values.abs() < thres_error)
+                & (ratio_reconstruction_values.abs() < thres_reconstruction)
+            )
+        ],
+        bins=bins,
+        color=chat_specific_color,
+        log=log,
     )
 
     # Set the limits for the inset
@@ -286,16 +348,21 @@ def plot_decoder_norm_diff(crosscoder, thres_error=0.3, thres_reconstruction=0.3
     print(f"Saved to {save_dir / f'decoder_norm_diff_{crosscoder}.pdf'}")
     plt.show()
 
-
+figsize = (7, 2.7)
 thres_error = 0.2
 thres_reconstruction = 0.5
 crosscoder = "gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04"
-plot_decoder_norm_diff(crosscoder, thres_error, thres_reconstruction, ylim=(0, 100))
+plot_decoder_norm_diff(crosscoder, thres_error, thres_reconstruction, ylim=(0, 100), figsize=figsize)
 crosscoder = "gemma-2-2b-L13-k100-lr1e-04-local-shuffling-CCLoss"
-plot_decoder_norm_diff(crosscoder, thres_error, thres_reconstruction, no_legend=True)
+plot_decoder_norm_diff(crosscoder, thres_error, thres_reconstruction, no_legend=True, figsize=figsize)
+plot_decoder_norm_diff(
+    "gemma-2-2b-L13-k100-lr1e-04-local-shuffling-Decoupled",
+    thres_error,
+    thres_reconstruction,
+    figsize=figsize,
+)
 
 # %%
-
 
 
 # %%
@@ -303,7 +370,13 @@ df_cc = load_latent_df("gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04")
 df_cc = df_cc[df_cc["tag"] == "IT only"]
 df_topk = load_latent_df("gemma-2-2b-L13-k100-lr1e-04-local-shuffling-CCLoss")
 df_topk = df_topk.sort_values(by="dec_norm_diff", ascending=True)
-df_topk = df_topk.iloc[:len(df_cc)]
+df_topk = df_topk.iloc[: len(df_cc)]
+df_topk_decoupled = load_latent_df(
+    "gemma-2-2b-L13-k100-lr1e-04-local-shuffling-Decoupled"
+)
+df_topk_decoupled = df_topk_decoupled.sort_values(by="dec_norm_diff", ascending=True)
+df_topk_decoupled = df_topk_decoupled.iloc[: len(df_cc)]
+sae_df = load_latent_df("SAE-chat-gemma-2-2b-L13-k100-lr1e-04-local-shuffling")
 
 # %%
 # Create line plot showing number of latents vs threshold
@@ -314,23 +387,33 @@ green = "limegreen"
 
 thresholds = np.linspace(0, 1, 100)
 cc_latents = []
+count_decoupled = []
+count_topk = []
 for t in thresholds:
     # Count latents meeting criteria at each threshold
-    count = np.sum((df_cc["beta_ratio_error"].abs() < t) & 
-                   (df_cc["beta_ratio_reconstruction"].abs() < t) &
-                   (df_cc["dead"] == False))
+    count = np.sum(
+        (df_cc["beta_ratio_error"].abs() < t)
+        & (df_cc["beta_ratio_reconstruction"].abs() < t)
+        # & (~df_cc["dead"])
+    )
     cc_latents.append(count)
+    count_decoupled.append(
+        np.sum(
+            (df_topk_decoupled["beta_ratio_error"].abs() < t)
+            & (df_topk_decoupled["beta_ratio_reconstruction"].abs() < t)
+            # & (~df_topk_decoupled["dead"])
+        )
+    )
+    count = np.sum(
+        (df_topk["beta_ratio_error"].abs() < t)
+        & (df_topk["beta_ratio_reconstruction"].abs() < t)
+        # & (~df_topk["dead"])
+    )
+    count_topk.append(count)
 
 plt.plot(thresholds, cc_latents, label="L1")
-
-# Calculate for base model
-cc_latents = []
-for t in thresholds:
-    count = np.sum((df_topk["beta_ratio_error"].abs() < t) &
-                   (df_topk["beta_ratio_reconstruction"].abs() < t))
-    cc_latents.append(count)
-
-plt.plot(thresholds, cc_latents, label="BatchTopK", color=green)
+plt.plot(thresholds, count_topk, label="BatchTopK", color=green)
+plt.plot(thresholds, count_decoupled, label="Decoupled", color="C3")
 plt.xlabel(r"$\leftarrow$ more chat-specific")
 plt.ylabel("\# latents \nbelow \nthreshold", rotation=0, labelpad=40, y=0.2)
 plt.legend()
@@ -339,7 +422,49 @@ plt.tight_layout()
 plt.yscale("log")
 plt.savefig("results/latents_vs_threshold_poster.svg", bbox_inches="tight")
 plt.show()
+
 # %%
+"""
+========================
+Activation ratio
+========================
+"""
+
+df_cc = load_latent_df("gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04")
+df_topk = load_latent_df("gemma-2-2b-L13-k100-lr1e-04-local-shuffling-CCLoss")
+df_topk_decoupled = load_latent_df(
+    "gemma-2-2b-L13-k100-lr1e-04-local-shuffling-Decoupled"
+)
+sae_df = load_latent_df("SAE-chat-gemma-2-2b-L13-k100-lr1e-04-local-shuffling")
+
+green = "limegreen"
+
+thresholds = np.linspace(0, 1, 100)
+dfs = [df_topk_decoupled, sae_df]
+counts = [[] for _ in range(len(dfs))]
+names = ["Decoupled BatchTopK Crosscoder", "SAE"]
+
+for t in thresholds:
+    for i, df in enumerate(dfs):
+        count = np.sum(
+            (df["beta_activation_ratio"].abs() < t)
+        )
+        counts[i].append(count)
+
+plt.figure(figsize=(9, 6))
+for name, count in zip(names, counts):
+    plt.plot(thresholds, count, label=name)
+plt.xlabel(r"$\leftarrow$ more chat-specific (activation ratio threshold)")
+plt.ylabel("\# latents \nbelow \nthreshold of\nactivation ratio", rotation=0, labelpad=40, y=0.2)
+plt.yscale("log")
+plt.legend()
+plt.title("SAE have more chat-specific latents than crosscoders")
+plt.tight_layout()
+plt.savefig("results/latents_vs_threshold_activation_logscale.svg", bbox_inches="tight")
+plt.show()
+# %%
+
+
 # Create line plot showing number of latents vs threshold
 def plot_latents_vs_threshold(
     df,
@@ -408,6 +533,7 @@ df_dict_llama_2 = {
 plot_latents_vs_threshold(df_dict_llama_2, save_path="results/latents_vs_threshold_llama_1b.pdf")
 # %%
 import scipy.stats
+
 # Create scatter plot comparing sum of ranks vs decoder norm difference
 plt.figure(figsize=(6, 2.3))
 
@@ -416,8 +542,7 @@ df_cc["error_rank"] = df_cc["beta_ratio_error"].rank()
 df_cc["recon_rank"] = df_cc["beta_ratio_reconstruction"].rank()
 df_cc["rank_sum"] = df_cc["error_rank"] + df_cc["recon_rank"]
 
-plt.scatter(df_cc["dec_norm_diff"], df_cc["rank_sum"], 
-           alpha=0.5, label="L1")
+plt.scatter(df_cc["dec_norm_diff"], df_cc["rank_sum"], alpha=0.5, label="L1")
 
 
 # Same for base model
@@ -429,8 +554,12 @@ df_topk["rank_sum"] = df_topk["error_rank"] + df_topk["recon_rank"]
 cc_error = df_cc[["dec_norm_diff", "beta_ratio_error"]].dropna()
 cc_recon = df_cc[["dec_norm_diff", "beta_ratio_reconstruction"]].dropna()
 
-corr_error, p_error = scipy.stats.pearsonr(cc_error["dec_norm_diff"], cc_error["beta_ratio_error"])
-corr_recon, p_recon = scipy.stats.pearsonr(cc_recon["dec_norm_diff"], cc_recon["beta_ratio_reconstruction"])
+corr_error, p_error = scipy.stats.pearsonr(
+    cc_error["dec_norm_diff"], cc_error["beta_ratio_error"]
+)
+corr_recon, p_recon = scipy.stats.pearsonr(
+    cc_recon["dec_norm_diff"], cc_recon["beta_ratio_reconstruction"]
+)
 
 print(f"CC error correlation: {corr_error:.2f} (p={p_error:.2e})")
 print(f"CC reconstruction correlation: {corr_recon:.2f} (p={p_recon:.2e})")
@@ -439,14 +568,23 @@ print(f"CC reconstruction correlation: {corr_recon:.2f} (p={p_recon:.2e})")
 topk_error = df_topk[["dec_norm_diff", "beta_ratio_error"]].dropna()
 topk_recon = df_topk[["dec_norm_diff", "beta_ratio_reconstruction"]].dropna()
 
-corr_error, p_error = scipy.stats.pearsonr(topk_error["dec_norm_diff"], topk_error["beta_ratio_error"])
-corr_recon, p_recon = scipy.stats.pearsonr(topk_recon["dec_norm_diff"], topk_recon["beta_ratio_reconstruction"])
+corr_error, p_error = scipy.stats.pearsonr(
+    topk_error["dec_norm_diff"], topk_error["beta_ratio_error"]
+)
+corr_recon, p_recon = scipy.stats.pearsonr(
+    topk_recon["dec_norm_diff"], topk_recon["beta_ratio_reconstruction"]
+)
 
 print(f"TopK error correlation: {corr_error:.2f} (p={p_error:.2e})")
 print(f"TopK reconstruction correlation: {corr_recon:.2f} (p={p_recon:.2e})")
 
-plt.scatter(df_topk["dec_norm_diff"], df_topk["rank_sum"],
-           alpha=0.5, label="BatchTopK", color=green)
+plt.scatter(
+    df_topk["dec_norm_diff"],
+    df_topk["rank_sum"],
+    alpha=0.5,
+    label="BatchTopK",
+    color=green,
+)
 
 plt.xlabel("Relative Decoder Norm")
 plt.ylabel("Sum of Ranks")
@@ -686,6 +824,7 @@ def patch_best_norm_diff(use_additive_steering):
 def patch_worst_norm_diff(use_additive_steering):
     add_str = " add" if use_additive_steering else ""
     return f"patch all{add_str} dec norm diff antipareto 50pct cchat"
+
 
 def plot_kl_both_models(
     data_l1,
