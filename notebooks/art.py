@@ -16,7 +16,7 @@ import numpy as np
 from pathlib import Path
 import matplotlib as mpl
 
-df = load_latent_df()
+df = load_latent_df("l13_crosscoder")
 df = load_latent_df("gemma-2-2b-L13-k100-lr1e-04-local-shuffling-CCLoss")
 plt.rcParams["text.usetex"] = True
 plt.rcParams.update({"font.size": 18})
@@ -26,6 +26,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from tools.utils import load_json
 from tools.cc_utils import load_latent_df
+Path("results").mkdir(exist_ok=True)
 
 # %%
 """
@@ -465,44 +466,71 @@ plt.show()
 
 
 # Create line plot showing number of latents vs threshold
-plt.figure(figsize=(10, 8))
+def plot_latents_vs_threshold(
+    df,
+    label_map=None,
+    color_map=None,
+    linestyle_map=None,
+    save_path="results/latents_vs_threshold.pdf",
+    columns_to_threshold=None,
+):
+    """
+    Plots the number of latents below threshold for each DataFrame in the df dictionary.
+    Args:
+        df: dict mapping names to DataFrames.
+        label_map: optional dict mapping names to plot labels.
+        color_map: optional dict mapping names to colors.
+        linestyle_map: optional dict mapping names to linestyles.
+        save_path: path to save the figure.
+        columns_to_threshold: list or tuple of column names to threshold (default: ["beta_ratio_error", "beta_ratio_reconstruction"])
+    """
+    if columns_to_threshold is None:
+        columns_to_threshold = ["beta_ratio_error", "beta_ratio_reconstruction"]
 
-green = "limegreen"
-
-
-thresholds = np.linspace(0, 1, 100)
-cc_latents = []
-for t in thresholds:
-    # Count latents meeting criteria at each threshold
-    count = np.sum(
-        (df_cc["beta_ratio_error"].abs() < t)
-        & (df_cc["beta_ratio_reconstruction"].abs() < t)
-        & (~df_cc["dead"])
-    )
-    cc_latents.append(count)
-
-plt.plot(thresholds, cc_latents, label="L1", color="black")
-
-# Calculate for base model
-cc_latents = []
-for t in thresholds:
-    count = np.sum(
-        (df_topk["beta_ratio_error"].abs() < t)
-        & (df_topk["beta_ratio_reconstruction"].abs() < t)
-    )
-    cc_latents.append(count)
-
-plt.plot(thresholds, cc_latents, label="BatchTopK", color="black", linestyle="--")
-plt.xlabel(r"Threshold $\pi$")
-plt.ylabel("Count")
-plt.legend(fontsize=16, loc=(0.28, 0.04))
-plt.tight_layout()
-# y log
-plt.yscale("log")
-plt.savefig("results/latents_vs_threshold.pdf", bbox_inches="tight")
-plt.show()
-
-
+    plt.figure(figsize=(4, 3))
+    thresholds = np.linspace(0, 1, 100)
+    default_colors = ["black", "limegreen", "C0", "C1", "C2", "C3", "C4", "C5"]
+    default_linestyles = ["-", "--", "-.", ":", (0, (3, 1, 1, 1))]
+    for i, (name, df_i) in enumerate(df.items()):
+        latents = []
+        for t in thresholds:
+            # Build mask for all columns in columns_to_threshold
+            mask = np.ones(len(df_i), dtype=bool)
+            for col in columns_to_threshold:
+                if col in df_i.columns:
+                    mask &= (df_i[col].abs() < t)
+                else:
+                    raise ValueError(f"Column '{col}' not found in DataFrame '{name}'")
+            latents.append(np.sum(mask))
+        label = label_map[name] if label_map and name in label_map else name
+        color = color_map[name] if color_map and name in color_map else default_colors[i % len(default_colors)]
+        linestyle = linestyle_map[name] if linestyle_map and name in linestyle_map else default_linestyles[i % len(default_linestyles)]
+        plt.plot(thresholds, latents, label=label, color=color, linestyle=linestyle)
+    plt.xlabel(r"Threshold $\pi$")
+    plt.ylabel("Count")
+    plt.legend(fontsize=16, loc=(0.28, 0.04))
+    plt.tight_layout()
+    plt.yscale("log")
+    plt.savefig(save_path, bbox_inches="tight")
+    plt.show()
+# %%
+df_dict_gemma = {
+    "BatchTopK": df_topk,
+    "L1": df_cc,
+}
+plot_latents_vs_threshold(df_dict_gemma, save_path="results/latents_vs_threshold_gemma.pdf")
+df_dict_llama = {
+    "BatchTopK": load_latent_df("Meta-Llama-3.1-8B-L16-k222-lr1e-04-local-shuffling-Crosscoder"),
+    "L1": load_latent_df("Meta-Llama-3.1-8B-L16-mu2.0e-02-lr1e-04-local-shuffling-CCLoss"),
+}
+plot_latents_vs_threshold(df_dict_llama, save_path="results/latents_vs_threshold_llama.pdf")
+plot_latents_vs_threshold(df_dict_llama, columns_to_threshold=["beta_ratio_activation"], save_path="results/latents_vs_threshold_llama_activation.pdf")
+# %%
+df_dict_llama_2 = {
+    "BatchTopK": load_latent_df("Llama-3.2-1B-L8-k100-lr1e-04-local-shuffling-Crosscoder"),
+    "L1": load_latent_df("Llama-3.2-1B-L8-mu3.6e-02-lr1e-04-local-shuffling-CrosscoderLoss"),
+}
+plot_latents_vs_threshold(df_dict_llama_2, save_path="results/latents_vs_threshold_llama_1b.pdf")
 # %%
 import scipy.stats
 
@@ -1481,5 +1509,3 @@ fig = plot_kl_both_models(
 # No text labels and no legend
 # fig = plot_kl_both_models(data_l1, data_batchtopk, text_mode="none", show_legend=False,
 #  output_file="results/first_k_kl_instruct_both_models_no_text_no_legend.pdf")
-
-# %%
