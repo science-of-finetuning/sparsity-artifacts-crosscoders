@@ -2,6 +2,7 @@ from collections.abc import Iterable
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
+import pandas as pd
 import numpy as np
 import networkx as nx
 from networkx.drawing.nx_pylab import apply_alpha
@@ -418,3 +419,95 @@ def draw_interactive_graph(G, crosscoder, title=""):
 
     fig.show()
     return fig
+
+
+def frequency_plot(df: pd.DataFrame):
+    # Get unique tags for grouping
+    tags = df["tag"].unique()
+
+    # Create figure
+    fig = plt.figure(figsize=(6, 3.5))
+    ax = fig.add_subplot(111)
+
+    # Colors matching the other plot
+    colors = {
+        "Chat only": "C0",
+        "Base only": "C1",
+        "Shared": "C2",
+        "Other": "darkgray",
+    }
+
+    # Apply log transformation to frequency data
+    all_freqs = np.concatenate(
+        [
+            np.log10(
+                df[(df["tag"] == tag) & (df["lmsys_freq"] > 1e-8)]["lmsys_freq"] + 1e-10
+            )
+            for tag in tags
+        ]
+    )
+
+    # Determine bin edges in log space
+    bins = np.linspace(min(all_freqs), max(all_freqs), 30)
+    bin_width = bins[1] - bins[0]
+
+    # Calculate bar width and offsets
+    n_tags = len(tags)
+    single_bar_width = bin_width / (n_tags)  # Add 1 for spacing
+    offsets = np.linspace(
+        -bin_width / 2 + single_bar_width / 2,
+        bin_width / 2 - single_bar_width / 2,
+        n_tags,
+    )
+
+    # Plot histogram for each tag
+    for tag, offset in zip(tags, offsets):
+        tag_data = df[df["tag"] == tag]
+        # Apply log transformation to the data
+        log_freqs = np.log10(
+            tag_data["lmsys_freq"] + 1e-10
+        )  # Add small constant to avoid log(0)
+        counts, _ = np.histogram(log_freqs, bins=bins)
+        normalized_counts = counts / counts.sum()
+        bin_centers = (bins[:-1] + bins[1:]) / 2
+
+        ax.bar(
+            bin_centers + offset,
+            normalized_counts,
+            width=single_bar_width,
+            alpha=1.0,
+            label=tag.replace("Chat only", "Chat-only").replace(
+                "Base only", "Base-only"
+            ),
+            color=colors[tag],
+        )
+
+    # Styling
+    plt.rcParams["text.usetex"] = True
+    plt.rcParams.update({"font.size": 20})
+
+    ax.grid(True, alpha=0.15)
+
+    # Use more human-readable tick values at nice round numbers
+    log_ticks = np.array([-10, -8, -6, -4, -2])  # Powers of 10 for cleaner values
+    log_ticks = log_ticks[
+        np.logical_and(log_ticks >= min(all_freqs), log_ticks <= max(all_freqs))
+    ]
+    if len(log_ticks) < 3:  # Ensure we have enough ticks
+        log_ticks = np.linspace(min(all_freqs), max(all_freqs), 5)
+        log_ticks = np.round(log_ticks)  # Round to integers for cleaner display
+
+    ax.set_xticks(log_ticks)
+    ax.set_xticklabels(
+        [f"$10^{{{int(x)}}}$" for x in log_ticks]
+    )  # Use LaTeX for cleaner display
+
+    ax.set_xlabel("Latent Frequency (log scale)")
+    ax.set_ylabel("Density")
+
+    # Move legend below plot
+    ax.legend(fontsize=16, loc="upper left")
+
+    plt.savefig("latent_frequency_histogram.pdf", bbox_inches="tight")
+    plt.show()
+

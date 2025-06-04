@@ -49,6 +49,9 @@ def load_activation_dataset(
         split: The split to load
         lmsys_split: The split to load for the lmsys dataset (overrides split)
         fineweb_split: The split to load for the fineweb dataset (overrides split)
+
+    Returns:
+        A tuple of (fineweb_cache, lmsys_cache)
     """
     if lmsys_split is None:
         lmsys_split = split
