@@ -184,6 +184,7 @@ def intervention_ui(sidebar):
                 "CrossCoderAdditiveSteering",
                 "CrossCoderOutProjection",
                 "SAEAdditiveSteering",
+                "SAEDifferenceReconstruction",
                 "PatchCtrl",
                 "PatchKFirstPredictions",
                 "PatchKFirstAndCtrl",
@@ -197,7 +198,7 @@ def intervention_ui(sidebar):
         st.subheader("Parameters")
 
         # Common parameters
-        continue_with = st.selectbox("continue_with", ["base", "chat"])
+        continue_with = st.selectbox("continue_with", ["chat", "base"])
 
         # Specific parameters based on intervention type
         intervention_params = {}
@@ -369,6 +370,36 @@ def intervention_ui(sidebar):
                 "latents_to_steer": latents_to_steer,
                 "continue_with": continue_with,
                 "scale_steering_latent": scale,
+            }
+
+        elif intervention_type == "SAEDifferenceReconstruction":
+            # Get available SAE models using the cached function
+            sae_models = get_available_cached_models()
+
+            # Add a dropdown to select an SAE model
+            selected_sae = st.selectbox(
+                "Select SAE Model",
+                sae_models,
+                help="Select an SAE model from Hugging Face",
+            )
+
+            sae_model = st.selectbox(
+                "sae_model", 
+                ["base", "chat"],
+                help="Which model's difference to use for the SAE (chat means chat-base, base means base-chat)"
+            )
+            
+            steer_activations_of = st.selectbox(
+                "steer_activations_of", 
+                ["base", "chat"],
+                help="Which model's activations to modify"
+            )
+
+            intervention_params = {
+                "sae": selected_sae,
+                "sae_model": sae_model,
+                "steer_activations_of": steer_activations_of,
+                "continue_with": continue_with,
             }
 
         elif intervention_type in [

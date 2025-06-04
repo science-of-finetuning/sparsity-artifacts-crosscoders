@@ -18,6 +18,7 @@ from tools.halfway_interventions import (
     CrossCoderAdditiveSteering,
     CrossCoderOutProjection,
     SAEAdditiveSteering,
+    SAEDifferenceReconstruction,
     BasePatchIntervention,
     PatchCtrl,
     PatchKFirstPredictions,
@@ -88,7 +89,7 @@ def create_intervention(
         print(f"Creating SAE intervention with name {params['sae']}")
         sae_name = params.pop("sae")
         if sae_name not in model_dict:
-            model_dict[sae_name] = load_dictionary_model(sae_name).to(cc_device)
+            model_dict[sae_name] = load_dictionary_model(sae_name, is_sae=True).to(cc_device)
         sae = model_dict[sae_name]
 
     # Create the intervention based on type
@@ -120,7 +121,10 @@ def create_intervention(
         return CrossCoderOutProjection(**params)
 
     elif intervention_type == "SAEAdditiveSteering":
-        return SAEAdditiveSteering(**params)
+        return SAEAdditiveSteering(sae=sae, **params)
+
+    elif intervention_type == "SAEDifferenceReconstruction":
+        return SAEDifferenceReconstruction(sae=sae, **params)
 
     elif intervention_type == "PatchCtrl":
         return PatchCtrl(**params)
