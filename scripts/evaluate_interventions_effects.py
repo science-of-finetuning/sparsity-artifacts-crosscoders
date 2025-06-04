@@ -3,13 +3,16 @@ import sys
 import json
 from argparse import ArgumentParser
 from collections import defaultdict
+from typing import Literal
 from pathlib import Path
 from tqdm.auto import tqdm
-from transformers import AutoModelForCausalLM, Gemma2ForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer
 import wandb
 from datasets import load_dataset
 import torch as th
 import pandas as pd
+from coolname import generate_slug
+from loguru import logger
 from dictionary_learning.dictionary import Dictionary
 
 sys.path.append(str(Path(__file__).parent.parent))
@@ -31,10 +34,9 @@ from tools.setup_to_eval import (
 from tools.configs import MODEL_CONFIGS
 from dictionary_learning.dictionary import CrossCoder
 from tools.cc_utils import load_dictionary_model, load_latent_df
-from coolname import generate_slug
-from loguru import logger
 
 from tools.configs import HF_NAME
+
 
 def compute_metrics_for_subset(
     logits, labels, base_logits, instruct_logits, subset_mask, chat_model
@@ -409,8 +411,8 @@ def evaluate_interventions(
             pbar.set_postfix(total_num_tokens=total_num_tokens)
         else:
             pbar.update(new_tokens)
-        if total_num_tokens >= max_num_tokens:
-            break
+            if total_num_tokens >= max_num_tokens:
+                break
     logger.info(f"Total number of tokens: {total_num_tokens}")
     return compute_result(), total_num_tokens
 
@@ -431,6 +433,7 @@ def kl_experiment(
     chat_only_indices: list[int] | None = None,
     add_base_only_latents: bool = False,
     is_sae: bool = False,
+    is_difference_sae: bool = False,
     # Evaluation parameters
     batch_size: int = 6,
     device: str = "cuda",
@@ -449,12 +452,27 @@ def kl_experiment(
     token_level_replacement: str | None = None,
     max_num_tokens: int | None = None,
     add_coolname: bool = True,
+    num_sae_latents: int | None = None,
+    sae_model: Literal["base", "chat"] | None = None,
 ) -> dict:
     """
     Main function to evaluate interventions effects.
     """
     if dictionary is None:
         name = (name or "") + "-baselines"
+    if is_sae or is_difference_sae:
+        if num_sae_latents is None:
+            raise ValueError(
+                "num_sae_latents must be provided if {} is True".format(
+                    "is_sae" if is_sae else "is_difference_sae"
+                )
+            )
+        if sae_model is None:
+            raise ValueError(
+                "sae_model must be provided if {} is True".format(
+                    "is_sae" if is_sae else "is_difference_sae"
+                )
+            )
 
     dataset = load_dataset(dataset_name, split=split)[dataset_col]
     if test:
@@ -504,6 +522,9 @@ def kl_experiment(
             dictionary,
             seeds,
             latent_df,
+            is_difference_sae=is_difference_sae,
+            num_latents=num_sae_latents,
+            sae_model=sae_model,
         )
     else:
         fn_dict, infos = arxiv_paper_half_fns(
@@ -569,6 +590,7 @@ def kl_experiment(
 
     return result
 
+
 if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("--layer-to-stop", type=int, default=13)
@@ -579,7 +601,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--dataset",
         type=str,
-        default=f"{HF_NAME}/ultrachat_200k_gemma-2-2b-it-generated",
+        default="science-of-finetuning/ultrachat_200k_gemma-2-2b-it-generated",
     )
     parser.add_argument("--dataset-col", type=str, default="messages")
     parser.add_argument("--split", type=str, default="train")

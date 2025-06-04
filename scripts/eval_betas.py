@@ -1,6 +1,7 @@
-import pandas as pd
+import time
 import numpy as np
 import torch as th
+import pandas as pd
 import matplotlib.pyplot as plt
 from pathlib import Path
 import datetime
@@ -9,6 +10,7 @@ import scipy.stats
 from tools.utils import load_latent_df, push_latent_df
 from tools.latent_scaler.utils import load_betas
 from tools.configs import DATA_ROOT
+from loguru import logger
 
 __all__ = [
     "load_betas_results",
@@ -21,6 +23,100 @@ __all__ = [
     "plot_correlation_with_frequency",
     "plot_rank_distributions",
 ]
+
+
+def make_beta_df(
+    crosscoder: str,
+    results_dir: Path,
+    chat_specific_indices: list[int] | None,
+    shared_indices: list[int] | None,
+    num_samples: int,
+):
+    betas_dir = results_dir / "closed_form_scalars"
+    cc_name = crosscoder.replace("/", "_")
+    plots_dir = results_dir / "closed_form_scalars" / cc_name
+    plots_dir.mkdir(parents=True, exist_ok=True)
+
+    configs = {
+        "normal": {
+            model: {
+                target: (f"{model}_{target}", "")
+                for target in [
+                    "error",
+                    "reconstruction",
+                    "activation",
+                    "activation_no_bias",
+                ]
+            }
+            for model in ["base", "chat"]
+        },
+    }
+
+    df = load_latent_df(crosscoder)
+    all_betas, count_active = load_betas_results(
+        betas_dir / cc_name / "all_latents", configs, num_samples=num_samples
+    )
+    df = add_possible_cols(df, df.index.tolist(), all_betas)
+
+    if chat_specific_indices is not None:
+        chat_error_betas, count_active_chat = load_betas_results(
+            betas_dir / cc_name / "effective_chat_only_latents",
+            configs,
+            num_samples=num_samples,
+        )
+        df = add_possible_cols(df, chat_specific_indices, chat_error_betas)
+    if shared_indices is not None:
+        shared_error_betas, count_active_shared = load_betas_results(
+            betas_dir / cc_name / "shared_baseline_latents",
+            configs,
+            num_samples=num_samples,
+        )
+        df = add_possible_cols(df, shared_indices, shared_error_betas)
+    df_path = results_dir / cc_name / "latent_df.csv"
+    df_path.parent.mkdir(exist_ok=True)
+    if df_path.exists():
+        logger.info(
+            f"Updating local latent df at {df_path}, old df will be backed up to {df_path}.{int(time.time())}"
+        )
+        df_path.rename(df_path.with_suffix(f".{int(time.time())}.csv"))
+    df.to_csv(df_path)
+    logger.info(f"Saved latent df with betas to {df_path}")
+    return df
+
+
+def make_betas_plots(
+    df: pd.DataFrame,
+    chat_specific_indices: list[int],
+    shared_indices: list[int],
+    plots_dir: Path,
+):
+    target_df = df.iloc[chat_specific_indices]
+    baseline_df = df.iloc[shared_indices]
+    plot_error_vs_reconstruction(target_df, baseline_df, plots_dir, variant="standard")
+    plot_error_vs_reconstruction(
+        target_df, baseline_df, plots_dir, variant="custom_color"
+    )
+    plot_error_vs_reconstruction(target_df, baseline_df, plots_dir, variant="poster")
+
+    plot_ratio_histogram(target_df, baseline_df, plots_dir, ratio_type="error")
+    plot_ratio_histogram(target_df, baseline_df, plots_dir, ratio_type="reconstruction")
+
+    plot_beta_distribution_histograms(target_df, plots_dir)
+    plot_correlation_with_frequency(df, plots_dir)
+    plot_rank_distributions(target_df, plots_dir)
+    beta_ratio_error = df["beta_ratio_error"]
+    beta_ratio_reconstruction = df["beta_ratio_reconstruction"]
+    mask = ~np.isnan(beta_ratio_error) & ~np.isnan(beta_ratio_reconstruction)
+    beta_ratio_error_clean = beta_ratio_error[mask]
+    beta_ratio_reconstruction_clean = beta_ratio_reconstruction[mask]
+    error_ranks = beta_ratio_error_clean.rank()
+    reconstruction_ranks = beta_ratio_reconstruction_clean.rank()
+    print(
+        f"Beta ratio error ranks range: {error_ranks.min():.0f} to {error_ranks.max():.0f}"
+    )
+    print(
+        f"Beta ratio reconstruction ranks range: {reconstruction_ranks.min():.0f} to {reconstruction_ranks.max():.0f}"
+    )
 
 
 def load_betas_results(

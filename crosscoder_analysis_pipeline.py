@@ -1,8 +1,8 @@
 """
-Analyze a given crosscoder as shown in the paper.
+Analyze a given dictionary as shown in the paper.
 
-1. Compute crosscoder latent activations on validation set
-2. Run eval_crosscoder notebook
+1. Compute dictionary latent activations on validation set
+2. Run eval_crosscoder notebook if dictionary is a crosscoder
 """
 
 from run_notebook import run_notebook
@@ -23,6 +23,7 @@ from tools.cc_utils import (
     push_latent_df,
     load_dictionary_model,
     push_dictionary_model,
+    latent_df_exists,
 )
 from scripts import (
     collect_dictionary_activations,
@@ -34,13 +35,8 @@ from scripts import (
 )
 from tools.configs import MODEL_CONFIGS
 from scripts.eval_betas import (
-    load_betas_results,
-    add_possible_cols,
-    plot_error_vs_reconstruction,
-    plot_ratio_histogram,
-    plot_beta_distribution_histograms,
-    plot_correlation_with_frequency,
-    plot_rank_distributions,
+    make_beta_df,
+    make_betas_plots,
     plot_beta_ratios_template_perc,
 )
 from tools.cache_utils import LatentActivationCache
@@ -51,202 +47,9 @@ from tools.configs import HF_NAME
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 
-def frequency_plot(df: pd.DataFrame):
-    # Get unique tags for grouping
-    tags = df["tag"].unique()
-
-    # Create figure
-    fig = plt.figure(figsize=(6, 3.5))
-    ax = fig.add_subplot(111)
-
-    # Colors matching the other plot
-    colors = {
-        "Chat only": "C0",
-        "Base only": "C1",
-        "Shared": "C2",
-        "Other": "darkgray",
-    }
-
-    # Apply log transformation to frequency data
-    all_freqs = np.concatenate(
-        [
-            np.log10(
-                df[(df["tag"] == tag) & (df["lmsys_freq"] > 1e-8)]["lmsys_freq"] + 1e-10
-            )
-            for tag in tags
-        ]
-    )
-
-    # Determine bin edges in log space
-    bins = np.linspace(min(all_freqs), max(all_freqs), 30)
-    bin_width = bins[1] - bins[0]
-
-    # Calculate bar width and offsets
-    n_tags = len(tags)
-    single_bar_width = bin_width / (n_tags)  # Add 1 for spacing
-    offsets = np.linspace(
-        -bin_width / 2 + single_bar_width / 2,
-        bin_width / 2 - single_bar_width / 2,
-        n_tags,
-    )
-
-    # Plot histogram for each tag
-    for tag, offset in zip(tags, offsets):
-        tag_data = df[df["tag"] == tag]
-        # Apply log transformation to the data
-        log_freqs = np.log10(
-            tag_data["lmsys_freq"] + 1e-10
-        )  # Add small constant to avoid log(0)
-        counts, _ = np.histogram(log_freqs, bins=bins)
-        normalized_counts = counts / counts.sum()
-        bin_centers = (bins[:-1] + bins[1:]) / 2
-
-        ax.bar(
-            bin_centers + offset,
-            normalized_counts,
-            width=single_bar_width,
-            alpha=1.0,
-            label=tag.replace("Chat only", "Chat-only").replace(
-                "Base only", "Base-only"
-            ),
-            color=colors[tag],
-        )
-
-    # Styling
-    plt.rcParams["text.usetex"] = True
-    plt.rcParams.update({"font.size": 20})
-
-    ax.grid(True, alpha=0.15)
-
-    # Use more human-readable tick values at nice round numbers
-    log_ticks = np.array([-10, -8, -6, -4, -2])  # Powers of 10 for cleaner values
-    log_ticks = log_ticks[
-        np.logical_and(log_ticks >= min(all_freqs), log_ticks <= max(all_freqs))
-    ]
-    if len(log_ticks) < 3:  # Ensure we have enough ticks
-        log_ticks = np.linspace(min(all_freqs), max(all_freqs), 5)
-        log_ticks = np.round(log_ticks)  # Round to integers for cleaner display
-
-    ax.set_xticks(log_ticks)
-    ax.set_xticklabels(
-        [f"$10^{{{int(x)}}}$" for x in log_ticks]
-    )  # Use LaTeX for cleaner display
-
-    ax.set_xlabel("Latent Frequency (log scale)")
-    ax.set_ylabel("Density")
-
-    # Move legend below plot
-    ax.legend(fontsize=16, loc="upper left")
-
-    plt.savefig("latent_frequency_histogram.pdf", bbox_inches="tight")
-    plt.show()
-
-
-def make_beta_df(
-    crosscoder: str,
-    data_dir: Path,
-    results_dir: Path,
-    chat_specific_indices: list[int],
-    shared_indices: list[int],
-    num_samples: int,
-):
-    betas_dir = data_dir / "results" / "closed_form_scalars"
-    cc_name = crosscoder.replace("/", "_")
-    plots_dir = results_dir / "closed_form_scalars" / cc_name
-    plots_dir.mkdir(parents=True, exist_ok=True)
-
-    configs = {
-        "normal": {
-            model: {
-                target: (f"{model}_{target}", "")
-                for target in [
-                    "error",
-                    "reconstruction",
-                    "activation",
-                    "activation_no_bias",
-                ]
-            }
-            for model in ["base", "chat"]
-        },
-    }
-
-    df = load_latent_df(crosscoder)
-    all_betas, count_active = load_betas_results(
-        betas_dir / cc_name / "all_latents", configs, num_samples=num_samples
-    )
-    chat_error_betas, count_active_chat = load_betas_results(
-        betas_dir / cc_name / "effective_chat_only_latents",
-        configs,
-        num_samples=num_samples,
-    )
-    shared_error_betas, count_active_shared = load_betas_results(
-        betas_dir / cc_name / "shared_baseline_latents",
-        configs,
-        num_samples=num_samples,
-    )
-
-    df = add_possible_cols(df, df.index.tolist(), all_betas)
-    df = add_possible_cols(df, chat_specific_indices, chat_error_betas)
-    df = add_possible_cols(df, shared_indices, shared_error_betas)
-    df_path = results_dir / cc_name / "latent_df.csv"
-    df_path.parent.mkdir(exist_ok=True)
-    if df_path.exists():
-        logger.info(
-            f"Updating local latent df at {df_path}, old df will be backed up to {df_path}.{int(time.time())}"
-        )
-        df_path.rename(df_path.with_suffix(f".{int(time.time())}.csv"))
-    df.to_csv(df_path)
-    logger.info(f"Saved latent df with betas to {df_path}")
-    return df
-
-
-def make_betas_plots(
-    df: pd.DataFrame,
-    chat_specific_indices: list[int],
-    shared_indices: list[int],
-    plots_dir: Path,
-):
-    target_df = df.iloc[chat_specific_indices]
-    baseline_df = df.iloc[shared_indices]
-    plot_error_vs_reconstruction(target_df, baseline_df, plots_dir, variant="standard")
-    plot_error_vs_reconstruction(
-        target_df, baseline_df, plots_dir, variant="custom_color"
-    )
-    plot_error_vs_reconstruction(target_df, baseline_df, plots_dir, variant="poster")
-
-    plot_ratio_histogram(target_df, baseline_df, plots_dir, ratio_type="error")
-    plot_ratio_histogram(target_df, baseline_df, plots_dir, ratio_type="reconstruction")
-
-    plot_beta_distribution_histograms(target_df, plots_dir)
-    plot_correlation_with_frequency(df, plots_dir)
-    plot_rank_distributions(target_df, plots_dir)
-    beta_ratio_error = df["beta_ratio_error"]
-    beta_ratio_reconstruction = df["beta_ratio_reconstruction"]
-    mask = ~np.isnan(beta_ratio_error) & ~np.isnan(beta_ratio_reconstruction)
-    beta_ratio_error_clean = beta_ratio_error[mask]
-    beta_ratio_reconstruction_clean = beta_ratio_reconstruction[mask]
-    error_ranks = beta_ratio_error_clean.rank()
-    reconstruction_ranks = beta_ratio_reconstruction_clean.rank()
-    print(
-        f"Beta ratio error ranks range: {error_ranks.min():.0f} to {error_ranks.max():.0f}"
-    )
-    print(
-        f"Beta ratio reconstruction ranks range: {reconstruction_ranks.min():.0f} to {reconstruction_ranks.max():.0f}"
-    )
-
-
-def push_crosscoder_to_hub(crosscoder_path: Path):
-    assert crosscoder_path.endswith(".pt"), f"Crosscoder path must end with .pt, got {crosscoder_path}"
-    repo_id = push_dictionary_model(crosscoder_path)
-    if repo_id.startswith(HF_NAME):
-        # Remove the HF_NAME/ prefix (as this improves folder structure and the loading function automatically adds it back)
-        repo_id = repo_id[len(HF_NAME) + 1:]
-    return repo_id
-
-
 if __name__ == "__main__":
     parser = ArgumentParser()
-    parser.add_argument("crosscoder", type=str)
+    parser.add_argument("dictionary", type=str)
     parser.add_argument("--test", action="store_true")
     parser.add_argument(
         "--data-dir",
@@ -263,9 +66,11 @@ if __name__ == "__main__":
     parser.add_argument(
         "--kl-dataset",
         type=str,
-        default=f"{HF_NAME}/ultrachat_200k_gemma-2-2b-it-generated",
+        default="science-of-finetuning/lmsys-chat-1m-chat-formatted",
         help="Dataset to use for KL experiment",
     )
+    parser.add_argument("--kl-dataset-col", type=str, default="conversation")
+    parser.add_argument("--kl-dataset-split", type=str, default="validation")
     parser.add_argument(
         "--num-effective-chat-only-latents",
         type=int,
@@ -286,22 +91,46 @@ if __name__ == "__main__":
     parser.add_argument("--num-samples-betas", type=int, default=50_000_000)
     parser.add_argument("--compute-latent-stats", action="store_true")
     parser.add_argument("--run-kl-experiment", action="store_true")
+    parser.add_argument(
+        "--is-difference-sae",
+        action="store_true",
+        help="Specify if the SAE is trained on activation differences",
+    )
+    parser.add_argument(
+        "--is-sae", action="store_true", help="Specify if the model is a SAE"
+    )
+    parser.add_argument(
+        "--sae-model",
+        type=str,
+        default=None,
+        choices=["base", "chat"],
+        help="Specify if the SAE is trained on base or chat activations",
+    )
     args = parser.parse_args()
     print(args)
+    is_sae = args.is_sae or args.is_difference_sae
+    if is_sae and args.sae_model is None:
+        raise ValueError(
+            "SAE model must be specified for SAEs. Got None."
+        )
 
     if args.upload_to_hub:
-        # Check if crosscoder is a local path that exists
-        crosscoder_path = Path(args.crosscoder)
-        if crosscoder_path.exists():
-            logger.info(f"Found local crosscoder at {crosscoder_path}. Uploading first...")
-            if crosscoder_path.is_file() and crosscoder_path.suffix == ".pt":
+        # Check if dictionary is a local path that exists
+        dictionary_path = Path(args.dictionary)
+        if dictionary_path.exists():
+            logger.info(
+                f"Found local dictionary at {dictionary_path}. Uploading first..."
+            )
+            if dictionary_path.is_file() and dictionary_path.suffix == ".pt":
                 # Upload dictionary model
-                repo_id = push_dictionary_model(crosscoder_path)
-                # Update args.crosscoder to use the model name
-                args.crosscoder = repo_id
-                print(f"Using crosscoder name: {args.crosscoder}")
+                repo_id = push_dictionary_model(dictionary_path)
+                # Update args.dictionary to use the model name
+                args.dictionary = repo_id
+                print(f"Using dictionary name: {args.dictionary}")
             else:
-                raise ValueError(f"Crosscoder path must be a .pt file, got {crosscoder_path}")
+                raise ValueError(
+                    f"Dictionary path must be a .pt file, got {dictionary_path}"
+                )
 
     if args.chat_model_idx != 1:
         c = input(
@@ -312,123 +141,196 @@ if __name__ == "__main__":
 
     latent_activations_dir = args.data_dir / "latent_activations"
     activation_store_dir = args.data_dir / "activations"
+    dictionary = None
     if args.tokenizer is None:
         args.tokenizer = args.chat_model
-    if not args.skip_notebook:
+    if not args.skip_notebook and not is_sae:
         run_notebook(
             notebook="eval_crosscoder",
-            crosscoder=args.crosscoder,
+            crosscoder=args.dictionary,
             extra_args=dict_to_args(upload=args.upload_to_hub, overwrite=True),
         )
+    elif is_sae:
+        dictionary = load_dictionary_model(args.dictionary, is_sae=True).to(
+            auto_device()
+        )
+        df = pd.DataFrame(index=range(dictionary.dict_size))
+        dec_norms = dictionary.decoder.weight.data.norm(dim=0).cpu().numpy()
+        assert dec_norms.shape == (dictionary.dict_size,)
+        df["dec_norm"] = dec_norms
+        enc_norms = dictionary.encoder.weight.data.norm(dim=1).cpu().numpy()
+        assert enc_norms.shape == (dictionary.dict_size,)
+        df["enc_norm"] = enc_norms
+        if not latent_df_exists(args.dictionary):
+            push_latent_df(
+                df,
+                crosscoder=args.dictionary,
+                confirm=False,
+                create_repo_if_missing=True,
+            )
+
     scaler_lmsys_split = (
         "train" if args.lmsys_col is None else f"train-col{args.lmsys_col}"
     )
-    if not args.skip_recon_scalars:
-        compute_scalers(
-            dictionary_model=args.crosscoder,
-            layer=args.layer,
-            activation_store_dir=activation_store_dir,
-            results_dir=args.results_dir,
-            base_model=args.base_model,
-            chat_model=args.chat_model,
-            lmsys_split=scaler_lmsys_split,
-            target_model_idx=1,
-            chat_activation=True,
-            base_activation=True,
-            chat_reconstruction=True,
-            base_reconstruction=True,
-            chat_activation_no_bias=True,
-            base_activation_no_bias=True,
-            chat_error=False,
-            base_error=False,
-            num_samples=args.num_samples_betas,
-        )
-    df = load_latent_df(args.crosscoder)
-    if args.num_effective_chat_only_latents == -1:
-        effective_chat_latents_indices = df.query("tag == 'Chat only'").index.tolist()
+
+    if is_sae:
+        logger.info("Running pipeline for SAE - only computing activation scalers")
+        if not args.skip_recon_scalars:
+            compute_scalers(
+                dictionary_model=args.dictionary,
+                layer=args.layer,
+                activation_store_dir=activation_store_dir,
+                results_dir=args.results_dir,
+                base_model=args.base_model,
+                chat_model=args.chat_model,
+                lmsys_split=scaler_lmsys_split,
+                target_model_idx=1,
+                chat_activation=True,
+                base_activation=True,
+                chat_activation_no_bias=not args.is_difference_sae,
+                base_activation_no_bias=not args.is_difference_sae,
+                num_samples=args.num_samples_betas,
+                is_difference_sae=args.is_difference_sae,
+                sae_model=args.sae_model,
+            )
+        # Skip error scalars entirely for difference SAEs
+        effective_chat_latents_indices = None
+        shared_baseline_indices = None
+        if not args.skip_error_scalars:
+            logger.info("Skipping error scalars computation for difference SAEs")
     else:
-        effective_chat_latents_indices = (
-            df.sort_values(by="dec_norm_diff", ascending=True)
-            .head(args.num_effective_chat_only_latents)
+        # Original pipeline for dictionaries
+        if not args.skip_recon_scalars:
+            compute_scalers(
+                dictionary_model=args.dictionary,
+                layer=args.layer,
+                activation_store_dir=activation_store_dir,
+                results_dir=args.results_dir,
+                base_model=args.base_model,
+                chat_model=args.chat_model,
+                lmsys_split=scaler_lmsys_split,
+                target_model_idx=1,
+                chat_activation=True,
+                base_activation=True,
+                chat_reconstruction=True,
+                base_reconstruction=True,
+                chat_activation_no_bias=True,
+                base_activation_no_bias=True,
+                chat_error=False,
+                base_error=False,
+                num_samples=args.num_samples_betas,
+            )
+
+        df = load_latent_df(args.dictionary)
+        if args.num_effective_chat_only_latents == -1:
+            effective_chat_latents_indices = df.query(
+                "tag == 'Chat only'"
+            ).index.tolist()
+        else:
+            effective_chat_latents_indices = (
+                df.sort_values(by="dec_norm_diff", ascending=True)
+                .head(args.num_effective_chat_only_latents)
+                .index.tolist()
+            )
+        shared_baseline_indices = (
+            df[df["tag"] == "Shared"]
+            .sample(n=len(effective_chat_latents_indices), random_state=42)
             .index.tolist()
         )
-    shared_baseline_indices = (
-        df[df["tag"] == "Shared"]
-        .sample(n=len(effective_chat_latents_indices), random_state=42)
-        .index.tolist()
-    )
-    if not args.skip_error_scalars:
-        compute_scalers(
-            dictionary_model=args.crosscoder,
-            layer=args.layer,
-            activation_store_dir=activation_store_dir,
-            results_dir=args.results_dir,
-            base_model=args.base_model,
-            chat_model=args.chat_model,
-            target_model_idx=1,
-            chat_error=True,
-            base_error=True,
-            latent_indices=effective_chat_latents_indices,
-            latent_indices_name="effective_chat_only_latents",
-            lmsys_split=scaler_lmsys_split,
-            num_samples=args.num_samples_betas,
-        )
-        compute_scalers(
-            dictionary_model=args.crosscoder,
-            layer=args.layer,
-            activation_store_dir=activation_store_dir,
-            results_dir=args.results_dir,
-            base_model=args.base_model,
-            chat_model=args.chat_model,
-            target_model_idx=1,
-            chat_error=True,
-            base_error=True,
-            latent_indices=shared_baseline_indices,
-            latent_indices_name="shared_baseline_latents",
-            lmsys_split=scaler_lmsys_split,
-            num_samples=args.num_samples_betas,
-        )
+        if not args.skip_error_scalars:
+            compute_scalers(
+                dictionary_model=args.dictionary,
+                layer=args.layer,
+                activation_store_dir=activation_store_dir,
+                results_dir=args.results_dir,
+                base_model=args.base_model,
+                chat_model=args.chat_model,
+                target_model_idx=1,
+                chat_error=True,
+                base_error=True,
+                latent_indices=effective_chat_latents_indices,
+                latent_indices_name="effective_chat_only_latents",
+                lmsys_split=scaler_lmsys_split,
+                num_samples=args.num_samples_betas,
+            )
+            compute_scalers(
+                dictionary_model=args.dictionary,
+                layer=args.layer,
+                activation_store_dir=activation_store_dir,
+                results_dir=args.results_dir,
+                base_model=args.base_model,
+                chat_model=args.chat_model,
+                target_model_idx=1,
+                chat_error=True,
+                base_error=True,
+                latent_indices=shared_baseline_indices,
+                latent_indices_name="shared_baseline_latents",
+                lmsys_split=scaler_lmsys_split,
+                num_samples=args.num_samples_betas,
+            )
+
     df = make_beta_df(
-        args.crosscoder,
-        args.data_dir,
+        args.dictionary,
         args.results_dir,
         effective_chat_latents_indices,
         shared_baseline_indices,
         num_samples=args.num_samples_betas,
     )
-    chat_only_indices = df[df["tag"] == "Chat only"].index.tolist()
-    if args.upload_to_hub:
+    if args.upload_to_hub and set(df.columns) - set(
+        load_latent_df(args.dictionary).columns
+    ):
         push_latent_df(
             df,
-            crosscoder=args.crosscoder,
+            crosscoder=args.dictionary,
             confirm=False,
             commit_message="Added betas columns to df",
         )
-    make_betas_plots(
-        df,
-        chat_only_indices,
-        shared_baseline_indices,
-        args.results_dir / "closed_form_scalars" / args.crosscoder,
-    )
+    if not is_sae:
+        chat_only_indices = df[df["tag"] == "Chat only"].index.tolist()
+        make_betas_plots(
+            df,
+            chat_only_indices,
+            shared_baseline_indices,
+            args.results_dir / "closed_form_scalars" / args.dictionary,
+        )
+
     if args.compute_latent_stats:
-        collect_dictionary_activations(
-            dictionary_model=args.crosscoder,
-            latent_activations_dir=latent_activations_dir,
-            base_model=args.base_model,
-            chat_model=args.chat_model,
-            layer=args.layer,
-            upload_to_hub=args.upload_to_hub,
-            split="validation",
-            lmsys_col=args.lmsys_col,
-        )
-        latent_activation_cache = LatentActivationCache(
-            latent_activations_dir / args.crosscoder,
-            expand=False,
-            use_sparse_tensor=False,
-        )
+        compute_dict_acts = True
+        if (latent_activations_dir / args.dictionary).exists():
+            compute_dict_acts = False
+            logger.info(
+                f"Found latent activations for {args.dictionary} in {latent_activations_dir / args.dictionary}. Skipping collection."
+            )
+            try:
+                latent_activation_cache = LatentActivationCache(
+                    latent_activations_dir / args.dictionary,
+                    expand=False,
+                    use_sparse_tensor=False,
+                )
+            except Exception as e:
+                logger.error(
+                    f"Error loading latent activation cache for {args.dictionary}: {e}. Recomputing the dictionary activations."
+                )
+                compute_dict_acts = True
+        if compute_dict_acts:
+            latent_activation_cache = collect_dictionary_activations(
+                dictionary_model_name=args.dictionary,
+                latent_activations_dir=latent_activations_dir,
+                base_model=args.base_model,
+                chat_model=args.chat_model,
+                layer=args.layer,
+                upload_to_hub=args.upload_to_hub,
+                split="validation",
+                lmsys_col=args.lmsys_col,
+                is_sae=is_sae,
+                is_difference_sae=args.is_difference_sae,
+                sae_model=args.sae_model,
+            )
+        latent_activation_cache.to(auto_device())
+
         tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
         collect_activating_examples(
-            crosscoder=args.crosscoder,
+            crosscoder=args.dictionary,
             bos_token_id=tokenizer.bos_token_id,
             latent_activation_cache=latent_activation_cache,
             n=100,
@@ -439,7 +341,7 @@ if __name__ == "__main__":
             only_upload=False,
         )
         compute_latent_stats(
-            crosscoder=args.crosscoder,
+            crosscoder=args.dictionary,
             latent_activation_cache=latent_activation_cache,
             layer=args.layer,
             confirm=False,
@@ -450,21 +352,30 @@ if __name__ == "__main__":
         )
         compute_latents_template_stats(
             tokenizer=tokenizer,
-            crosscoder=args.crosscoder,
+            crosscoder=args.dictionary,
             latent_activation_cache=latent_activation_cache,
             max_activations=latent_activation_cache.max_activations,
             save_path=args.results_dir / "latents_template_stats",
             test=args.test,
         )
+
         df = pd.read_csv(
             args.results_dir / "latents_template_stats" / "latent_stats_global.csv"
         )
-        plot_beta_ratios_template_perc(
-            df.query("tag == 'Chat only'"),
-            df[df["lmsys_ctrl_%"] > 0.5].query("tag == 'Chat only'"),
-            args.results_dir / args.crosscoder,
-        )
-        dictionary = load_dictionary_model(args.crosscoder).to(auto_device())
+        # Skip beta analysis for difference SAEs as they don't have chat-only latents
+        if not is_sae:
+            plot_beta_ratios_template_perc(
+                df.query("tag == 'Chat only'"),
+                df[df["lmsys_ctrl_%"] > 0.5].query("tag == 'Chat only'"),
+                args.results_dir / args.dictionary,
+            )
+        if dictionary is None:
+            dictionary = load_dictionary_model(
+                args.dictionary, is_sae=args.is_sae or args.is_difference_sae
+            ).to(auto_device())
+
+    # KL experiment for dictionary and difference SAE
+    if args.run_kl_experiment:
         base_model = load_hf_model(args.base_model, torch_dtype=th.bfloat16)
         chat_model = load_hf_model(args.chat_model, torch_dtype=th.bfloat16)
         if args.base_model in MODEL_CONFIGS and not args.skip_token_level_replacement:
@@ -482,24 +393,23 @@ if __name__ == "__main__":
                     f"Skipping token level replacement for {args.base_model} as it is not in MODEL_CONFIGS"
                 )
             token_level_replacement = None
-    if args.run_kl_experiment:
         kl_experiment(
             dictionary=dictionary,
             base_model=base_model,
             chat_model=chat_model,
             tokenizer_name=args.chat_model,
-            dictionary_name=args.crosscoder,
-            # model_name=args.chat_model,
-            # dataset_name=f"{HF_NAME}/ultrachat_200k_gemma-2-2b-it-generated",
-            dataset_name=f"{HF_NAME}/lmsys-chat-1m-chat-formatted",
-            split="validation",
+            dictionary_name=args.dictionary,
+            dataset_name=args.kl_dataset,
+            split=args.kl_dataset_split,
             latent_df=df,
             chat_only_indices=effective_chat_latents_indices,
             layer_to_stop=args.layer,
             max_seq_len=1024,
-            # dataset_col="messages",
-            dataset_col="conversation",
+            dataset_col=args.kl_dataset_col,
             batch_size=args.batch_size_kl,
             test=args.test,
             token_level_replacement=token_level_replacement,
+            is_difference_sae=args.is_difference_sae,
+            num_sae_latents=args.num_effective_chat_only_latents // 2,
+            sae_model=args.sae_model,
         )
