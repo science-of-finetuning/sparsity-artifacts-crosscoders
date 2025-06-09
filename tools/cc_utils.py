@@ -466,7 +466,10 @@ def load_dictionary_model(
             model_name = df_hf_repo_legacy[str(model_name)]
         else:
             model_name = str(model_name)
-        model_id = f"{author}/{str(model_name)}"
+        if "/" not in str(model_name):
+            model_id = f"{author}/{str(model_name)}"
+        else:
+            model_id = model_name
         # Download config to determine model type
         if file_exists(model_id, "trainer_config.json", repo_type="model"):
             config_path = hf_hub_download(
@@ -555,6 +558,7 @@ def online_dashboard(
     torch_dtype=th.bfloat16,
     is_sae=False,
     is_sae_diff=False,
+    sae_model_idx: int = 1,
 ):
     """
     Instantiate an online dashboard for crosscoder latent analysis.
@@ -568,7 +572,9 @@ def online_dashboard(
         crosscoder_device = "cuda:0" if th.cuda.is_available() else "cpu"
     coder = coder.to(crosscoder_device)
     if is_sae or is_sae_diff:
-        coder = SAEAsCrosscoder(coder, is_sae_diff=is_sae_diff)
+        coder = SAEAsCrosscoder(
+            coder, is_sae_diff=is_sae_diff, model_idx=sae_model_idx
+        )
     if max_acts is None:
         df = _latent_df(crosscoder)
         max_acts_cols = ["max_act", "lmsys_max_act"]
