@@ -32,7 +32,7 @@ df_hf_repo_legacy = {
     "Butanium/gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04": "science-of-finetuning/max-activating-examples-gemma-2-2b-l13-mu4.1e-02-lr1e-04",
     "connor": "science-of-finetuning/max-activating-examples-gemma-2-2b-l13-ckissane",
     "ckkissane/crosscoder-gemma-2-2b-model-diff": "science-of-finetuning/max-activating-examples-gemma-2-2b-l13-ckissane",
-    "gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04": "science-of-finetuning/max-activating-examples-gemma-2-2b-l13-mu4.1e-02-lr1e-04",
+    # "gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04": "science-of-finetuning/max-activating-examples-gemma-2-2b-l13-mu4.1e-02-lr1e-04",
     "science-of-finetuning/diffing-stats-gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04": "science-of-finetuning/max-activating-examples-gemma-2-2b-l13-mu4.1e-02-lr1e-04",
 }
 

@@ -64,12 +64,19 @@ def setup_cache(args, fineweb_cache, lmsys_cache):
     elif args.target == "chat":
         fineweb_cache = fineweb_cache.activation_cache_2
         lmsys_cache = lmsys_cache.activation_cache_2
-    elif args.target == "difference":
-        fineweb_cache = DifferenceCache(
+    elif args.target == "difference_bc":
+        fineweb_cache = DifferenceCache(    
             fineweb_cache.activation_cache_1, fineweb_cache.activation_cache_2
         )
         lmsys_cache = DifferenceCache(
             lmsys_cache.activation_cache_1, lmsys_cache.activation_cache_2
+        )
+    elif args.target == "difference_cb":
+        fineweb_cache = DifferenceCache(
+            fineweb_cache.activation_cache_2, fineweb_cache.activation_cache_1
+        )
+        lmsys_cache = DifferenceCache(
+            lmsys_cache.activation_cache_2, lmsys_cache.activation_cache_1
         )
     return fineweb_cache, lmsys_cache
 
@@ -100,9 +107,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--target",
         default="chat",
-        choices=["chat", "base", "difference"],
+        choices=["chat", "base", "difference_bc", "difference_cb"],
         required=True,
-    )
+    )   
 
     args = parser.parse_args()
 
@@ -144,7 +151,7 @@ if __name__ == "__main__":
             fineweb_cache, th.arange(0, num_samples_per_dataset)
         )
         single_dataset = True
-    elif args.target == "chat" or args.target == "difference":
+    elif args.target == "chat" or "difference" in args.target:
         num_samples_per_dataset = min(args.num_samples, len(lmsys_cache))
         train_dataset = th.utils.data.Subset(
             lmsys_cache, th.arange(0, num_samples_per_dataset)
@@ -214,7 +221,7 @@ if __name__ == "__main__":
     fineweb_cache_val, lmsys_cache_val = setup_cache(
         args, fineweb_cache_val, lmsys_cache_val
     )
-    if args.target == "difference":
+    if "difference" in args.target:
         validation_dataset = th.utils.data.Subset(
             lmsys_cache_val, th.arange(0, args.num_validation_samples)
         )
