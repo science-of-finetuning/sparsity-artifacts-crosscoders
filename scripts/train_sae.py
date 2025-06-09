@@ -109,6 +109,7 @@ if __name__ == "__main__":
         default="chat",
         choices=["chat", "base", "difference_bc", "difference_cb"],
         required=True,
+        help="Target to train the SAE on. 'chat': train on chat model activations, 'base': train on base model activations, 'difference_bc': train on (base - chat) activation differences, 'difference_cb': train on (chat - base) activation differences"
     )   
 
     args = parser.parse_args()
