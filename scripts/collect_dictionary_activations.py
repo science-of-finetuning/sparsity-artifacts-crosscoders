@@ -8,7 +8,6 @@ from tqdm.auto import trange
 from argparse import ArgumentParser
 from tools.utils import load_activation_dataset, load_dictionary_model
 from transformers import AutoTokenizer
-from tools.configs import HF_NAME
 from tools.cache_utils import DifferenceCache, LatentActivationCache
 from huggingface_hub import repo_exists
 
@@ -177,6 +176,14 @@ def load_latent_activations(
     return activations, indices, sequences, latent_ids
 
 
+def create_difference_cache(cache, sae_model_idx):
+    if sae_model_idx == 0:
+        return DifferenceCache(cache.activation_cache_1, cache.activation_cache_2)
+    else:
+        assert sae_model_idx == 1
+        return DifferenceCache(cache.activation_cache_2, cache.activation_cache_1)
+
+
 def collect_dictionary_activations(
     dictionary_model_name: str,
     activation_store_dir: str = DATA_ROOT / "activations/",
@@ -249,22 +256,8 @@ def collect_dictionary_activations(
 
         # For difference SAEs, convert to DifferenceCache
         if is_difference_sae:
-            fineweb_cache = DifferenceCache(
-                (fineweb_cache.activation_cache_1, fineweb_cache.activation_cache_2)
-                if sae_model_idx == 0
-                else (
-                    fineweb_cache.activation_cache_2,
-                    fineweb_cache.activation_cache_1,
-                )
-            )
-            lmsys_cache = DifferenceCache(
-                (lmsys_cache.activation_cache_1, lmsys_cache.activation_cache_2)
-                if sae_model_idx == 0
-                else (
-                    lmsys_cache.activation_cache_2,
-                    lmsys_cache.activation_cache_1,
-                )
-            )
+            fineweb_cache = create_difference_cache(fineweb_cache, sae_model_idx)
+            lmsys_cache = create_difference_cache(lmsys_cache, sae_model_idx)
             tokens_fineweb = fineweb_cache.tokens[0]  # Both should have same tokens
             tokens_lmsys = lmsys_cache.tokens[0]
         else:
@@ -276,12 +269,6 @@ def collect_dictionary_activations(
             dictionary_model_name, is_sae=is_sae
         ).to("cuda")
         if is_sae:
-            if is_difference_sae:
-                logger.info(
-                    "Assuming your SAE difference is trained on model_idx=1 - model_idx=0"
-                )
-            else:
-                logger.info("Assuming your SAE is on model_idx=0")
             dictionary_model = add_get_activations_sae(
                 dictionary_model,
                 model_idx=sae_model_idx,

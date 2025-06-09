@@ -35,8 +35,6 @@ from tools.configs import MODEL_CONFIGS
 from dictionary_learning.dictionary import CrossCoder
 from tools.cc_utils import load_dictionary_model, load_latent_df
 
-from tools.configs import HF_NAME
-
 
 def compute_metrics_for_subset(
     logits, labels, base_logits, instruct_logits, subset_mask, chat_model

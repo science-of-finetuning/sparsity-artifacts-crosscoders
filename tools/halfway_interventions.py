@@ -573,10 +573,12 @@ class SAEAdditiveSteering(IdentityPreprocessFn):
         latents_to_steer: list[int] | None,
         continue_with: Literal["base", "chat"],
         sae_model: Literal["base", "chat"],
+        is_difference_sae: bool = False,
         # monitored_latents: list[int] | None = None,
         # filter_treshold: float | None = None,
         scale_steering_latent: float = 1.0,
         model_dtype: th.dtype = th.bfloat16,
+        add_decoder_bias: bool = False,
     ):
         super().__init__(continue_with, model_dtype)
         self.sae = sae
@@ -584,31 +586,44 @@ class SAEAdditiveSteering(IdentityPreprocessFn):
         self.steer_activations_of = ensure_model(steer_activations_of)
         self.latents_to_steer = latents_to_steer
         self.scale_steering_latent = scale_steering_latent
+        self.is_difference_sae = is_difference_sae
+        assert (
+            self.sae.decoder.weight.shape[0] == self.sae.activation_dim
+            and self.sae.decoder.weight.shape[1] == self.sae.dict_size
+        ), "sae decoder has shape (dict_size, d_model), while assumed to be (d_model, dict_size)"
+        self.decoder_weights = self.sae.decoder.weight[
+            :, self.latents_to_steer
+        ].T  # L, d
+        assert self.decoder_weights.shape == (
+            len(self.latents_to_steer),
+            self.sae.activation_dim,
+        )
+        self.add_decoder_bias = add_decoder_bias
 
     def preprocess(self, base_activations, chat_activations, **kwargs):
-        sae_input = (
-            base_activations
-            if self.sae_model == "base"
-            else chat_activations
-        )
+        if self.is_difference_sae:
+            if self.sae_model == "chat":
+                sae_input = chat_activations - base_activations
+            else:
+                sae_input = base_activations - chat_activations
+        else:
+            sae_input = (
+                base_activations if self.sae_model == "base" else chat_activations
+            )
         if sae_input.dim() == 3:
             sae_input = einops.rearrange(sae_input, "b s d -> (b s) d")
         sae_input = sae_input.float()
         sae_acts = self.sae.encode(sae_input)  # bs, D
         assert sae_acts.shape == (sae_input.shape[0], self.sae.dict_size)
-        steering_act = (
-            sae_acts[:, self.latents_to_steer] * self.scale_steering_latent
-        )  # bs, L
+        steering_act = sae_acts[:, self.latents_to_steer]  # bs, L
         assert steering_act.shape == (sae_input.shape[0], len(self.latents_to_steer))
-        assert (
-            self.sae.decoder.weight.shape[0] < self.sae.decoder.weight.shape[1]
-        ), "sae decoder has shape (dict_size, d_model), while assumed to be (d_model, dict_size)"
-        weights = self.sae.decoder.weight[:, self.latents_to_steer].T  # 1, L, d
-        assert weights.shape == (
-            len(self.latents_to_steer),
-            self.sae.decoder.weight.shape[0],
-        ), f"weights.shape: {weights.shape}, latents_to_steer: {self.latents_to_steer}, decoder.weight.shape: {self.sae.decoder.weight.shape}"
-        steering_vects = th.einsum("BL, Ld -> Bd", steering_act, weights)  # bs, d
+        steering_vects = th.einsum(
+            "BL, Ld -> Bd", steering_act, self.decoder_weights
+        )  # bs, d
+
+        if self.add_decoder_bias:
+            steering_vects = steering_vects + self.sae.b_dec
+
         assert steering_vects.shape == (sae_input.shape[0], sae_input.shape[1])
         # unfold steering_vects to b, s, d
         steering_vects = einops.rearrange(
@@ -663,6 +678,91 @@ class SAEDifferenceReconstruction(IdentityPreprocessFn):
             # Approximate the base activations by subtracting the reconstructed difference
             approx = chat_activations - chat_minus_base_recon.to(self.model_dtype)
         return self.continue_with_model(approx)
+
+
+class SAEDifferenceBiasSteering(IdentityPreprocessFn):
+    """Preprocessing function that steers activations using only the bias term from a difference SAE."""
+
+    can_edit_single_activation = False  # note: could be implemented
+
+    def __init__(
+        self,
+        sae: Dictionary,
+        sae_model: Literal["base", "chat"],
+        steer_activations_of: Literal["base", "chat"],
+        continue_with: Literal["base", "chat"],
+        scale_steering: float = 1.0,
+        model_dtype: th.dtype = th.bfloat16,
+    ):
+        super().__init__(continue_with, model_dtype)
+        self.sae_model = ensure_model(sae_model)
+        self.sae = sae
+        self.steer_activations_of = ensure_model(steer_activations_of)
+        self.scale_steering = scale_steering
+
+    def preprocess(self, base_activations, chat_activations, **kwargs):
+        # Get the decoder bias from the SAE
+        scaled_bias_chat_minus_base = self.sae.b_dec * self.scale_steering
+
+        # Apply sign correction based on sae_model
+        if self.sae_model == "base":
+            scaled_bias_chat_minus_base = -scaled_bias_chat_minus_base
+
+        # Add bias to the specified activations
+        if self.steer_activations_of == "base":
+            steered = base_activations + scaled_bias_chat_minus_base
+        else:
+            steered = chat_activations - scaled_bias_chat_minus_base
+
+        return self.continue_with_model(steered.to(self.model_dtype))
+
+
+class SAEDifferenceReconstructionError(IdentityPreprocessFn):
+    """Preprocessing function that reconstructs the error between actual and reconstructed difference activations."""
+
+    can_edit_single_activation = False
+
+    def __init__(
+        self,
+        sae: Dictionary,
+        sae_model: Literal["base", "chat"],
+        steer_activations_of: Literal["base", "chat"],
+        continue_with: Literal["base", "chat"],
+        model_dtype: th.dtype = th.bfloat16,
+    ):
+        super().__init__(continue_with, model_dtype)
+        self.sae_model = ensure_model(sae_model)
+        self.sae = sae
+        self.steer_activations_of = ensure_model(steer_activations_of)
+
+    def preprocess(self, base_activations, chat_activations, **kwargs):
+        # Compute activation difference
+        chat_minus_base = chat_activations - base_activations
+        if self.sae_model == "chat":
+            sae_input = chat_minus_base  # (b, s, d)
+        else:
+            sae_input = base_activations - chat_activations
+        b, s, d = sae_input.shape
+        sae_input = einops.rearrange(sae_input, "b s d -> (b s) d").float()
+
+        # Encode and decode to reconstruct difference
+        chat_minus_base_recon = self.sae(sae_input)
+        if self.sae_model == "base":
+            chat_minus_base_recon = -chat_minus_base_recon
+        chat_minus_base_recon = einops.rearrange(
+            chat_minus_base_recon, "(b s) d -> b s d", b=b
+        )
+
+        # Compute reconstruction error
+        chat_minus_base_recon_error = chat_minus_base - chat_minus_base_recon
+
+        # Add reconstruction error to the specified activations
+        if self.steer_activations_of == "base":
+            steered = base_activations + chat_minus_base_recon_error
+        else:
+            steered = chat_activations - chat_minus_base_recon_error
+
+        return self.continue_with_model(steered.to(self.model_dtype))
 
 
 class BasePatchIntervention(IdentityPreprocessFn):

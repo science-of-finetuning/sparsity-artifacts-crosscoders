@@ -110,9 +110,7 @@ if __name__ == "__main__":
     print(args)
     is_sae = args.is_sae or args.is_difference_sae
     if is_sae and args.sae_model is None:
-        raise ValueError(
-            "SAE model must be specified for SAEs. Got None."
-        )
+        raise ValueError("SAE model must be specified for SAEs. Got None.")
 
     if args.upload_to_hub:
         # Check if dictionary is a local path that exists
@@ -125,7 +123,7 @@ if __name__ == "__main__":
                 # Upload dictionary model
                 repo_id = push_dictionary_model(dictionary_path)
                 # Update args.dictionary to use the model name
-                args.dictionary = repo_id
+                args.dictionary = repo_id.split("/")[-1]
                 print(f"Using dictionary name: {args.dictionary}")
             else:
                 raise ValueError(
@@ -276,15 +274,15 @@ if __name__ == "__main__":
         shared_baseline_indices,
         num_samples=args.num_samples_betas,
     )
-    if args.upload_to_hub and set(df.columns) - set(
-        load_latent_df(args.dictionary).columns
-    ):
-        push_latent_df(
-            df,
-            crosscoder=args.dictionary,
-            confirm=False,
-            commit_message="Added betas columns to df",
-        )
+    uploaded_latent_df = load_latent_df(args.dictionary)
+    for col in set(uploaded_latent_df.columns) - set(df.columns):
+        df[col] = uploaded_latent_df[col]
+    push_latent_df(
+        df,
+        crosscoder=args.dictionary,
+        confirm=False,
+        commit_message="Added betas columns to df",
+    )
     if not is_sae:
         chat_only_indices = df[df["tag"] == "Chat only"].index.tolist()
         make_betas_plots(
@@ -313,6 +311,13 @@ if __name__ == "__main__":
                 )
                 compute_dict_acts = True
         if compute_dict_acts:
+            if is_sae:
+                if args.sae_model == "base":
+                    sae_model_idx = 0
+                else:
+                    sae_model_idx = 1
+            else:
+                sae_model_idx = None
             latent_activation_cache = collect_dictionary_activations(
                 dictionary_model_name=args.dictionary,
                 latent_activations_dir=latent_activations_dir,
@@ -324,8 +329,10 @@ if __name__ == "__main__":
                 lmsys_col=args.lmsys_col,
                 is_sae=is_sae,
                 is_difference_sae=args.is_difference_sae,
-                sae_model=args.sae_model,
+                sae_model_idx=sae_model_idx,
             )
+            latent_activation_cache.expand = False
+            latent_activation_cache.use_sparse_tensor = False
         latent_activation_cache.to(auto_device())
 
         tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
