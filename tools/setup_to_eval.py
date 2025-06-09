@@ -1,6 +1,7 @@
 import torch as th
 import numpy as np
 import pandas as pd
+from typing import Literal
 from dictionary_learning.dictionary import CrossCoder, Dictionary
 from tools.halfway_interventions import (
     HalfStepPreprocessFn,
@@ -15,6 +16,7 @@ from tools.halfway_interventions import (
     SteeringVector,
     PatchProjectionFromDiff,
     SAEAdditiveSteering,
+    SAEDifferenceReconstruction,
 )
 from tools.cc_utils import load_latent_df
 
@@ -360,6 +362,7 @@ def threshold_half_fns(
     dictionary: Dictionary,
     is_crosscoder: bool,
     take_below: bool = True,
+    sae_model: Literal["base", "chat"] | None = None,
 ) -> dict[str, HalfStepPreprocessFn]:
     """Creates a half function for steering using latents below a threshold of a given column.
 
@@ -389,13 +392,15 @@ def threshold_half_fns(
             latents_to_steer=latents,
         )
     else:
+        if sae_model is None:
+            raise ValueError("sae_model must be provided for sae steering")
         op_name = "sae"
         interv = SAEAdditiveSteering(
             dictionary,
             steer_activations_of="base",
-            steer_with_latents_from="chat",
             continue_with="chat",
             latents_to_steer=latents,
+            sae_model=sae_model,
         )
     infos = {
         f"{column}-{direction}{threshold}-latents": latents,
@@ -417,6 +422,7 @@ def baselines_half_fns():
             activation_processor=None,
         )
     return half_fns
+
 
 def arxiv_paper_half_fns(
     crosscoder: CrossCoder,
@@ -543,8 +549,26 @@ def sae_steering_half_fns(
     sae: Dictionary,
     seeds: list[int],
     full_df: pd.DataFrame,
-    num_latents: int = 1420,
+    num_latents: int,
+    sae_model: Literal["base", "chat"],
+    is_difference_sae: bool = False,
 ) -> dict[str, HalfStepPreprocessFn]:
+    """
+    Creates the half functions for SAE steering.
+
+    Args:
+        sae: The SAE model to use
+        seeds: The seeds to use for random steering
+        full_df: The full dataframe to use
+        num_latents: The number of latents to steer, should be equal to the number of latents you steer in your crosscoder
+        is_difference_sae: Whether the SAE is a difference SAE
+    Returns:
+        A dictionary of half functions for SAE steering containing:
+        - patch_all_sae_random{seed}_cchat: Half function for random steering
+        - patch_all_sae_(anti)pareto_(nofilter_)cchat: Half function for steering using the top num_latents or the top 2*num_latents without the top num_latents. No filter means that the top num_latents are not filtered for -0.1 <= beta_activation_ratio <= 2 and abs(beta_activation_ratio) is used instead.
+        - patch_diff_sae_recon_cchat: Half function for steering using the difference SAE reconstruction if the SAE is a difference SAE.
+
+    """
     half_fns = {}
     infos = {"num_latents": num_latents, "random latents": {}}
     full_df["beta_activation_ratio_abs"] = full_df["beta_activation_ratio"].abs()
@@ -558,9 +582,9 @@ def sae_steering_half_fns(
         half_fns[f"patch_all_sae_random{seed}_cchat"] = SAEAdditiveSteering(
             sae,
             steer_activations_of="base",
-            steer_with_latents_from="chat",
             continue_with="chat",
             latents_to_steer=random_latents,
+            sae_model=sae_model,
         )
 
         infos["random latents"][f"random{seed}"] = {
@@ -576,23 +600,23 @@ def sae_steering_half_fns(
     half_fns["patch_all_sae_pareto_cchat"] = SAEAdditiveSteering(
         sae,
         steer_activations_of="base",
-        steer_with_latents_from="chat",
         continue_with="chat",
         latents_to_steer=best_latents,
+        sae_model=sae_model,
     )
     infos["best latents"] = {
         "latents": best_latents.tolist(),
         "values": full_df.loc[best_latents]["beta_activation_ratio"].values.tolist(),
     }
     worst_latents = filtered_df.sort_values(
-        by="beta_activation_ratio", ascending=False
-    ).index.values[:num_latents]
+        by="beta_activation_ratio", ascending=True
+    ).index.values[num_latents : num_latents * 2]
     half_fns["patch_all_sae_antipareto_cchat"] = SAEAdditiveSteering(
         sae,
         steer_activations_of="base",
-        steer_with_latents_from="chat",
         continue_with="chat",
         latents_to_steer=worst_latents,
+        sae_model=sae_model,
     )
     infos["worst latents"] = {
         "latents": worst_latents.tolist(),
@@ -604,9 +628,9 @@ def sae_steering_half_fns(
     half_fns["patch_all_sae_pareto_nofilter_cchat"] = SAEAdditiveSteering(
         sae,
         steer_activations_of="base",
-        steer_with_latents_from="chat",
         continue_with="chat",
         latents_to_steer=best_nofilter_latents,
+        sae_model=sae_model,
     )
     infos["best nofilter latents"] = {
         "latents": best_nofilter_latents.tolist(),
@@ -616,14 +640,14 @@ def sae_steering_half_fns(
     }
 
     worst_nofilter_latents = full_df.sort_values(
-        by="beta_activation_ratio_abs", ascending=False
-    ).index.values[:num_latents]
+        by="beta_activation_ratio_abs", ascending=True
+    ).index.values[num_latents : num_latents * 2]
     half_fns["patch_all_sae_antipareto_nofilter_cchat"] = SAEAdditiveSteering(
         sae,
         steer_activations_of="base",
-        steer_with_latents_from="chat",
         continue_with="chat",
         latents_to_steer=worst_nofilter_latents,
+        sae_model=sae_model,
     )
     infos["worst nofilter latents"] = {
         "latents": worst_nofilter_latents.tolist(),
@@ -643,4 +667,13 @@ def sae_steering_half_fns(
         )
         half_fns.update(fn)
         infos[next(iter(fn.keys()))] = info
+    # Add special reconstruction steering for difference SAEs
+    if is_difference_sae:
+        half_fns["patch_diff_sae_recon_cchat"] = SAEDifferenceReconstruction(
+            sae,
+            continue_with="chat",
+            steer_activations_of="base",
+            sae_model=sae_model,
+        )
+    infos["is_difference_sae"] = is_difference_sae
     return half_fns, infos

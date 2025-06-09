@@ -14,17 +14,18 @@ import torch as th
 from transformers import AutoTokenizer
 from huggingface_hub import hf_hub_download, hf_api, repo_exists, file_exists
 from huggingface_hub import HfApi
+from loguru import logger
 
 from dictionary_learning.dictionary import BatchTopKCrossCoder, CrossCoder
 from dictionary_learning.trainers.batch_top_k import BatchTopKSAE
 from nnterp import load_model
 from tiny_dashboard import OfflineFeatureCentricDashboard
 from tiny_dashboard.dashboard_implementations import CrosscoderOnlineFeatureDashboard
-from .paths import REPO_ROOT
+from .configs import REPO_ROOT
 
 sys.path.append(REPO_ROOT)
 
-from CONFIG import HF_NAME
+from tools.configs import HF_NAME
 
 dfs = defaultdict(lambda: None)
 df_hf_repo_legacy = {
@@ -40,13 +41,23 @@ df_hf_repo_legacy = {
 def stats_repo_id(crosscoder, author=HF_NAME):
     return f"{author}/diffing-stats-{crosscoder}"
 
+
 def latent_df_exists(crosscoder_or_path, author=HF_NAME):
     if crosscoder_or_path in df_hf_repo_legacy:
-        return file_exists(repo_id=df_hf_repo_legacy[crosscoder_or_path], filename="feature_df.csv", repo_type="dataset")
+        return file_exists(
+            repo_id=df_hf_repo_legacy[crosscoder_or_path],
+            filename="feature_df.csv",
+            repo_type="dataset",
+        )
     elif Path(crosscoder_or_path).exists():
         return True
     else:
-        return file_exists(repo_id=stats_repo_id(crosscoder_or_path), filename="feature_df.csv", repo_type="dataset")
+        return file_exists(
+            repo_id=stats_repo_id(crosscoder_or_path),
+            filename="feature_df.csv",
+            repo_type="dataset",
+        )
+
 
 def load_latent_df(crosscoder_or_path, author=HF_NAME):
     """Load the latent_df for the given crosscoder."""
@@ -63,9 +74,15 @@ def load_latent_df(crosscoder_or_path, author=HF_NAME):
     else:
         repo_id = stats_repo_id(crosscoder_or_path)
         if not repo_exists(repo_id=repo_id, repo_type="dataset"):
-            raise ValueError(f"Repository {repo_id} does not exist, can't load latent_df")
-        if not file_exists(repo_id=repo_id, filename="feature_df.csv", repo_type="dataset"):
-            raise ValueError(f"File feature_df.csv does not exist in repository {repo_id}, can't load latent_df")
+            raise ValueError(
+                f"Repository {repo_id} does not exist, can't load latent_df"
+            )
+        if not file_exists(
+            repo_id=repo_id, filename="feature_df.csv", repo_type="dataset"
+        ):
+            raise ValueError(
+                f"File feature_df.csv does not exist in repository {repo_id}, can't load latent_df"
+            )
         df_path = hf_hub_download(
             repo_id=repo_id,
             filename="feature_df.csv",
@@ -146,9 +163,7 @@ def push_latent_df(
             else:
                 equal = original_df[column].equals(df[column])
             if not equal:
-                print(
-                    f"Column {column} has different values in original and new df:"
-                )
+                print(f"Column {column} has different values in original and new df:")
                 if "float" in str(original_df[column].dtype):
                     diff_ratio = (
                         ~np.isclose(
@@ -166,9 +181,10 @@ def push_latent_df(
                 print("=" * 20 + "\n", flush=True)
     if not repo_exists(repo_id=stats_repo_id(crosscoder), repo_type="dataset"):
         if not create_repo_if_missing:
-            raise ValueError(f"Repository {stats_repo_id(crosscoder)} does not exist, can't push latent_df. P")
+            raise ValueError(
+                f"Repository {stats_repo_id(crosscoder)} does not exist, can't push latent_df. P"
+            )
         print("Will create a new repository.")
-    
 
     if confirm:
         print(f"Commit message: {commit_message}")
@@ -443,7 +459,6 @@ def load_dictionary_model(
     Returns:
         The loaded dictionary model
     """
-    config = None
     # Check if it's a HuggingFace Hub model
     if "/" not in str(model_name) or not Path(model_name).exists():
         # Legacy model
@@ -453,7 +468,7 @@ def load_dictionary_model(
             model_name = str(model_name)
         model_id = f"{author}/{str(model_name)}"
         # Download config to determine model type
-        try:
+        if file_exists(model_id, "trainer_config.json", repo_type="model"):
             config_path = hf_hub_download(
                 repo_id=model_id, filename="trainer_config.json"
             )
@@ -471,12 +486,12 @@ def load_dictionary_model(
                 )
             else:
                 raise ValueError(f"Unknown model type: {config['dict_class']}")
-        except Exception as e:
-            print(f"Error loading model from hub: {e}")
+        else:
+            logger.info(
+                f"No config found for {model_id}, relying on is_sae={is_sae} arg to determine model type"
+            )
             # If no model_type in config, try to infer from other fields
-            if is_sae or (
-                config is not None and "k" in config and "dict_size" in config
-            ):
+            if is_sae:
                 return BatchTopKSAE.from_pretrained(model_id, from_hub=True)
             else:
                 return CrossCoder.from_pretrained(model_id, from_hub=True)
@@ -512,13 +527,34 @@ def _crosscoder(crosscoder=None):
     return crosscoders[crosscoder]
 
 
+class SAEAsCrosscoder:
+    def __init__(self, sae, is_sae_diff=False, model_idx=1):
+        self.sae = sae
+        self.is_sae_diff = is_sae_diff
+        self.model_idx = model_idx
+
+    def get_activations(self, x, select_features=None):
+        assert x.shape[1:] == (2, self.sae.activation_dim)
+        x_sae = x[:, self.model_idx]
+        if self.is_sae_diff:
+            x_sae = x_sae - x[:, 1 - self.model_idx]
+        activations = self.sae.encode(x_sae)
+        assert activations.shape == (x.shape[0], self.sae.dict_size)
+        if select_features is not None:
+            activations = activations[:, select_features]
+        return activations
+
+
 def online_dashboard(
-    crosscoder=None,
+    crosscoder,
+    layer,
     max_acts=None,
     crosscoder_device="auto",
     base_device="auto",
     chat_device="auto",
     torch_dtype=th.bfloat16,
+    is_sae=False,
+    is_sae_diff=False,
 ):
     """
     Instantiate an online dashboard for crosscoder latent analysis.
@@ -527,10 +563,12 @@ def online_dashboard(
         crosscoder: the crosscoder to use
         max_acts: a dictionary of max activations for each latent. If None, will be loaded from the latent_df of the crosscoder.
     """
-    coder = load_dictionary_model(crosscoder)
+    coder = load_dictionary_model(crosscoder, is_sae=is_sae or is_sae_diff)
     if crosscoder_device == "auto":
         crosscoder_device = "cuda:0" if th.cuda.is_available() else "cpu"
     coder = coder.to(crosscoder_device)
+    if is_sae or is_sae_diff:
+        coder = SAEAsCrosscoder(coder, is_sae_diff=is_sae_diff)
     if max_acts is None:
         df = _latent_df(crosscoder)
         max_acts_cols = ["max_act", "lmsys_max_act"]
@@ -554,7 +592,7 @@ def online_dashboard(
         base_model,
         chat_model,
         coder,
-        13,
+        layer,
         max_acts=max_acts,
         crosscoder_device=crosscoder_device,
     )
@@ -738,7 +776,9 @@ class QuantileExamplesDB:
         return feature_idx in self._feature_indices
 
 
-def offline_dashboard(crosscoder, max_example_per_quantile=20, tokenizer=None, db_path=None):
+def offline_dashboard(
+    crosscoder, max_example_per_quantile=20, tokenizer=None, db_path=None
+):
     """
     Returns an offline_dashboard showing activations from different quantile
 
@@ -755,7 +795,9 @@ def offline_dashboard(crosscoder, max_example_per_quantile=20, tokenizer=None, d
     else:
         db_path = db_path / crosscoder / "examples.db"
     if tokenizer is None:
-        assert "gemma-2" in crosscoder, "Tokenizer must be provided for non-gemma models"
+        assert (
+            "gemma-2" in crosscoder
+        ), "Tokenizer must be provided for non-gemma models"
         tokenizer = AutoTokenizer.from_pretrained("google/gemma-2-2b-it")
     activation_examples = QuantileExamplesDB(
         db_path, tokenizer, max_example_per_quantile=max_example_per_quantile

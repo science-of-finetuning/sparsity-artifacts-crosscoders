@@ -14,7 +14,7 @@ from tools.cc_utils import (
     shared_latent_indices,
     load_latent_df,
 )
-
+from tools.configs import DATA_ROOT
 
 def main():
     parser = argparse.ArgumentParser(
@@ -29,7 +29,7 @@ def main():
     parser.add_argument(
         "--results-dir",
         type=Path,
-        default="/workspace/data/latent_indices",
+        default=DATA_ROOT / "latent_indices",
         help="Directory to save the indices",
     )
     parser.add_argument(

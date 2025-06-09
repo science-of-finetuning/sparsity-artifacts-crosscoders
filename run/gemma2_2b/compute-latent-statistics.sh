@@ -19,7 +19,7 @@ FLAGS="--crosscoder-path Butanium/gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04 \
     --base-model google/gemma-2-2b \
     --instruct-model google/gemma-2-2b-it \
     --device cuda \
-    --results-dir /workspace/data/results/latent-stats"
+    --results-dir $DATASTORE/results/latent-stats"
 
 additional_flags=$@
 

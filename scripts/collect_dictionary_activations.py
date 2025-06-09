@@ -3,12 +3,18 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).parent.parent))
 import torch as th
+from loguru import logger
 from tqdm.auto import trange
 from argparse import ArgumentParser
 from tools.utils import load_activation_dataset, load_dictionary_model
 from transformers import AutoTokenizer
-from CONFIG import HF_NAME
+from tools.configs import HF_NAME
+from tools.cache_utils import DifferenceCache, LatentActivationCache
 from huggingface_hub import repo_exists
+
+from tools.configs import DATA_ROOT
+from tools.configs import HF_NAME
+
 
 @th.no_grad()
 def get_positive_activations(sequences, ranges, dataset, cc, latent_ids):
@@ -97,20 +103,41 @@ def split_into_sequences(tokenizer, tokens):
     return sequences, index_to_seq_pos, ranges
 
 
-def add_get_activations_sae(sae, model_idx):
-    def get_activation(x: th.Tensor, select_features=None, **kwargs):
-        assert x.ndim == 3 and x.shape[1] == 2
-        f = sae.encode(x[:, model_idx])
-        if select_features is not None:
-            f = f[:, select_features]
-        return f
+def add_get_activations_sae(sae, model_idx, is_difference=False):
+    """
+    Add get_activations method to SAE model.
+
+    Args:
+        sae: The SAE model
+        model_idx: Index of model to use (0 for base, 1 for chat) if not difference
+        is_difference: If True, compute difference between chat and base activations
+    """
+    if is_difference:
+
+        def get_activation(x: th.Tensor, select_features=None, **kwargs):
+            # For difference SAEs, x should be the difference already computed by DifferenceCache
+            # x shape: (batch_size, activation_dim)
+            assert x.ndim == 2, f"Expected 2D tensor for difference SAE, got {x.ndim}D"
+            f = sae.encode(x)
+            if select_features is not None:
+                f = f[:, select_features]
+            return f
+
+    else:
+
+        def get_activation(x: th.Tensor, select_features=None, **kwargs):
+            assert x.ndim == 3 and x.shape[1] == 2
+            f = sae.encode(x[:, model_idx])
+            if select_features is not None:
+                f = f[:, select_features]
+            return f
 
     sae.get_activations = get_activation
     return sae
 
 
 def load_latent_activations(
-    repo_id="science-of-finetuning/autointerp-data-gemma-2-2b-l13-mu4.1e-02-lr1e-04",
+    repo_id=f"{HF_NAME}/autointerp-data-gemma-2-2b-l13-mu4.1e-02-lr1e-04",
 ):
     """
     Load the autointerp data from Hugging Face Hub.
@@ -152,17 +179,19 @@ def load_latent_activations(
 
 def collect_dictionary_activations(
     dictionary_model_name: str,
-    activation_store_dir: str = "/workspace/data/activations/",
+    activation_store_dir: str = DATA_ROOT / "activations/",
     base_model: str = "google/gemma-2-2b",
     chat_model: str = "google/gemma-2-2b-it",
     layer: int = 13,
     latent_ids: th.Tensor | None = None,
-    latent_activations_dir: str = "/workspace/data/latent_activations/",
+    latent_activations_dir: str = DATA_ROOT / "latent_activations/",
     upload_to_hub: bool = False,
     split: str = "validation",
     load_from_disk: bool = False,
     lmsys_col: str = "",
     is_sae: bool = False,
+    is_difference_sae: bool = False,
+    sae_model_idx: int = None,
 ) -> None:
     """
     Compute and save latent activations for a given dictionary model.
@@ -174,7 +203,7 @@ def collect_dictionary_activations(
     Args:
         dictionary_model (str): Path or identifier for the dictionary (crosscoder) model to use.
         activation_store_dir (str, optional): Directory containing the raw activation datasets.
-            Defaults to "/workspace/data/activations/".
+            Defaults to $DATASTORE/activations/.
         base_model (str, optional): Name or path of the base model (e.g., "google/gemma-2-2b").
             Defaults to "google/gemma-2-2b".
         chat_model (str, optional): Name or path of the chat/instruct model.
@@ -184,17 +213,26 @@ def collect_dictionary_activations(
         latent_ids (th.Tensor or None, optional): Tensor of latent indices to compute activations for.
             If None, uses all latents in the dictionary model.
         latent_activations_dir (str, optional): Directory to save computed latent activations.
-            Defaults to "/workspace/data/latent_activations/".
+            Defaults to $DATASTORE/latent_activations/.
         upload_to_hub (bool, optional): Whether to upload the computed activations to the Hugging Face Hub.
             Defaults to False.
         split (str, optional): Dataset split to use (e.g., "validation").
             Defaults to "validation".
         load_from_disk (bool, optional): If True, load precomputed activations from disk instead of recomputing.
             Defaults to False.
+        is_sae (bool, optional): Whether the model is an SAE rather than a crosscoder.
+            Defaults to False.
+        is_difference_sae (bool, optional): Whether the SAE is trained on activation differences.
+            Defaults to False.
 
     Returns:
         None
     """
+    is_sae = is_sae or is_difference_sae
+    if is_sae and sae_model_idx is None:
+        raise ValueError(
+            "sae_model_idx must be provided if is_sae is True. This is the index of the model activations to use for the SAE."
+        )
     out_dir = Path(latent_activations_dir) / f"{dictionary_model_name}"
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -208,15 +246,47 @@ def collect_dictionary_activations(
             lmsys_split=split + f"-col{lmsys_col}" if lmsys_col else split,
             split=split,
         )
-        tokens_fineweb = fineweb_cache.tokens[0]
-        tokens_lmsys = lmsys_cache.tokens[0]
+
+        # For difference SAEs, convert to DifferenceCache
+        if is_difference_sae:
+            fineweb_cache = DifferenceCache(
+                (fineweb_cache.activation_cache_1, fineweb_cache.activation_cache_2)
+                if sae_model_idx == 0
+                else (
+                    fineweb_cache.activation_cache_2,
+                    fineweb_cache.activation_cache_1,
+                )
+            )
+            lmsys_cache = DifferenceCache(
+                (lmsys_cache.activation_cache_1, lmsys_cache.activation_cache_2)
+                if sae_model_idx == 0
+                else (
+                    lmsys_cache.activation_cache_2,
+                    lmsys_cache.activation_cache_1,
+                )
+            )
+            tokens_fineweb = fineweb_cache.tokens[0]  # Both should have same tokens
+            tokens_lmsys = lmsys_cache.tokens[0]
+        else:
+            tokens_fineweb = fineweb_cache.tokens[0]
+            tokens_lmsys = lmsys_cache.tokens[0]
 
         # Load the dictionary model
-        dictionary_model = load_dictionary_model(dictionary_model_name, is_sae=is_sae).to(
-            "cuda"
-        )
+        dictionary_model = load_dictionary_model(
+            dictionary_model_name, is_sae=is_sae
+        ).to("cuda")
         if is_sae:
-            dictionary_model = add_get_activations_sae(dictionary_model, model_idx=1)
+            if is_difference_sae:
+                logger.info(
+                    "Assuming your SAE difference is trained on model_idx=1 - model_idx=0"
+                )
+            else:
+                logger.info("Assuming your SAE is on model_idx=0")
+            dictionary_model = add_get_activations_sae(
+                dictionary_model,
+                model_idx=sae_model_idx,
+                is_difference=is_difference_sae,
+            )
         if latent_ids is None:
             latent_ids = th.arange(dictionary_model.dict_size)
 
@@ -356,16 +426,18 @@ def collect_dictionary_activations(
         print(f"All files uploaded to Hugging Face Hub at {repo_id}")
     else:
         print("Skipping upload to Hugging Face Hub")
+    return LatentActivationCache(out_dir)
+
 
 if __name__ == "__main__":
     parser = ArgumentParser(
         description="Compute positive and maximum activations for latent features"
     )
     parser.add_argument(
-        "--activation-store-dir", type=str, default="/workspace/data/activations/"
+        "--activation-store-dir", type=str, default=DATA_ROOT / "activations/"
     )
     parser.add_argument(
-        "--indices-root", type=str, default="/workspace/data/latent_indices/"
+        "--indices-root", type=str, default=DATA_ROOT / "latent_indices/"
     )
     parser.add_argument("--base-model", type=str, default="google/gemma-2-2b")
     parser.add_argument("--chat-model", type=str, default="google/gemma-2-2b-it")
@@ -375,7 +447,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--latent-activations-dir",
         type=str,
-        default="/workspace/data/latent_activations/",
+        default=DATA_ROOT / "latent_activations/",
     )
     parser.add_argument("--upload-to-hub", action="store_true")
     parser.add_argument("--split", type=str, default="validation")
@@ -412,4 +484,3 @@ if __name__ == "__main__":
         load_from_disk=args.load_from_disk,
         is_sae=args.is_chat_sae,
     )
-

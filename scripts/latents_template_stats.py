@@ -715,9 +715,6 @@ def compute_latents_template_stats(
     return computed_stats
 
 
-# python scripts/per_token_stats.py gemma-2-2b-L13-k100-lr1e-04-local-shuffling-CCLoss --latent-activation-cache-path /workspace/data/latent_activations
-# python scripts/per_token_stats.py gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04 --latent-activation-cache-path /workspace/data/latent_activations
-
 if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("crosscoder", type=str)

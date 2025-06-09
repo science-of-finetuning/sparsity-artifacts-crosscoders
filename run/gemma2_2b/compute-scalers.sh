@@ -36,7 +36,7 @@ done
 if [ -z "$LATENT_INDICES" ]; then
   # Replace / with _ in crosscoder path for directory name
   INDICES_DIR=$(echo $DICT_MODEL_PATH | tr '/' '_')
-  LATENT_INDICES="/workspace/data/latent_indices/${INDICES_DIR}/chat_only_indices.pt"
+  LATENT_INDICES="$DATASTORE/latent_indices/${INDICES_DIR}/chat_only_indices.pt"
 fi
 
 FLAGS="--dictionary-model $DICT_MODEL_PATH \

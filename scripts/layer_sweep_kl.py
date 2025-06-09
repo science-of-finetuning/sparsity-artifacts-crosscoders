@@ -10,6 +10,8 @@ from coolname import generate_slug
 from nnterp.nnsight_utils import get_num_layers
 from loguru import logger
 
+from tools.configs import HF_NAME
+
 if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("--batch-size", type=int, default=6)
@@ -19,7 +21,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--dataset",
         type=str,
-        default="science-of-finetuning/ultrachat_200k_gemma-2-2b-it-generated",
+        default=f"{HF_NAME}/ultrachat_200k_gemma-2-2b-it-generated",
     )
     parser.add_argument("--dataset-col", type=str, default="messages")
     parser.add_argument("--split", type=str, default="train")

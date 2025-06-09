@@ -14,6 +14,7 @@ import json
 from tools.deprecated.latent_analysis import latent_statistics
 from tools.utils import load_connor_crosscoder
 
+from tools.configs import HF_NAME
 
 def main():
     parser = argparse.ArgumentParser()
@@ -37,13 +38,13 @@ def main():
     parser.add_argument(
         "--base-dataset",
         type=str,
-        default="science-of-finetuning/fineweb-100m-sample-test-set",
+        default=f"{HF_NAME}/fineweb-100m-sample-test-set",
         help="Dataset to compute statistics for base model",
     )
     parser.add_argument(
         "--chat-dataset",
         type=str,
-        default="science-of-finetuning/lmsys-chat-1m-gemma-2-it-formatted",
+        default=f"{HF_NAME}/lmsys-chat-1m-gemma-2-it-formatted",
         help="Dataset to compute statistics for instruction model",
     )
     parser.add_argument(

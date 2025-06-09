@@ -3,13 +3,16 @@ import sys
 import json
 from argparse import ArgumentParser
 from collections import defaultdict
+from typing import Literal
 from pathlib import Path
 from tqdm.auto import tqdm
-from transformers import AutoModelForCausalLM, Gemma2ForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer
 import wandb
 from datasets import load_dataset
 import torch as th
 import pandas as pd
+from coolname import generate_slug
+from loguru import logger
 from dictionary_learning.dictionary import Dictionary
 
 sys.path.append(str(Path(__file__).parent.parent))
@@ -31,8 +34,8 @@ from tools.setup_to_eval import (
 from tools.configs import MODEL_CONFIGS
 from dictionary_learning.dictionary import CrossCoder
 from tools.cc_utils import load_dictionary_model, load_latent_df
-from coolname import generate_slug
-from loguru import logger
+
+from tools.configs import HF_NAME
 
 
 def compute_metrics_for_subset(
@@ -408,8 +411,8 @@ def evaluate_interventions(
             pbar.set_postfix(total_num_tokens=total_num_tokens)
         else:
             pbar.update(new_tokens)
-        if total_num_tokens >= max_num_tokens:
-            break
+            if total_num_tokens >= max_num_tokens:
+                break
     logger.info(f"Total number of tokens: {total_num_tokens}")
     return compute_result(), total_num_tokens
 
@@ -430,6 +433,7 @@ def kl_experiment(
     chat_only_indices: list[int] | None = None,
     add_base_only_latents: bool = False,
     is_sae: bool = False,
+    is_difference_sae: bool = False,
     # Evaluation parameters
     batch_size: int = 6,
     device: str = "cuda",
@@ -448,12 +452,27 @@ def kl_experiment(
     token_level_replacement: str | None = None,
     max_num_tokens: int | None = None,
     add_coolname: bool = True,
+    num_sae_latents: int | None = None,
+    sae_model: Literal["base", "chat"] | None = None,
 ) -> dict:
     """
     Main function to evaluate interventions effects.
     """
     if dictionary is None:
         name = (name or "") + "-baselines"
+    if is_sae or is_difference_sae:
+        if num_sae_latents is None:
+            raise ValueError(
+                "num_sae_latents must be provided if {} is True".format(
+                    "is_sae" if is_sae else "is_difference_sae"
+                )
+            )
+        if sae_model is None:
+            raise ValueError(
+                "sae_model must be provided if {} is True".format(
+                    "is_sae" if is_sae else "is_difference_sae"
+                )
+            )
 
     dataset = load_dataset(dataset_name, split=split)[dataset_col]
     if test:
@@ -503,6 +522,9 @@ def kl_experiment(
             dictionary,
             seeds,
             latent_df,
+            is_difference_sae=is_difference_sae,
+            num_latents=num_sae_latents,
+            sae_model=sae_model,
         )
     else:
         fn_dict, infos = arxiv_paper_half_fns(
@@ -569,24 +591,6 @@ def kl_experiment(
     return result
 
 
-# python scripts/evaluate_interventions_effects.py --dataset science-of-finetuning/lmsys-chat-1m-chat-formatted --dataset-col conversation --split validation --name lmsys-chat-1m-validation-beta-cols --columns beta_ratio_reconstruction beta_ratio_error
-
-# python scripts/evaluate_interventions_effects.py --dataset science-of-finetuning/lmsys-chat-1m-chat-formatted --dataset-col conversation --split validation --name lmsys-chat-1m-validation-others-cols --columns rank_sum "base uselessness score"
-
-
-# python scripts/evaluate_interventions_effects.py --name ultrachat-gemma-all-columns
-
-
-# python scripts/evaluate_interventions_effects.py --name ultrachat-gemma-all-new-columns --skip-target-patch --skip-vanilla --skip-patching --columns "dec_norm_diff" "lmsys_freq" "lmsys_ctrl_%" "lmsys_ctrl_freq" "lmsys_avg_act" "beta_activation_ratio" "beta_activation_chat" "beta_activation_base" "beta_error_chat" "beta_error_base"
-# python scripts/evaluate_interventions_effects.py --name ultrachat-gemma-concat-sae --df-path results/eval_crosscoder/gemma-2-2b-L13-mu5.2e-02-lr1e-04-local-shuffling-SAEloss_model_final.pt/data/feature_df.csv --chat-only-indices /workspace/data/latent_indices/gemma-2-2b-L13-mu5.2e-02-lr1e-04-local-shuffling-SAEloss/low_norm_diff_indices_2839.pt --crosscoder /workspace/julian/repositories/representation-structure-comparison/checkpoints/gemma-2-2b-L13-mu5.2e-02-lr1e-04-local-shuffling-SAEloss/model_final.pt
-
-# python scripts/evaluate_interventions_effects.py --name ultrachat-gemma-minicc --df-path results/eval_crosscoder/gemma-2-2b-L13-mu4.1e-02-lr1e-04-local-shuffling-CCloss_model_final.pt/data/feature_df.csv --crosscoder /workspace/julian/repositories/representation-structure-comparison/checkpoints/gemma-2-2b-L13-mu4.1e-02-lr1e-04-local-shuffling-CCloss/model_final.pt
-
-# python scripts/evaluate_interventions_effects.py --name ultrachat-gemma-sae --crosscoder /workspace/julian/repositories/representation-structure-comparison/checkpoints/SAE-chat-gemma-2-2b-L13-k100-lr1e-04-local-shuffling/model_final.pt --df-path /workspace/julian/repositories/representation-structure-comparison/checkpoints/SAE-chat-gemma-2-2b-L13-k100-lr1e-04-local-shuffling/SAE-chat-gemma-2-2b-L13-k100-lr1e-04-local-shuffling.csv
-
-# python scripts/evaluate_interventions_effects.py --name ultrachat-gemma-concat-sae-200M --df-path /workspace/julian/repositories/representation-structure-comparison/results/eval_crosscoder/gemma-2-2b-L13-mu5.2e-02-lr1e-04-2x100M-local-shuffling-SAELoss_model_final.pt/data/feature_df.csv --chat-only-indices /workspace/data/latent_indices/gemma-2-2b-L13-mu5.2e-02-lr1e-04-2x100M-local-shuffling-SAELoss/low_norm_diff_indices_3176.pt --crosscoder /workspace/julian/repositories/representation-structure-comparison/checkpoints/gemma-2-2b-L13-mu5.2e-02-lr1e-04-2x100M-local-shuffling-SAELoss/model_final.pt
-
-# python scripts/evaluate_interventions_effects.py --name ultrachat-gemma-batchtopk-CC --df-path /workspace/julian/repositories/representation-structure-comparison/results/eval_crosscoder/gemma-2-2b-L13-k100-lr1e-04-local-shuffling-CCLoss_model_final.pt/data/feature_df.csv --chat-only-indices /workspace/data/latent_indices/gemma-2-2b-L13-k100-lr1e-04-local-shuffling-CCLoss/low_norm_diff_indices_3176.pt --crosscoder /workspace/julian/repositories/representation-structure-comparison/checkpoints/gemma-2-2b-L13-k100-lr1e-04-local-shuffling-CCLoss/model_final.pt
 if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("--layer-to-stop", type=int, default=13)

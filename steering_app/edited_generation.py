@@ -26,7 +26,7 @@ def _generate_with_model(
 ) -> dict:
     """Helper function to generate outputs with either chat or base model."""
     if not continuations:
-        return {}
+        return dict()
 
     model_input = tokenizer.apply_chat_template(
         [conversation] * len(continuations),

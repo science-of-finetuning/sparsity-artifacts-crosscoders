@@ -116,7 +116,7 @@ class IdentityPreprocessFn(HalfStepPreprocessFn):
             else (None, chat_activations)
         )
 
-    def process_single_activation(self, activation, **kwargs):
+    def _process_single_activation(self, activation, **kwargs):
         return activation
 
 
@@ -142,6 +142,12 @@ class SwitchPreprocessFn(HalfStepPreprocessFn):
 class TestMaskPreprocessFn(IdentityPreprocessFn):
     """Test preprocessing function that randomly masks some batch elements."""
 
+    def _process_single_activation(self, activation, **kwargs):
+        mask = th.randint(0, 2, (activation.shape[0],), device=activation.device).bool()
+        if not mask.any():
+            return None
+        return activation[mask]
+
     def preprocess(self, base_activations, chat_activations, **kwargs):
         mask = th.randint(
             0, 2, (base_activations.shape[0],), device=base_activations.device
@@ -165,6 +171,8 @@ class PatchProjectionFromDiff(IdentityPreprocessFn):
         vectors_to_project: Tensor of shape (n,d) where n is the number of vectors to project the difference to.
         scale_steering_latent: Scale factor for the projection strength
     """
+
+    can_edit_single_activation = False
 
     def __init__(
         self,
@@ -226,12 +234,14 @@ class SteeringVector(IdentityPreprocessFn):
         )
         return self.continue_with_model(acts + self.vector)
 
-    def process_single_activation(self, activation, **kwargs):
+    def _process_single_activation(self, activation, **kwargs):
         return activation + self.vector
 
 
 class SteerWithCrosscoderLatent(SteeringVector):
     """Preprocessing function that steers activations using a steering vector."""
+
+    can_edit_single_activation = True
 
     def __init__(
         self,
@@ -284,6 +294,8 @@ class SteerWithCrosscoderLatent(SteeringVector):
 class CrossCoderReconstruction(IdentityPreprocessFn):
     """Preprocessing function that reconstructs activations using a CrossCoder model."""
 
+    can_edit_single_activation = False
+
     def __init__(
         self,
         crosscoder: CrossCoder,
@@ -331,6 +343,8 @@ class CrossCoderSteeringLatent(IdentityPreprocessFn):
         scale_steering_latent: Scale factor for steering magnitude
         ignore_encoder: If True, uses only decoder weights for steering without encoding
     """
+
+    can_edit_single_activation = False
 
     def __init__(
         self,
@@ -536,6 +550,9 @@ class CrossCoderOutProjection(IdentityPreprocessFn):
     def all_layers(self, act):
         return self.project_out(act)
 
+    def _process_single_activation(self, activation, **kwargs):
+        return self.project_out(activation)
+
 
 class SAEAdditiveSteering(IdentityPreprocessFn):
     """Preprocessing function that adds activations using SAE activations and decoder weights.
@@ -547,30 +564,31 @@ class SAEAdditiveSteering(IdentityPreprocessFn):
         continue_with: Which model should continue generation after steering
     """
 
+    can_edit_single_activation = False  # note: could be implemented
+
     def __init__(
         self,
         sae: Dictionary,
         steer_activations_of: Literal["base", "chat"],
-        steer_with_latents_from: Literal["base", "chat"],
         latents_to_steer: list[int] | None,
         continue_with: Literal["base", "chat"],
+        sae_model: Literal["base", "chat"],
         # monitored_latents: list[int] | None = None,
         # filter_treshold: float | None = None,
         scale_steering_latent: float = 1.0,
-        # ignore_encoder: bool = False,
         model_dtype: th.dtype = th.bfloat16,
     ):
         super().__init__(continue_with, model_dtype)
         self.sae = sae
+        self.sae_model = ensure_model(sae_model)
         self.steer_activations_of = ensure_model(steer_activations_of)
-        self.steer_with_latents_from = ensure_model(steer_with_latents_from)
         self.latents_to_steer = latents_to_steer
         self.scale_steering_latent = scale_steering_latent
 
     def preprocess(self, base_activations, chat_activations, **kwargs):
         sae_input = (
             base_activations
-            if self.steer_with_latents_from == "base"
+            if self.sae_model == "base"
             else chat_activations
         )
         if sae_input.dim() == 3:
@@ -604,6 +622,49 @@ class SAEAdditiveSteering(IdentityPreprocessFn):
         return self.continue_with_model(steered.to(self.model_dtype))
 
 
+class SAEDifferenceReconstruction(IdentityPreprocessFn):
+    """Preprocessing function that reconstructs difference activations using a difference SAE and adds to base activations."""
+
+    can_edit_single_activation = False
+
+    def __init__(
+        self,
+        sae: Dictionary,
+        sae_model: Literal["base", "chat"],
+        steer_activations_of: Literal["base", "chat"],
+        continue_with: Literal["base", "chat"],
+        model_dtype: th.dtype = th.bfloat16,
+    ):
+        super().__init__(continue_with, model_dtype)
+        self.sae_model = ensure_model(sae_model)
+        self.sae = sae
+        self.steer_activations_of = ensure_model(steer_activations_of)
+
+    def preprocess(self, base_activations, chat_activations, **kwargs):
+        # Compute activation difference
+        if self.sae_model == "chat":
+            sae_input = chat_activations - base_activations  # (b, s, d)
+        else:
+            sae_input = base_activations - chat_activations
+        b, s, d = sae_input.shape
+        sae_input = einops.rearrange(sae_input, "b s d -> (b s) d").float()
+        # Encode and decode to reconstruct difference
+        chat_minus_base_recon = self.sae(sae_input)
+        if self.sae_model == "base":
+            chat_minus_base_recon = -chat_minus_base_recon
+        chat_minus_base_recon = einops.rearrange(
+            chat_minus_base_recon, "(b s) d -> b s d", b=b
+        )
+        # Add reconstructed difference to base activations
+        if self.steer_activations_of == "base":
+            # Approximate the chat activations by adding the reconstructed difference
+            approx = base_activations + chat_minus_base_recon.to(self.model_dtype)
+        else:
+            # Approximate the base activations by subtracting the reconstructed difference
+            approx = chat_activations - chat_minus_base_recon.to(self.model_dtype)
+        return self.continue_with_model(approx)
+
+
 class BasePatchIntervention(IdentityPreprocessFn):
     """Base class for interventions that patch activations from one model to another.
 
@@ -615,6 +676,8 @@ class BasePatchIntervention(IdentityPreprocessFn):
         patch_target: Which model activations to patch ("base" or "chat")
         activation_processor: Optional preprocess function to apply to the source activations before patching. If not provided, the other model (not patch_target) will be used as the source.
     """
+
+    can_edit_single_activation = False  # note: could be implemented
 
     def __init__(
         self,

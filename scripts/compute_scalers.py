@@ -2,21 +2,20 @@
 import sys
 
 sys.path.append(".")
-import torch as th
-from typing import Callable, Union
+from typing import Literal
 from dictionary_learning import CrossCoder
 from torch.utils.data import DataLoader
-from tqdm import tqdm
 from pathlib import Path
-from dictionary_learning.cache import PairedActivationCache
-import numpy as np
 from functools import partial
-from loguru import logger
 import argparse
+import os
+
+import torch as th
+import numpy as np
+from loguru import logger
 from tools.utils import load_activation_dataset
 from tools.cc_utils import load_dictionary_model
 from dictionary_learning.dictionary import BatchTopKSAE, BatchTopKCrossCoder
-import os
 
 th.set_grad_enabled(False)
 th.set_float32_matmul_precision("highest")
@@ -27,6 +26,7 @@ from tools.latent_scaler.closed_form import (
     run_tests,
     identity_fn,
 )
+from tools.configs import DATA_ROOT
 
 
 def load_base_activation(batch, **kwargs):
@@ -35,6 +35,14 @@ def load_base_activation(batch, **kwargs):
 
 def load_chat_activation(batch, **kwargs):
     return batch[:, 1, :]
+
+
+def load_difference_activation(batch, sae_model: Literal["base", "chat"], **kwargs):
+    """Load activation difference (chat - base) or (base - chat) from difference cache"""
+    if sae_model == "chat":
+        return load_chat_activation(batch) - load_base_activation(batch)
+    else:
+        return load_base_activation(batch) - load_chat_activation(batch)
 
 
 def load_base_activation_no_bias(batch, crosscoder: CrossCoder, **kwargs):
@@ -141,11 +149,19 @@ def compute_scalers(
     shuffle_within_dataset: bool = False,
     _run_tests: bool = False,
     target_model_idx: int | None = None,
+    is_sae: bool = False,
+    is_difference_sae: bool = False,
+    sae_model: Literal["base", "chat"] | None = None,
 ) -> None:
     """
     ... (todo)
     smaller_batch_size_for_error: Beta on error can take more memory. If this is set to True, a batch size 8x times smaller is used for the beta error computation.
     """
+    is_sae = is_sae or is_difference_sae
+    if is_sae and sae_model is None:
+        raise ValueError(
+            "sae_model must be provided if is_sae is True. This is the model to use for the SAE."
+        )
     if latent_indices is not None and latent_indices_name == "all_latents":
         latent_indices_name = f"custom_indices_{len(latent_indices)}"
 
@@ -164,14 +180,21 @@ def compute_scalers(
         and not chat_activation_no_bias
     ):
         logger.info("No computations selected, running all")
-        chat_error = True
-        chat_reconstruction = True
-        base_error = True
-        base_reconstruction = True
-        base_activation = True
-        base_activation_no_bias = True
-        chat_activation = True
-        chat_activation_no_bias = True
+        if is_sae:
+            chat_activation = True
+            base_activation = True
+            if not is_difference_sae:
+                chat_activation_no_bias = True
+                base_activation_no_bias = True
+        else:
+            chat_error = True
+            chat_reconstruction = True
+            base_error = True
+            base_reconstruction = True
+            base_activation = True
+            base_activation_no_bias = True
+            chat_activation = True
+            chat_activation_no_bias = True
 
     th.manual_seed(seed)
     np.random.seed(seed)
@@ -198,7 +221,7 @@ def compute_scalers(
 
     # Load dictionary model
     print(f"Loading dictionary model from {dictionary_model}")
-    dict_model = load_dictionary_model(dictionary_model)
+    dict_model = load_dictionary_model(dictionary_model, is_sae=is_sae)
     dict_model = dict_model.to(device).to(dtype)
 
     # If crosscoder is a local path, replace with only the directory name (e.g. /path/to/crosscoder/model_final.pt -> crosscoder)
@@ -328,7 +351,13 @@ def compute_scalers(
         print(
             "BatchTopKSAE detected, using load_chat_activation as encode_activation_fn"
         )
-        encode_activation_fn = load_chat_activation
+        if is_difference_sae:
+            encode_activation_fn = partial(
+                load_difference_activation, sae_model=sae_model
+            )
+        else:
+            encode_activation_fn = load_chat_activation
+
     computations = []
     if base_activation:
         computations.append(("base_activation", load_base_activation))
@@ -437,7 +466,7 @@ if __name__ == "__main__":
         default="Butanium/gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04",
     )
     parser.add_argument(
-        "--activation-store-dir", type=Path, default="/workspace/data/activations/"
+        "--activation-store-dir", type=Path, default=DATA_ROOT / "activations/"
     )
     parser.add_argument("--dataset-split", type=str, default="train")
     parser.add_argument("--batch-size", type=int, default=128)
@@ -454,7 +483,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--results-dir",
         type=Path,
-        default="/workspace/data/results/closed_form_scalars",
+        default=DATA_ROOT / "results/closed_form_scalars",
     )
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--num-workers", type=int, default=32)
@@ -516,6 +545,9 @@ if __name__ == "__main__":
         help="Path to the max activations file. ",
     )
     parser.add_argument("--run-tests", action="store_true", help="Run tests first")
+    parser.add_argument(
+        "--is-difference-sae", action="store_true", help="Is difference SAE"
+    )
     args = parser.parse_args()
 
     # Load latent indices here if path is provided
@@ -562,4 +594,5 @@ if __name__ == "__main__":
         random_indices=args.random_indices,
         shuffle_within_dataset=args.shuffle_within_dataset,
         _run_tests=args.run_tests,
+        is_difference_sae=args.is_difference_sae,
     )

@@ -5,7 +5,7 @@ set -x
 # Define datasets and other constants
 CHAT_DATASET=science-of-finetuning/lmsys-chat-1m-chat-formatted
 FINEWEB_DATASET=science-of-finetuning/fineweb-1m-sample
-ACTIVATION_STORE_DIR=/workspace/data/activations
+ACTIVATION_STORE_DIR=$DATASTORE/activations
 BATCH_SIZE=512
 CHAT_MODEL=meta-llama/Llama-3.2-1B-Instruct
 BASE_MODEL=meta-llama/Llama-3.2-1B
@@ -77,5 +77,5 @@ COMMON_FLAGS="--dtype bfloat16 \
 --overwrite"
 
 # Run activation collection for both base and chat models
-# python scripts/collect_activations.py $COMMON_FLAGS --model $BASE_MODEL 
+python scripts/collect_activations.py $COMMON_FLAGS --model $BASE_MODEL 
 python scripts/collect_activations.py $COMMON_FLAGS --model $CHAT_MODEL
