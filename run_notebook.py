@@ -6,6 +6,7 @@ import os
 import sys
 from coolname import generate_slug
 
+
 def run_notebook(
     notebook: str,
     crosscoder: str,
@@ -21,18 +22,18 @@ def run_notebook(
     root = Path(__file__).parent
     save_path = root / "results" / notebook
     save_path.mkdir(exist_ok=True, parents=True)
-    
+
     notebook_root = root / "notebooks"
     source_notebook_path = notebook_root / f"{notebook}.ipynb"
-    
+
     exp_id = ((str(int(time())) + "_") if generate_id else "") + (
         exp_id or (generate_slug(2) if generate_id else "")
     )
-    
+
     target_notebook_path = save_path / (
         crosscoder + (f"_{exp_id}" if exp_id else "") + f"_{notebook}.ipynb"
     )
-    
+
     print(f"Saving to {target_notebook_path}")
     kwargs = {
         "exp_id": exp_id,
@@ -45,7 +46,7 @@ def run_notebook(
         "crosscoder": crosscoder,
     }
     print(f"Running {notebook} with {kwargs}")
-    
+
     try:
         print(source_notebook_path, target_notebook_path, kwargs)
         pm.execute_notebook(
@@ -69,6 +70,7 @@ def run_notebook(
         exit(1)
     print(f"Notebook succesfully executed and saved to\n{target_notebook_path}")
 
+
 if __name__ == "__main__":
     os.chdir(Path(__file__).parent)
     parser = ArgumentParser()
@@ -86,7 +88,7 @@ if __name__ == "__main__":
     parser.add_argument("--generate-id", action="store_true")
     parser.add_argument("--layer", type=int)
     args, unknown = parser.parse_known_args()
-    
+
     run_notebook(
         notebook=args.notebook,
         crosscoder=args.crosscoder,

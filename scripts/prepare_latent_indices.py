@@ -16,6 +16,7 @@ from tools.cc_utils import (
 )
 from tools.configs import DATA_ROOT
 
+
 def main():
     parser = argparse.ArgumentParser(
         description="Prepare latent indices from dataframe"
@@ -49,7 +50,7 @@ def main():
         "--low-norm-diff-sample-size",
         type=int,
         default=3176,
-        help="Number of low norm diff indices to sample"
+        help="Number of low norm diff indices to sample",
     )
     args = parser.parse_args()
 

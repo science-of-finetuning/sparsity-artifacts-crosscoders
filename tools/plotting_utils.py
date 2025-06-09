@@ -510,4 +510,3 @@ def frequency_plot(df: pd.DataFrame):
 
     plt.savefig("latent_frequency_histogram.pdf", bbox_inches="tight")
     plt.show()
-

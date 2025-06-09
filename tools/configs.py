@@ -2,7 +2,6 @@ from pathlib import Path
 import os
 
 
-
 HF_NAME = os.environ.get("HF_NAME", "science-of-finetuning")
 VERSION = "040225"
 DATA_ROOT = Path(os.environ["DATASTORE"])
@@ -54,4 +53,3 @@ MODEL_CONFIGS["meta-llama/Llama-3.2-1B"]["token_level_replacement"] = {
     128009: 827,
     128007: 827,
 }  # Llama 3.2 Base doesn't deal well with template tokens
-

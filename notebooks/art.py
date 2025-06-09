@@ -26,6 +26,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from tools.utils import load_json
 from tools.cc_utils import load_latent_df
+
 Path("results").mkdir(exist_ok=True)
 
 # %%
@@ -223,6 +224,8 @@ plt.show()
 Relative Norm Difference
 ========================
 """
+
+
 def plot_decoder_norm_diff(
     crosscoder,
     thres_error=0.3,
@@ -348,13 +351,18 @@ def plot_decoder_norm_diff(
     print(f"Saved to {save_dir / f'decoder_norm_diff_{crosscoder}.pdf'}")
     plt.show()
 
+
 figsize = (7, 2.7)
 thres_error = 0.2
 thres_reconstruction = 0.5
 crosscoder = "gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04"
-plot_decoder_norm_diff(crosscoder, thres_error, thres_reconstruction, ylim=(0, 100), figsize=figsize)
+plot_decoder_norm_diff(
+    crosscoder, thres_error, thres_reconstruction, ylim=(0, 100), figsize=figsize
+)
 crosscoder = "gemma-2-2b-L13-k100-lr1e-04-local-shuffling-CCLoss"
-plot_decoder_norm_diff(crosscoder, thres_error, thres_reconstruction, no_legend=True, figsize=figsize)
+plot_decoder_norm_diff(
+    crosscoder, thres_error, thres_reconstruction, no_legend=True, figsize=figsize
+)
 plot_decoder_norm_diff(
     "gemma-2-2b-L13-k100-lr1e-04-local-shuffling-Decoupled",
     thres_error,
@@ -446,16 +454,19 @@ names = ["Decoupled BatchTopK Crosscoder", "SAE"]
 
 for t in thresholds:
     for i, df in enumerate(dfs):
-        count = np.sum(
-            (df["beta_activation_ratio"].abs() < t)
-        )
+        count = np.sum((df["beta_activation_ratio"].abs() < t))
         counts[i].append(count)
 
 plt.figure(figsize=(9, 6))
 for name, count in zip(names, counts):
     plt.plot(thresholds, count, label=name)
 plt.xlabel(r"$\leftarrow$ more chat-specific (activation ratio threshold)")
-plt.ylabel("\# latents \nbelow \nthreshold of\nactivation ratio", rotation=0, labelpad=40, y=0.2)
+plt.ylabel(
+    "\# latents \nbelow \nthreshold of\nactivation ratio",
+    rotation=0,
+    labelpad=40,
+    y=0.2,
+)
 plt.yscale("log")
 plt.legend()
 plt.title("SAE have more chat-specific latents than crosscoders")
@@ -498,13 +509,21 @@ def plot_latents_vs_threshold(
             mask = np.ones(len(df_i), dtype=bool)
             for col in columns_to_threshold:
                 if col in df_i.columns:
-                    mask &= (df_i[col].abs() < t)
+                    mask &= df_i[col].abs() < t
                 else:
                     raise ValueError(f"Column '{col}' not found in DataFrame '{name}'")
             latents.append(np.sum(mask))
         label = label_map[name] if label_map and name in label_map else name
-        color = color_map[name] if color_map and name in color_map else default_colors[i % len(default_colors)]
-        linestyle = linestyle_map[name] if linestyle_map and name in linestyle_map else default_linestyles[i % len(default_linestyles)]
+        color = (
+            color_map[name]
+            if color_map and name in color_map
+            else default_colors[i % len(default_colors)]
+        )
+        linestyle = (
+            linestyle_map[name]
+            if linestyle_map and name in linestyle_map
+            else default_linestyles[i % len(default_linestyles)]
+        )
         plt.plot(thresholds, latents, label=label, color=color, linestyle=linestyle)
     plt.xlabel(r"Threshold $\pi$")
     plt.ylabel("Count")
@@ -513,24 +532,44 @@ def plot_latents_vs_threshold(
     plt.yscale("log")
     plt.savefig(save_path, bbox_inches="tight")
     plt.show()
+
+
 # %%
 df_dict_gemma = {
     "BatchTopK": df_topk,
     "L1": df_cc,
 }
-plot_latents_vs_threshold(df_dict_gemma, save_path="results/latents_vs_threshold_gemma.pdf")
+plot_latents_vs_threshold(
+    df_dict_gemma, save_path="results/latents_vs_threshold_gemma.pdf"
+)
 df_dict_llama = {
-    "BatchTopK": load_latent_df("Meta-Llama-3.1-8B-L16-k222-lr1e-04-local-shuffling-Crosscoder"),
-    "L1": load_latent_df("Meta-Llama-3.1-8B-L16-mu2.0e-02-lr1e-04-local-shuffling-CCLoss"),
+    "BatchTopK": load_latent_df(
+        "Meta-Llama-3.1-8B-L16-k222-lr1e-04-local-shuffling-Crosscoder"
+    ),
+    "L1": load_latent_df(
+        "Meta-Llama-3.1-8B-L16-mu2.0e-02-lr1e-04-local-shuffling-CCLoss"
+    ),
 }
-plot_latents_vs_threshold(df_dict_llama, save_path="results/latents_vs_threshold_llama.pdf")
-plot_latents_vs_threshold(df_dict_llama, columns_to_threshold=["beta_ratio_activation"], save_path="results/latents_vs_threshold_llama_activation.pdf")
+plot_latents_vs_threshold(
+    df_dict_llama, save_path="results/latents_vs_threshold_llama.pdf"
+)
+plot_latents_vs_threshold(
+    df_dict_llama,
+    columns_to_threshold=["beta_ratio_activation"],
+    save_path="results/latents_vs_threshold_llama_activation.pdf",
+)
 # %%
 df_dict_llama_2 = {
-    "BatchTopK": load_latent_df("Llama-3.2-1B-L8-k100-lr1e-04-local-shuffling-Crosscoder"),
-    "L1": load_latent_df("Llama-3.2-1B-L8-mu3.6e-02-lr1e-04-local-shuffling-CrosscoderLoss"),
+    "BatchTopK": load_latent_df(
+        "Llama-3.2-1B-L8-k100-lr1e-04-local-shuffling-Crosscoder"
+    ),
+    "L1": load_latent_df(
+        "Llama-3.2-1B-L8-mu3.6e-02-lr1e-04-local-shuffling-CrosscoderLoss"
+    ),
 }
-plot_latents_vs_threshold(df_dict_llama_2, save_path="results/latents_vs_threshold_llama_1b.pdf")
+plot_latents_vs_threshold(
+    df_dict_llama_2, save_path="results/latents_vs_threshold_llama_1b.pdf"
+)
 # %%
 import scipy.stats
 

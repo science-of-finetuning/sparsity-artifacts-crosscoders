@@ -618,7 +618,6 @@ def process_stats(
         push_latent_df(new_stats, crosscoder, confirm=False)
 
 
-
 @th.no_grad()
 def compute_latents_template_stats(
     tokenizer,
@@ -718,7 +717,9 @@ def compute_latents_template_stats(
 if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("crosscoder", type=str)
-    parser.add_argument("--latent-activation-cache-path", type=Path, default="./data/latent_activations")
+    parser.add_argument(
+        "--latent-activation-cache-path", type=Path, default="./data/latent_activations"
+    )
     parser.add_argument("--test", "-t", action="store_true")
     parser.add_argument("--use-precomputed-stats", "--skip", action="store_true")
     parser.add_argument("--name", type=str, default="")
@@ -755,4 +756,3 @@ if __name__ == "__main__":
         save_path=output_dir,
         test=args.test,
     )
-

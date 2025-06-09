@@ -18,9 +18,7 @@ def load_betas(
     )
     if not (betas_dir_path / betas_filename).exists() and "_chat_" in betas_filename:
         # legacy naming (chat -> it)
-        warn(
-            "Betas file not found, trying to load legacy naming (chat -> it)..."
-        )
+        warn("Betas file not found, trying to load legacy naming (chat -> it)...")
         betas_filename = betas_filename.replace("_chat_", "_it_")
         count_active_filename = count_active_filename.replace("_chat_", "_it_")
 

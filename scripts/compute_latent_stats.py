@@ -137,8 +137,8 @@ def main(
             latent_activation_cache = LatentActivationCache(
                 split_path, expand=True, use_sparse_tensor=use_sparse_tensor
             )
-        max_activations, frequencies, total_tokens = (
-            compute_stats_from_latent_cache(latent_activation_cache, device)
+        max_activations, frequencies, total_tokens = compute_stats_from_latent_cache(
+            latent_activation_cache, device
         )
         results[split] = {
             "max_activations": max_activations.tolist(),
@@ -161,12 +161,14 @@ def main(
             max_activations_fw, frequencies_fw, total_tokens_fw = compute_stats(
                 crosscoder_model, fw_dataset, device, batch_size, num_workers
             )
-            max_activations_lmsys, frequencies_lmsys, total_tokens_lmsys = compute_stats(
-                crosscoder_model,
-                lmsys_dataset,
-                device,
-                batch_size,
-                num_workers,
+            max_activations_lmsys, frequencies_lmsys, total_tokens_lmsys = (
+                compute_stats(
+                    crosscoder_model,
+                    lmsys_dataset,
+                    device,
+                    batch_size,
+                    num_workers,
+                )
             )
             results[split] = {
                 "max_activations_fw": max_activations_fw.tolist(),
@@ -219,7 +221,8 @@ def main(
                 results["validation"]["max_activations_lmsys"],
             )
             df["freq_val"] = (
-                results["validation"]["frequencies_fw"] * results["validation"]["total_tokens_fw"]
+                results["validation"]["frequencies_fw"]
+                * results["validation"]["total_tokens_fw"]
                 + results["validation"]["frequencies_lmsys"]
                 * results["validation"]["total_tokens_lmsys"]
             ) / (
@@ -262,7 +265,7 @@ if __name__ == "__main__":
         help="Use sparse tensor representation for latent activations",
     )
     args = parser.parse_args()
-    
+
     main(
         crosscoder=args.crosscoder,
         activation_cache_path=args.activation_cache_path,

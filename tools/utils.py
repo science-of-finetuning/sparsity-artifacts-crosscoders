@@ -11,7 +11,6 @@ from tools.plotting_utils import *
 from tools.tokenization_utils import *
 
 
-
 def apply_masks(values: th.Tensor, masks: List[th.Tensor]) -> th.Tensor:
     """
     Apply the masks to the indices.
@@ -194,4 +193,3 @@ def load_hf_model(model_name: str, device: str = "auto", **kwargs):
         kwargs["attn_implementation"] = "eager"
         kwargs["torch_dtype"] = th.bfloat16
     return AutoModelForCausalLM.from_pretrained(model_name, device_map="auto", **kwargs)
-

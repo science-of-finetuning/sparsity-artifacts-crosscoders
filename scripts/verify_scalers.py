@@ -326,7 +326,8 @@ def main():
     parser.add_argument(
         "--latent-indices-path",
         type=Path,
-        default=DATA_ROOT / "latent_indices/Butanium_gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04/chat_only_indices.pt",
+        default=DATA_ROOT
+        / "latent_indices/Butanium_gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04/chat_only_indices.pt",
     )
     parser.add_argument("--base-model", type=str, default="google/gemma-2-2b")
     parser.add_argument("--chat-model", type=str, default="google/gemma-2-2b-it")

@@ -26,6 +26,7 @@ from tools.utils import load_activation_dataset
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
+
 def get_local_shuffled_indices(num_samples_per_dataset, shard_size):
     num_shards_per_dataset = num_samples_per_dataset // shard_size + (
         1 if num_samples_per_dataset % shard_size != 0 else 0
@@ -95,7 +96,7 @@ if __name__ == "__main__":
         "--type", type=str, default="relu", choices=["batch-top-k", "relu"]
     )
     parser.add_argument("--surname", type=str, default=None)
-    parser.add_argument("--auxk-alpha", type=float, default=1/32)
+    parser.add_argument("--auxk-alpha", type=float, default=1 / 32)
     args = parser.parse_args()
 
     print(f"Training args: {args}")

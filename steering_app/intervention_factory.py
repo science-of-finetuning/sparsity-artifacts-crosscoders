@@ -89,7 +89,9 @@ def create_intervention(
         print(f"Creating SAE intervention with name {params['sae']}")
         sae_name = params.pop("sae")
         if sae_name not in model_dict:
-            model_dict[sae_name] = load_dictionary_model(sae_name, is_sae=True).to(cc_device)
+            model_dict[sae_name] = load_dictionary_model(sae_name, is_sae=True).to(
+                cc_device
+            )
         sae = model_dict[sae_name]
 
     # Create the intervention based on type

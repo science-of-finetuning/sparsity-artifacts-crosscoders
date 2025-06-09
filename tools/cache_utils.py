@@ -4,6 +4,7 @@ from pathlib import Path
 from tqdm.auto import tqdm
 from tools.configs import DATA_ROOT
 
+
 class DifferenceCache:
     def __init__(self, cache_1: ActivationCache, cache_2: ActivationCache):
         self.activation_cache_1 = cache_1

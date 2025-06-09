@@ -384,15 +384,15 @@ def intervention_ui(sidebar):
             )
 
             sae_model = st.selectbox(
-                "sae_model", 
+                "sae_model",
                 ["base", "chat"],
-                help="Which model's difference to use for the SAE (chat means chat-base, base means base-chat)"
+                help="Which model's difference to use for the SAE (chat means chat-base, base means base-chat)",
             )
-            
+
             steer_activations_of = st.selectbox(
-                "steer_activations_of", 
+                "steer_activations_of",
                 ["base", "chat"],
-                help="Which model's activations to modify"
+                help="Which model's activations to modify",
             )
 
             intervention_params = {

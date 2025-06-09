@@ -483,7 +483,9 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("crosscoder", type=str)
-    parser.add_argument("--latent-activation-cache-path", type=Path, default="./data/latent_activations")
+    parser.add_argument(
+        "--latent-activation-cache-path", type=Path, default="./data/latent_activations"
+    )
     parser.add_argument("--bos-token-id", type=int, default=2)
     parser.add_argument("--n", type=int, default=100)
     parser.add_argument("--min-threshold", type=float, default=1e-4)

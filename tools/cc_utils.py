@@ -572,9 +572,7 @@ def online_dashboard(
         crosscoder_device = "cuda:0" if th.cuda.is_available() else "cpu"
     coder = coder.to(crosscoder_device)
     if is_sae or is_sae_diff:
-        coder = SAEAsCrosscoder(
-            coder, is_sae_diff=is_sae_diff, model_idx=sae_model_idx
-        )
+        coder = SAEAsCrosscoder(coder, is_sae_diff=is_sae_diff, model_idx=sae_model_idx)
     if max_acts is None:
         df = _latent_df(crosscoder)
         max_acts_cols = ["max_act", "lmsys_max_act"]
