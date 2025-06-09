@@ -64,45 +64,53 @@ def setup_cache(args, fineweb_cache, lmsys_cache):
     elif args.target == "chat":
         fineweb_cache = fineweb_cache.activation_cache_2
         lmsys_cache = lmsys_cache.activation_cache_2
-    elif args.target == "difference":
-        fineweb_cache = DifferenceCache(
+    elif args.target == "difference_bc":
+        fineweb_cache = DifferenceCache(    
             fineweb_cache.activation_cache_1, fineweb_cache.activation_cache_2
         )
         lmsys_cache = DifferenceCache(
             lmsys_cache.activation_cache_1, lmsys_cache.activation_cache_2
+        )
+    elif args.target == "difference_cb":
+        fineweb_cache = DifferenceCache(
+            fineweb_cache.activation_cache_2, fineweb_cache.activation_cache_1
+        )
+        lmsys_cache = DifferenceCache(
+            lmsys_cache.activation_cache_2, lmsys_cache.activation_cache_1
         )
     return fineweb_cache, lmsys_cache
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--activation-store-dir", type=str, default="activations")
-    parser.add_argument("--base-model", type=str, default="google/gemma-2-2b")
-    parser.add_argument("--chat-model", type=str, default="google/gemma-2-2b-it")
-    parser.add_argument("--layer", type=int, default=13)
-    parser.add_argument("--wandb-entity", type=str, default="jkminder")
-    parser.add_argument("--disable-wandb", action="store_true")
-    parser.add_argument("--expansion-factor", type=int, default=32)
-    parser.add_argument("--batch-size", type=int, default=2048)
-    parser.add_argument("--workers", type=int, default=16)
-    parser.add_argument("--k", type=int, default=50)
-    parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--max-steps", type=int, default=None)
-    parser.add_argument("--validate-every-n-steps", type=int, default=10000)
-    parser.add_argument("--run-name", type=str, default=None)
-    parser.add_argument("--epochs", type=int, default=1)
-    parser.add_argument("--lr", type=float, default=1e-3)
-    parser.add_argument("--num-samples", type=int, default=100_000_000)
-    parser.add_argument("--num-validation-samples", type=int, default=2_000_000)
-    parser.add_argument("--text-column", type=str, default="text")
-    parser.add_argument("--no-train-shuffle", action="store_true")
-    parser.add_argument("--local-shuffling", action="store_true")
+    parser.add_argument("--activation-store-dir", type=str, default="activations", help="Directory containing stored activations")
+    parser.add_argument("--base-model", type=str, default="google/gemma-2-2b", help="Base model hf name")
+    parser.add_argument("--chat-model", type=str, default="google/gemma-2-2b-it", help="Chat model hf name")
+    parser.add_argument("--layer", type=int, default=13, help="Layer to train SAE on")
+    parser.add_argument("--wandb-entity", type=str, default="jkminder", help="Weights & Biases entity name")
+    parser.add_argument("--disable-wandb", action="store_true", help="Disable Weights & Biases logging")
+    parser.add_argument("--expansion-factor", type=int, default=32, help="SAE expansion factor")
+    parser.add_argument("--batch-size", type=int, default=2048, help="Training batch size")
+    parser.add_argument("--workers", type=int, default=16, help="Number of data loader workers")
+    parser.add_argument("--k", type=int, default=50, help="Top-k sparsity parameter")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed")
+    parser.add_argument("--max-steps", type=int, default=None, help="Maximum number of training steps")
+    parser.add_argument("--validate-every-n-steps", type=int, default=10000, help="Validation frequency in steps")
+    parser.add_argument("--run-name", type=str, default=None, help="Custom run name for logging")
+    parser.add_argument("--epochs", type=int, default=1, help="Number of training epochs")
+    parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate")
+    parser.add_argument("--num-samples", type=int, default=100_000_000, help="Total number of training samples")
+    parser.add_argument("--num-validation-samples", type=int, default=2_000_000, help="Number of validation samples")
+    parser.add_argument("--text-column", type=str, default="text", help="Text column name for lmsys dataset")
+    parser.add_argument("--no-train-shuffle", action="store_true", help="Disable training data shuffling")
+    parser.add_argument("--local-shuffling", action="store_true", help="Use local shuffling (shuffle within each shard rather than over the entire dataset) for faster cache loading")
     parser.add_argument(
         "--target",
         default="chat",
-        choices=["chat", "base", "difference"],
+        choices=["chat", "base", "difference_bc", "difference_cb"],
         required=True,
-    )
+        help="Target to train the SAE on. 'chat': train on chat model activations, 'base': train on base model activations, 'difference_bc': train on (base - chat) activation differences, 'difference_cb': train on (chat - base) activation differences"
+    )   
 
     args = parser.parse_args()
 
@@ -144,7 +152,7 @@ if __name__ == "__main__":
             fineweb_cache, th.arange(0, num_samples_per_dataset)
         )
         single_dataset = True
-    elif args.target == "chat" or args.target == "difference":
+    elif args.target == "chat" or "difference" in args.target:
         num_samples_per_dataset = min(args.num_samples, len(lmsys_cache))
         train_dataset = th.utils.data.Subset(
             lmsys_cache, th.arange(0, num_samples_per_dataset)
@@ -214,7 +222,7 @@ if __name__ == "__main__":
     fineweb_cache_val, lmsys_cache_val = setup_cache(
         args, fineweb_cache_val, lmsys_cache_val
     )
-    if args.target == "difference":
+    if "difference" in args.target:
         validation_dataset = th.utils.data.Subset(
             lmsys_cache_val, th.arange(0, args.num_validation_samples)
         )
