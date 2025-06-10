@@ -489,10 +489,9 @@ def kl_experiment(
 
     # Generate unique run name
     run_name = (
-        str(int(time.time()))
-        + "_"
-        + name
+        name
         + (("_" + generate_slug(2)) if add_coolname else "")
+        + ("_" + str(int(time.time())))
     )
 
     # Initialize wandb
@@ -547,6 +546,13 @@ def kl_experiment(
             "dictionary_name": dictionary_name,
             "model_name": model_name,
             "max_num_tokens": max_num_tokens,
+            "run_name": run_name,
+            "token_level_replacement": token_level_replacement,
+            "add_base_only_latents": add_base_only_latents,
+            "is_difference_sae": is_difference_sae,
+            "sae_model": sae_model,
+            "num_sae_latents": num_sae_latents,
+            
         },
     }
     with open(run_save_path / "metadata.json", "w") as f:
