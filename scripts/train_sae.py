@@ -295,7 +295,7 @@ if __name__ == "__main__":
         )
 
     name = (
-        f"SAE-{args.target}-{args.base_model.split('/')[-1]}-L{args.layer}-k{args.k}-lr{args.lr:.0e}"
+        f"SAE-{args.target}-{args.base_model.split('/')[-1]}-L{args.layer}-k{args.k}-x{args.expansion_factor}-lr{args.lr:.0e}"
         + (f"-{args.run_name}" if args.run_name is not None else "")
         + (f"-local-shuffling" if args.local_shuffling else "")
     )

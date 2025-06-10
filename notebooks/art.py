@@ -444,13 +444,14 @@ df_topk_decoupled = load_latent_df(
     "gemma-2-2b-L13-k100-lr1e-04-local-shuffling-Decoupled"
 )
 sae_df = load_latent_df("SAE-chat-gemma-2-2b-L13-k100-lr1e-04-local-shuffling")
+sae_diff_df = load_latent_df("SAE-difference-gemma-2-2b-L13-k100-lr1e-04-local-shuffling")
 
 green = "limegreen"
 
 thresholds = np.linspace(0, 1, 100)
-dfs = [df_topk_decoupled, sae_df]
+dfs = [df_topk_decoupled, sae_df, sae_diff_df]
 counts = [[] for _ in range(len(dfs))]
-names = ["Decoupled BatchTopK Crosscoder", "SAE"]
+names = ["BatchTopK Crosscoder", "SAE", "SAE-diff"]
 
 for t in thresholds:
     for i, df in enumerate(dfs):

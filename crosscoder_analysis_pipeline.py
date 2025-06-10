@@ -376,13 +376,13 @@ if __name__ == "__main__":
                 df[df["lmsys_ctrl_%"] > 0.5].query("tag == 'Chat only'"),
                 args.results_dir / args.dictionary,
             )
+
+    # KL experiment for dictionary and difference SAE
+    if args.run_kl_experiment:
         if dictionary is None:
             dictionary = load_dictionary_model(
                 args.dictionary, is_sae=args.is_sae or args.is_difference_sae
             ).to(auto_device())
-
-    # KL experiment for dictionary and difference SAE
-    if args.run_kl_experiment:
         base_model = load_hf_model(args.base_model, torch_dtype=th.bfloat16)
         chat_model = load_hf_model(args.chat_model, torch_dtype=th.bfloat16)
         if args.base_model in MODEL_CONFIGS and not args.skip_token_level_replacement:
