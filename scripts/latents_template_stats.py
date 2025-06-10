@@ -639,7 +639,7 @@ def compute_latents_template_stats(
     num_tokens = 0
     max_num_tokens = max_num_tokens if not test else 100_000
     for i in range(len(latent_activation_cache)):
-        if tokenizer.start_of_turn_token in latent_activation_cache.get_sequence(i)[:2]:
+        if tokenizer.start_of_turn_token_id in latent_activation_cache.get_sequence(i)[:2]:
             latent_activation_cache.offset = latent_activation_cache.offset + i
             break
     print(f"Using offset {latent_activation_cache.offset}")

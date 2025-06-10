@@ -3,6 +3,7 @@ import warnings
 import torch as th
 import re
 
+from loguru import logger
 from transformers import AutoTokenizer
 
 
@@ -16,14 +17,17 @@ class IncompleteTokenizerProxy:
                 "Tokenizer was not patched using tools.tokenization_utils.patch_tokenizer with a control template, so can't be used to compute a control mask"
             )
         elif (
-            name == "start_of_turn_token" and self.tokenizer.start_of_turn_token is None
+            name
+            in [
+                "start_of_turn_token",
+                "end_of_turn_token",
+                "start_of_turn_token_id",
+                "end_of_turn_token_id",
+            ]
+            and getattr(self.tokenizer, name) is None
         ):
             raise AttributeError(
-                "Tokenizer was not patched using tools.tokenization_utils.patch_tokenizer with a start of turn token, so can't be used to compute a start of turn mask"
-            )
-        elif name == "end_of_turn_token" and self.tokenizer.end_of_turn_token is None:
-            raise AttributeError(
-                "Tokenizer was not patched using tools.tokenization_utils.patch_tokenizer with an end of turn token, so can't be used to compute an end of turn mask"
+                f"Tokenizer was not patched using tools.tokenization_utils.patch_tokenizer with a {name}."
             )
         return getattr(self.tokenizer, name)
 
@@ -91,11 +95,13 @@ def patch_tokenizer(
     chat_template: str = None,
     end_of_turn_token: int = None,
     start_of_turn_token: int = None,
+    pad_token: str = None,
 ):
     if "google/gemma-2" in model_name:
         tokenizer.chat_template = GEMMA_CHAT_TEMPLATE
         tokenizer.ctrl_template = GEMMA_CTRL_TEMPLATE
         tokenizer.start_of_turn_token = GEMMA_START_OF_TURN_TOKEN
+
         tokenizer.end_of_turn_token = GEMMA_END_OF_TURN_TOKEN
         return tokenizer
     elif (
@@ -106,17 +112,28 @@ def patch_tokenizer(
             chat_template = LLAMA3_1_CHAT_TEMPLATE
         if ctrl_template is None:
             ctrl_template = LLAMA3_1_CTRL_TEMPLATE
+        if end_of_turn_token is None:
+            end_of_turn_token = "<|eot_id|>"
+        if start_of_turn_token is None:
+            start_of_turn_token = "<|start_header_id|>"
+        if pad_token is None:
+            pad_token = "<|end_of_text|>"
+
     if tokenizer.pad_token is None:
-        tokenizer.pad_token = (
-            tokenizer.eos_token
-            if tokenizer.eos_token is not None
-            else tokenizer.bos_token
-        )
-        tokenizer.pad_token_id = (
-            tokenizer.eos_token_id
-            if tokenizer.eos_token is not None
-            else tokenizer.bos_token_id
-        )
+        tokenizer.pad_token = pad_token or tokenizer.eos_token or tokenizer.bos_token
+        if pad_token is not None:
+            pad_token_id = tokenizer.encode(pad_token, add_special_tokens=False)
+            if len(pad_token_id) != 1:
+                raise ValueError(f"Pad token must be a single token: {pad_token_id}")
+            tokenizer.pad_token_id = pad_token_id[0]
+        else:
+            tokenizer.pad_token_id = (
+                tokenizer.eos_token_id
+                if tokenizer.eos_token is not None
+                else tokenizer.bos_token_id
+            )
+        if tokenizer.pad_token_id is None:
+            raise ValueError("Pad token couldn't be set automatically")
     use_proxy = False
     if chat_template is not None:
         tokenizer.chat_template = chat_template
@@ -144,12 +161,25 @@ def patch_tokenizer(
             "No end of turn token provided, you won't be able to use tokenizer.end_of_turn_token"
         )
         use_proxy = True
+        tokenizer.end_of_turn_token_id = None
+    else:
+        id = tokenizer.encode(end_of_turn_token, add_special_tokens=False)
+        if len(id) != 1:
+            raise ValueError(f"end of turn token must be a single token: {id}")
+        tokenizer.end_of_turn_token_id = id[0]
     tokenizer.start_of_turn_token = start_of_turn_token
     if start_of_turn_token is None:
         warnings.warn(
             "No start of turn token provided, you won't be able to use tokenizer.start_of_turn_token"
         )
         use_proxy = True
+        tokenizer.start_of_turn_token_id = None
+    else:
+        id = tokenizer.encode(start_of_turn_token, add_special_tokens=False)
+        if len(id) != 1:
+            raise ValueError(f"start of turn token must be a single token: {id}")
+        tokenizer.start_of_turn_token_id = id[0]
+
     if use_proxy:
         tokenizer = IncompleteTokenizerProxy(tokenizer)
     return tokenizer

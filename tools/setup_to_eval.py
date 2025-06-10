@@ -535,10 +535,11 @@ def arxiv_paper_half_fns(
                 continue_with="chat",
                 latents_to_steer=latents,
             )
+    full_df["beta_activation_ratio_abs"] = full_df["beta_activation_ratio"].abs()
     for column, threshold, take_below in [
         ("dec_norm_diff", 0.3, True),
-        ("beta_activation_ratio", 0.6, True),
-        ("beta_activation_ratio", 0.3, True),
+        ("beta_activation_ratio_abs", 0.6, True),
+        ("beta_activation_ratio_abs", 0.3, True),
     ]:
         fn, info = threshold_half_fns(
             full_df,
