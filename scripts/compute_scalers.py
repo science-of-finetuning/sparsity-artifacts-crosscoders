@@ -183,9 +183,6 @@ def compute_scalers(
         if is_sae:
             chat_activation = True
             base_activation = True
-            if not is_difference_sae:
-                chat_activation_no_bias = True
-                base_activation_no_bias = True
         else:
             chat_error = True
             chat_reconstruction = True
