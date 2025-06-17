@@ -1,11 +1,15 @@
 from pathlib import Path
 import os
-
+from loguru import logger
 
 HF_NAME = os.environ.get("HF_NAME", "science-of-finetuning")
 VERSION = "040225"
-DATA_ROOT = Path(os.environ["DATASTORE"])
 REPO_ROOT = Path(__file__).resolve().parent.parent
+DATA_ROOT = (
+    Path(os.environ["DATASTORE"]) if "DATASTORE" in os.environ else REPO_ROOT / "data"
+)
+if "DATASTORE" not in os.environ:
+    logger.info(f"DATASTORE not in environment variables, using {DATA_ROOT}")
 PLOTS = DATA_ROOT / "plots"
 
 MODEL_CONFIGS = {
