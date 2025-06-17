@@ -36,7 +36,6 @@ MODEL_CONFIGS = {
         "text_column": "text_llama3",
         "attn_implementation": None,
         "token_level_replacement": None,
-        "token_level_replacement": None,
     },
 }
 MODEL_CONFIGS["google/gemma-2-2b-it"] = MODEL_CONFIGS["google/gemma-2-2b"]

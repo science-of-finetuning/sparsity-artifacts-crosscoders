@@ -26,12 +26,12 @@ def load_activation_dataset(
     activation_store_dir: Path,
     base_model: str = "gemma-2-2b",
     instruct_model: str = "gemma-2-2b-it",
-    lmsys_subfolder: str = None,
-    fineweb_subfolder: str = None,
+    lmsys_subfolder: Path | None = None,
+    fineweb_subfolder: Path | None = None,
     layer: int = 13,
     split="validation",
-    lmsys_split: str = None,
-    fineweb_split: str = None,
+    lmsys_split: str | None = None,
+    fineweb_split: str | None = None,
     lmsys_name: str = "lmsys-chat-1m-chat-formatted",
     fineweb_name: str = "fineweb-1m-sample",
 ):
@@ -148,7 +148,7 @@ def mask_k_first_ones_vec(bool_tensor, k):
 
 def load_lmsys_formatted(split: str):
     dataset = load_dataset(
-        f"{HF_NAME}/lmsys-chat-1m-chat-formatted",
+        "science-of-finetuning/lmsys-chat-1m-chat-formatted",
         split=split,
     )
     return dataset

@@ -23,11 +23,10 @@ from tiny_dashboard import OfflineFeatureCentricDashboard
 from tiny_dashboard.dashboard_implementations import CrosscoderOnlineFeatureDashboard
 from .configs import REPO_ROOT
 
-sys.path.append(REPO_ROOT)
+sys.path.append(str(REPO_ROOT))
 
 from tools.configs import HF_NAME
 
-dfs = defaultdict(lambda: None)
 df_hf_repo_legacy = {
     "l13_crosscoder": "science-of-finetuning/max-activating-examples-gemma-2-2b-l13-mu4.1e-02-lr1e-04",
     "Butanium/gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04": "science-of-finetuning/max-activating-examples-gemma-2-2b-l13-mu4.1e-02-lr1e-04",
@@ -72,7 +71,7 @@ def load_latent_df(crosscoder_or_path, author=HF_NAME):
         # Local model
         df_path = Path(crosscoder_or_path)
     else:
-        repo_id = stats_repo_id(crosscoder_or_path)
+        repo_id = stats_repo_id(crosscoder_or_path, author=author)
         if not repo_exists(repo_id=repo_id, repo_type="dataset"):
             raise ValueError(
                 f"Repository {repo_id} does not exist, can't load latent_df"
@@ -300,24 +299,16 @@ def push_dictionary_model(model_path: Path, author=HF_NAME):
     return repo_id
 
 
-def _latent_df(crosscoder=None):
-    if crosscoder is None:
-        crosscoder = "l13_crosscoder"
-    if dfs[crosscoder] is None:
-        dfs[crosscoder] = load_latent_df(crosscoder)
-    return dfs[crosscoder]
-
-
 def base_only_latent_indices(crosscoder=None):
     """Return the indices of the base only latents of the given crosscoder."""
-    df = _latent_df(crosscoder)
+    df = load_latent_df(crosscoder)
     # filter for tag = Base only
     return th.tensor(df[df["tag"] == "Base only"].index.tolist())
 
 
 def chat_only_latent_indices(crosscoder=None):
     """Return the indices of the chat only latents of the given crosscoder."""
-    df = _latent_df(crosscoder)
+    df = load_latent_df(crosscoder)
     # filter for tag = Chat only
     return th.tensor(
         df[(df["tag"] == "Chat only") | (df["tag"] == "IT only")].index.tolist()
@@ -326,7 +317,7 @@ def chat_only_latent_indices(crosscoder=None):
 
 def shared_latent_indices(crosscoder=None):
     """Return the indices of the shared latents of the given crosscoder."""
-    df = _latent_df(crosscoder)
+    df = load_latent_df(crosscoder)
     # filter for tag = Shared
     return th.tensor(df[df["tag"] == "Shared"].index.tolist())
 
@@ -342,7 +333,7 @@ class CCLatent:  # pylint: disable=E1101
 
     def __init__(self, id_: int, crosscoder=None):
         self.id = id_
-        self.row = _latent_df(crosscoder).loc[id_]
+        self.row = load_latent_df(crosscoder).loc[id_]
         self.stats = self.row.to_dict()
         self.dead = False
         for k, v in self.stats.items():
@@ -555,10 +546,12 @@ def online_dashboard(
     crosscoder_device="auto",
     base_device="auto",
     chat_device="auto",
+    base_model="google/gemma-2-2b",
+    chat_model="google/gemma-2-2b-it",
     torch_dtype=th.bfloat16,
     is_sae=False,
     is_sae_diff=False,
-    sae_model_idx: int = 1,
+    sae_model: Literal["chat", "base"] = "chat",
 ):
     """
     Instantiate an online dashboard for crosscoder latent analysis.
@@ -567,6 +560,13 @@ def online_dashboard(
         crosscoder: the crosscoder to use
         max_acts: a dictionary of max activations for each latent. If None, will be loaded from the latent_df of the crosscoder.
     """
+    if is_sae or is_sae_diff:
+        if sae_model == "chat":
+            sae_model_idx = 1
+        elif sae_model == "base":
+            sae_model_idx = 0
+        else:
+            raise ValueError(f"Invalid sae_model: {sae_model}")
     coder = load_dictionary_model(crosscoder, is_sae=is_sae or is_sae_diff)
     if crosscoder_device == "auto":
         crosscoder_device = "cuda:0" if th.cuda.is_available() else "cpu"
@@ -574,22 +574,22 @@ def online_dashboard(
     if is_sae or is_sae_diff:
         coder = SAEAsCrosscoder(coder, is_sae_diff=is_sae_diff, model_idx=sae_model_idx)
     if max_acts is None:
-        df = _latent_df(crosscoder)
-        max_acts_cols = ["max_act", "lmsys_max_act"]
+        df = load_latent_df(crosscoder)
+        max_acts_cols = ["max_act", "lmsys_max_act", "max_act_val"]
         for col in max_acts_cols:
             if col in df.columns:
                 max_acts = df[col].dropna().to_dict()
                 break
     base_model = load_model(
-        "google/gemma-2-2b",
+        base_model,
         torch_dtype=torch_dtype,
-        attn_implementation="eager",
+        attn_implementation="eager" if "gemma" in base_model else None,
         device_map=base_device,
     )
     chat_model = load_model(
-        "google/gemma-2-2b-it",
+        chat_model,
         torch_dtype=torch_dtype,
-        attn_implementation="eager",
+        attn_implementation="eager" if "gemma" in chat_model else None,
         device_map=chat_device,
     )
     return CrosscoderOnlineFeatureDashboard(
