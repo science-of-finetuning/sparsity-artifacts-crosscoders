@@ -1,4 +1,5 @@
 # %%
+
 from dotenv import load_dotenv
 
 load_dotenv("./.env")
@@ -99,125 +100,6 @@ lmsys_buckets = np.array(lmsys_buckets)
 # merged buckets
 merged_buckets = fw_buckets + lmsys_buckets
 plot_twin_activation_divergence(merged_buckets, "merged", False)
-# %%
-"""
-========================
-Relative Norm Difference (deprecated)
-========================
-"""
-
-# dec_df = load_latent_df()
-dec_df = load_latent_df(
-    "gemma-2-2b-L13-k100-lr1e-04-local-shuffling-CCLoss"
-)  # pd.read_csv("/workspace/julian/repositories/representation-structure-comparison/results/eval_crosscoder/gemma-2-2b-L13-mu5.2e-02-lr1e-04-2x100M-local-shuffling-SAELoss/data/feature_df.csv")
-if "dead" not in dec_df.columns:
-    print("no dead column")
-    dec_df["dead"] = False
-green = "limegreen"
-dec_ratios = dec_df["dec_norm_diff"][dec_df["dead"] == False]
-ratio_error_values = dec_df["beta_ratio_error"][dec_df["dead"] == False]
-ratio_reconstruction_values = dec_df["beta_ratio_reconstruction"][
-    dec_df["dead"] == False
-]
-values = 1 - dec_ratios
-plt.figure(figsize=(6, 4.0))
-hist, bins, _ = plt.hist(values, bins=100, color="lightgray", label="Other", log=True)
-
-# Color specific regions
-mask_center = (bins[:-1] >= 0.4) & (bins[:-1] < 0.6)
-mask_left = (bins[:-1] >= 0.9) & (bins[:-1] <= 1.0)
-mask_right = (bins[:-1] >= 0.0) & (bins[:-1] < 0.1)
-
-plt.hist(values, bins=bins, color="lightgray", log=True)  # Base gray histogram
-plt.hist(
-    values[((values >= 0.4) & (values < 0.6))],
-    bins=bins,
-    color="C1",
-    label="Shared",
-    log=True,
-)
-plt.hist(values[((values >= 0.9))], bins=bins, color="C0", label="Chat-only", log=True)
-# Define a range of thresholds with increasingly bright blue colors
-thresholds = [0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1, 0.05]
-blues = [
-    "#000066",
-    "#0000AA",
-    "#0000DD",
-    "#3333FF",
-    "#6666FF",
-    "#9999FF",
-    "#CCCCFF",
-    "#E6E6FF",
-    "#F2F2FF",
-    "#FCFCFF",
-]  # Dark to bright blue
-
-for i, thres in enumerate(thresholds):
-    plt.hist(
-        values[
-            (
-                (values >= 0.9)
-                & (ratio_error_values < thres)
-                & (ratio_reconstruction_values < thres)
-            )
-        ],
-        bins=bins,
-        color=blues[i],
-        label=f"Chat-only (thres={thres})",
-        log=True,
-    )
-
-plt.hist(values[(values <= 0.1)], bins=bins, color=green, label="Base-only", log=True)
-
-# Update yticks for log scale
-plt.yticks(
-    [1, 10, 100, 1000, 4000], ["$10^0$", "$10^1$", "$10^2$", "$10^3$", r"$4\times10^3$"]
-)
-
-# Remove the original xticks call
-# plt.xticks([0, 0.5, 1]), #["0\n(Base only)", "0.5\n(Shared)", "1\n(Chat only)"])
-plt.xticks([0, 0.1, 0.4, 0.5, 0.6, 0.9, 1])
-# # Get current axis and tick positions
-ax = plt.gca()
-# ticks = ax.get_xticks()
-
-# # Create custom text annotations with different colors
-# for tick, label in zip(ticks, ["0", "0.5", "1"]):
-#     # Add value in black
-#     ax.text(tick, -0.05, label,
-#             color='black',
-#             ha='center',
-#             va='top',
-#             transform=ax.get_xaxis_transform())
-
-# Add colored descriptions below
-# ax.text(0.05, -0.09, "(Base only)",
-#         color='C2', ha='center', va='top',
-#         transform=ax.get_xaxis_transform())
-# ax.text(0.5, -0.09, "(Shared)",
-#         color='C1', ha='center', va='top',
-#         transform=ax.get_xaxis_transform())
-# ax.text(0.95, -0.09, "(Chat only)",
-#         color='C0', ha='center', va='top',
-#         transform=ax.get_xaxis_transform())
-# Add vertical lines at key thresholds
-plt.axvline(x=0.1, color="green", linestyle="--", alpha=0.5)
-plt.axvline(x=0.4, color="C1", linestyle="--", alpha=0.5)
-plt.axvline(x=0.6, color="C1", linestyle="--", alpha=0.5)
-plt.axvline(x=0.9, color="C0", linestyle="--", alpha=0.5)
-plt.xlabel(
-    "Relative Norm Difference",
-)  # labelpad=23)
-plt.ylabel("Latents")
-plt.xlim(0, 1)
-# plt.legend(loc="upper left")
-
-plt.tight_layout()
-plt.savefig(Path("results") / "decoder_norm_diff.pdf", bbox_inches="tight")
-
-plt.show()
-
-
 # %%
 """
 ========================
@@ -457,6 +339,12 @@ for t in thresholds:
     for i, df in enumerate(dfs):
         count = np.sum((df["beta_activation_ratio"].abs() < t))
         counts[i].append(count)
+for t in [0.3, 0.6]:
+    print(f"Threshold: {t}")
+    for i, df in enumerate(dfs):
+        count = np.sum((df["beta_activation_ratio"].abs() < t))
+        print(f"{names[i]}: {count}")
+    print("-" * 10 + "\n")
 
 plt.figure(figsize=(9, 6))
 for name, count in zip(names, counts):
@@ -1549,3 +1437,124 @@ fig = plot_kl_both_models(
 # No text labels and no legend
 # fig = plot_kl_both_models(data_l1, data_batchtopk, text_mode="none", show_legend=False,
 #  output_file="results/first_k_kl_instruct_both_models_no_text_no_legend.pdf")
+
+
+# %%
+"""
+========================
+Relative Norm Difference (deprecated)
+========================
+"""
+
+# dec_df = load_latent_df()
+dec_df = load_latent_df(
+    "gemma-2-2b-L13-k100-lr1e-04-local-shuffling-CCLoss"
+)  # pd.read_csv("/workspace/julian/repositories/representation-structure-comparison/results/eval_crosscoder/gemma-2-2b-L13-mu5.2e-02-lr1e-04-2x100M-local-shuffling-SAELoss/data/feature_df.csv")
+if "dead" not in dec_df.columns:
+    print("no dead column")
+    dec_df["dead"] = False
+green = "limegreen"
+dec_ratios = dec_df["dec_norm_diff"][dec_df["dead"] == False]
+ratio_error_values = dec_df["beta_ratio_error"][dec_df["dead"] == False]
+ratio_reconstruction_values = dec_df["beta_ratio_reconstruction"][
+    dec_df["dead"] == False
+]
+values = 1 - dec_ratios
+plt.figure(figsize=(6, 4.0))
+hist, bins, _ = plt.hist(values, bins=100, color="lightgray", label="Other", log=True)
+
+# Color specific regions
+mask_center = (bins[:-1] >= 0.4) & (bins[:-1] < 0.6)
+mask_left = (bins[:-1] >= 0.9) & (bins[:-1] <= 1.0)
+mask_right = (bins[:-1] >= 0.0) & (bins[:-1] < 0.1)
+
+plt.hist(values, bins=bins, color="lightgray", log=True)  # Base gray histogram
+plt.hist(
+    values[((values >= 0.4) & (values < 0.6))],
+    bins=bins,
+    color="C1",
+    label="Shared",
+    log=True,
+)
+plt.hist(values[((values >= 0.9))], bins=bins, color="C0", label="Chat-only", log=True)
+# Define a range of thresholds with increasingly bright blue colors
+thresholds = [0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1, 0.05]
+blues = [
+    "#000066",
+    "#0000AA",
+    "#0000DD",
+    "#3333FF",
+    "#6666FF",
+    "#9999FF",
+    "#CCCCFF",
+    "#E6E6FF",
+    "#F2F2FF",
+    "#FCFCFF",
+]  # Dark to bright blue
+
+for i, thres in enumerate(thresholds):
+    plt.hist(
+        values[
+            (
+                (values >= 0.9)
+                & (ratio_error_values < thres)
+                & (ratio_reconstruction_values < thres)
+            )
+        ],
+        bins=bins,
+        color=blues[i],
+        label=f"Chat-only (thres={thres})",
+        log=True,
+    )
+
+plt.hist(values[(values <= 0.1)], bins=bins, color=green, label="Base-only", log=True)
+
+# Update yticks for log scale
+plt.yticks(
+    [1, 10, 100, 1000, 4000], ["$10^0$", "$10^1$", "$10^2$", "$10^3$", r"$4\times10^3$"]
+)
+
+# Remove the original xticks call
+# plt.xticks([0, 0.5, 1]), #["0\n(Base only)", "0.5\n(Shared)", "1\n(Chat only)"])
+plt.xticks([0, 0.1, 0.4, 0.5, 0.6, 0.9, 1])
+# # Get current axis and tick positions
+ax = plt.gca()
+# ticks = ax.get_xticks()
+
+# # Create custom text annotations with different colors
+# for tick, label in zip(ticks, ["0", "0.5", "1"]):
+#     # Add value in black
+#     ax.text(tick, -0.05, label,
+#             color='black',
+#             ha='center',
+#             va='top',
+#             transform=ax.get_xaxis_transform())
+
+# Add colored descriptions below
+# ax.text(0.05, -0.09, "(Base only)",
+#         color='C2', ha='center', va='top',
+#         transform=ax.get_xaxis_transform())
+# ax.text(0.5, -0.09, "(Shared)",
+#         color='C1', ha='center', va='top',
+#         transform=ax.get_xaxis_transform())
+# ax.text(0.95, -0.09, "(Chat only)",
+#         color='C0', ha='center', va='top',
+#         transform=ax.get_xaxis_transform())
+# Add vertical lines at key thresholds
+plt.axvline(x=0.1, color="green", linestyle="--", alpha=0.5)
+plt.axvline(x=0.4, color="C1", linestyle="--", alpha=0.5)
+plt.axvline(x=0.6, color="C1", linestyle="--", alpha=0.5)
+plt.axvline(x=0.9, color="C0", linestyle="--", alpha=0.5)
+plt.xlabel(
+    "Relative Norm Difference",
+)  # labelpad=23)
+plt.ylabel("Latents")
+plt.xlim(0, 1)
+# plt.legend(loc="upper left")
+
+plt.tight_layout()
+plt.savefig(Path("results") / "decoder_norm_diff.pdf", bbox_inches="tight")
+
+plt.show()
+
+
