@@ -326,14 +326,16 @@ df_topk_decoupled = load_latent_df(
     "gemma-2-2b-L13-k100-lr1e-04-local-shuffling-Decoupled"
 )
 sae_df = load_latent_df("SAE-chat-gemma-2-2b-L13-k100-lr1e-04-local-shuffling")
-sae_diff_df = load_latent_df("SAE-difference-gemma-2-2b-L13-k100-lr1e-04-local-shuffling")
-
+sae_diff_df = load_latent_df(
+    "SAE-difference-gemma-2-2b-L13-k100-lr1e-04-local-shuffling"
+)
+# %%
 green = "limegreen"
 
 thresholds = np.linspace(0, 1, 100)
-dfs = [df_topk_decoupled, sae_df, sae_diff_df]
+dfs = [df_cc, df_topk_decoupled, sae_df, sae_diff_df]
 counts = [[] for _ in range(len(dfs))]
-names = ["BatchTopK Crosscoder", "SAE", "SAE-diff"]
+names = ["L1 Crosscoder", "BatchTopK Crosscoder", "chat SAE", "diff-SAE"]
 
 for t in thresholds:
     for i, df in enumerate(dfs):
@@ -346,12 +348,12 @@ for t in [0.3, 0.6]:
         print(f"{names[i]}: {count}")
     print("-" * 10 + "\n")
 
-plt.figure(figsize=(9, 6))
+plt.figure(figsize=(10, 6))
 for name, count in zip(names, counts):
     plt.plot(thresholds, count, label=name)
-plt.xlabel(r"$\leftarrow$ more chat-specific (activation ratio threshold)")
+plt.xlabel(r"$\leftarrow$ more chat-specific (latent scaling threshold)")
 plt.ylabel(
-    "\# latents \nbelow \nthreshold of\nactivation ratio",
+    "\# latents\nbelow\nlatent scaling\nthreshold",
     rotation=0,
     labelpad=40,
     y=0.2,
