@@ -206,7 +206,7 @@ class SampleCache:
     """
 
     def __init__(
-        self, cache: ActivationCache | PairedActivationCache, bos_token_id: int = 2
+        self, cache: ActivationCache | PairedActivationCache, bos_token_id: int
     ):
         self.cache = cache
         self.bos_token_id = bos_token_id

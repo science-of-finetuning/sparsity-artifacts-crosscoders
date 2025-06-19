@@ -171,6 +171,7 @@ def evaluate_interventions(
     save_path: Path | None = None,
     token_level_replacement: str | None = None,
     max_num_tokens: int | None = None,
+    ignore_first_n_tokens: int | None = None,
 ):
     if save_path is not None:
         save_path.mkdir(parents=True, exist_ok=True)
@@ -180,7 +181,7 @@ def evaluate_interventions(
     metrics_post_k_first = create_metrics_dict()
 
     tokenizer = patch_tokenizer(
-        AutoTokenizer.from_pretrained(tokenizer_name),
+        AutoTokenizer.from_pretrained(tokenizer_name, padding_side="right"),
         tokenizer_name,
     )
     base_model = split_model(base_model, tokenizer)
@@ -306,6 +307,10 @@ def evaluate_interventions(
                 assert (
                     base_activations_edited.shape == base_activations.shape
                 ), f"Base activations edited shape {base_activations_edited.shape} does not match base activations shape {base_activations.shape} for fn {fn_name}"
+                if ignore_first_n_tokens is not None:
+                    base_activations_edited[:, :ignore_first_n_tokens] = (
+                        base_activations[:, :ignore_first_n_tokens]
+                    )
                 final_logits = base_model.second_half_forward(
                     base_activations_edited,
                     base_first_half_args,
@@ -316,6 +321,10 @@ def evaluate_interventions(
                 assert (
                     instruct_activations_edited.shape == instruct_activations.shape
                 ), f"Instruct activations edited shape {instruct_activations_edited.shape} does not match instruct activations shape {instruct_activations.shape} for fn {fn_name}"
+                if ignore_first_n_tokens is not None:
+                    instruct_activations_edited[:, :ignore_first_n_tokens] = (
+                        instruct_activations[:, :ignore_first_n_tokens]
+                    )
                 final_logits = chat_model.second_half_forward(
                     instruct_activations_edited,
                     instruct_first_half_args,
@@ -440,7 +449,6 @@ def kl_experiment(
     k_first: int = 10,
     checkpoint_every: int = 10,
     num_seeds: int = 5,
-    percentages: list[int] = [5, 10, 30, 50, 100],
     # Output parameters
     save_path: Path = Path("results/interv_effects"),
     name: str | None = None,
@@ -448,6 +456,7 @@ def kl_experiment(
     model_name: str | None = None,
     test: bool = False,
     token_level_replacement: str | None = None,
+    ignore_first_n_tokens: int | None = None,
     max_num_tokens: int | None = None,
     add_coolname: bool = True,
     num_sae_latents: int | None = None,
@@ -494,10 +503,6 @@ def kl_experiment(
         + ("_" + str(int(time.time())))
     )
 
-    # Initialize wandb
-    project = "perplexity-comparison" + ("-test" if test else "")
-    wandb.init(project=project, name=run_name)
-
     # Setup save directory
     run_save_path = save_path / run_name
     run_save_path.mkdir(parents=True, exist_ok=True)
@@ -539,7 +544,6 @@ def kl_experiment(
             "max_seq_len": max_seq_len,
             "device": str(device),
             "num_seeds": num_seeds,
-            "percentages": percentages,
             "is_sae": is_sae,
             "test": test,
             "name": name,
@@ -552,7 +556,10 @@ def kl_experiment(
             "is_difference_sae": is_difference_sae,
             "sae_model": sae_model,
             "num_sae_latents": num_sae_latents,
-            
+            "ignore_first_n_tokens": ignore_first_n_tokens,
+            "dataset_name": dataset_name,
+            "split": split,
+            "dataset_col": dataset_col,
         },
     }
     with open(run_save_path / "metadata.json", "w") as f:
@@ -560,6 +567,9 @@ def kl_experiment(
             metadata,
             f,
         )
+
+    project = "perplexity-comparison" + ("-test" if test else "")
+    wandb.init(project=project, name=run_name, config=metadata["parameters"])
 
     # Run evaluation
     result, total_num_tokens = evaluate_interventions(
@@ -576,6 +586,7 @@ def kl_experiment(
         save_path=run_save_path,
         checkpoint_every=checkpoint_every,
         token_level_replacement=token_level_replacement,
+        ignore_first_n_tokens=ignore_first_n_tokens,
         max_num_tokens=max_num_tokens,
         run_name=run_name,
     )
@@ -664,18 +675,6 @@ if __name__ == "__main__":
         )
     else:
         dictionary = None
-    percentages = args.percentage
-    # fn_dict, infos = create_acl_half_fns(
-    #     dictionary,
-    #     seeds,
-    #     args.dictionary,
-    #     percentages,
-    #     args.columns,
-    #     skip_target_patch=args.skip_target_patch,
-    #     skip_vanilla=args.skip_vanilla,
-    #     skip_patching=args.skip_patching,
-    #     add_base_only_latents=args.add_base_only_latents,
-    # )
     if dictionary is not None:
         chat_only_indices = None
         if args.df_path is not None:
@@ -692,6 +691,19 @@ if __name__ == "__main__":
     else:
         df = None
         chat_only_indices = None
+    if (args.base_model in MODEL_CONFIGS) != (args.chat_model in MODEL_CONFIGS):
+        not_in_model_configs = args.base_model if args.chat_model in MODEL_CONFIGS else args.chat_model
+        raise ValueError(
+            f"Weird, one of the models is in MODEL_CONFIGS and the other is not. Ensure that both models are in MODEL_CONFIGS. {not_in_model_configs} is not in MODEL_CONFIGS."
+        )
+    if args.base_model in MODEL_CONFIGS:
+        ignore_first_n_tokens = MODEL_CONFIGS[args.base_model]["ignore_first_n_tokens_per_sample"]
+        if ignore_first_n_tokens != MODEL_CONFIGS[args.chat_model]["ignore_first_n_tokens_per_sample"]:
+            raise ValueError(
+                f"Weird, ignore_first_n_tokens_per_sample for {args.base_model} and {args.chat_model} are different. If it's expected, you need to adapt the code to handle this."
+            )
+    else:
+        ignore_first_n_tokens = None
     if args.base_model in MODEL_CONFIGS and not args.skip_token_level_replacement:
         token_level_replacement = MODEL_CONFIGS[args.base_model][
             "token_level_replacement"
@@ -704,7 +716,7 @@ if __name__ == "__main__":
             )
         else:
             logger.info(
-                f"Skipping token level replacement for {args.base_model} as it is not in MODEL_CONFIGS"
+                f"Skipping token level replacement & ignore_first_n_tokens for {args.base_model} as it is not in MODEL_CONFIGS"
             )
         token_level_replacement = None
     result = kl_experiment(
@@ -727,7 +739,6 @@ if __name__ == "__main__":
         k_first=args.k_first,
         checkpoint_every=args.checkpoint,
         num_seeds=args.num_seeds,
-        percentages=args.percentage,
         save_path=args.save_path,
         name=args.name,
         dictionary_name=args.dictionary,
@@ -735,4 +746,5 @@ if __name__ == "__main__":
         test=args.test,
         max_num_tokens=args.max_num_tokens,
         token_level_replacement=token_level_replacement,
+        ignore_first_n_tokens=ignore_first_n_tokens,
     )

@@ -83,8 +83,12 @@ def get_positive_activations(sequences, ranges, dataset, cc, latent_ids):
 
 def split_into_sequences(tokenizer, tokens):
     # Find indices of BOS tokens
-    indices_of_bos = th.where(tokens == tokenizer.bos_token_id)[0]
-
+    bos_mask = tokens == tokenizer.bos_token_id
+    indices_of_bos = th.where(bos_mask)[0]
+    if not bos_mask.any():
+        raise NotImplementedError(
+            "Sorry, can't fix into sequence as the model doesn't have BOS or those have been filtered out. We need to implement this in a cleaner way using the dataset directly"
+        )
     # Split tokens into sequences starting with BOS token
     sequences = []
     index_to_seq_pos = []  # List of (sequence_idx, idx_in_sequence) tuples
@@ -186,19 +190,19 @@ def create_difference_cache(cache, sae_model_idx):
 
 def collect_dictionary_activations(
     dictionary_model_name: str,
-    activation_store_dir: str = DATA_ROOT / "activations/",
+    activation_store_dir: str | Path = DATA_ROOT / "activations/",
     base_model: str = "google/gemma-2-2b",
     chat_model: str = "google/gemma-2-2b-it",
     layer: int = 13,
     latent_ids: th.Tensor | None = None,
-    latent_activations_dir: str = DATA_ROOT / "latent_activations/",
+    latent_activations_dir: str | Path = DATA_ROOT / "latent_activations/",
     upload_to_hub: bool = False,
     split: str = "validation",
     load_from_disk: bool = False,
     lmsys_col: str = "",
     is_sae: bool = False,
     is_difference_sae: bool = False,
-    sae_model_idx: int = None,
+    sae_model_idx: int | None = None,
 ) -> None:
     """
     Compute and save latent activations for a given dictionary model.
@@ -285,6 +289,10 @@ def collect_dictionary_activations(
         )
         seq_fineweb, idx_to_seq_pos_fineweb, ranges_fineweb = split_into_sequences(
             tokenizer, tokens_fineweb
+        )
+
+        print(
+            f"Collecting activations for {len(seq_fineweb)} fineweb sequences and {len(seq_lmsys)} lmsys sequences"
         )
 
         (

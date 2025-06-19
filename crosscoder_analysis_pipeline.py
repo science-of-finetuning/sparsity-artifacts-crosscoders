@@ -185,8 +185,8 @@ if __name__ == "__main__":
                 target_model_idx=1,
                 chat_activation=True,
                 base_activation=True,
-                chat_activation_no_bias=not args.is_difference_sae,
-                base_activation_no_bias=not args.is_difference_sae,
+                chat_activation_no_bias=False,
+                base_activation_no_bias=False,
                 num_samples=args.num_samples_betas,
                 is_difference_sae=args.is_difference_sae,
                 sae_model=args.sae_model,
@@ -385,21 +385,34 @@ if __name__ == "__main__":
             ).to(auto_device())
         base_model = load_hf_model(args.base_model, torch_dtype=th.bfloat16)
         chat_model = load_hf_model(args.chat_model, torch_dtype=th.bfloat16)
-        if args.base_model in MODEL_CONFIGS and not args.skip_token_level_replacement:
+        if args.base_model not in MODEL_CONFIGS or args.chat_model not in MODEL_CONFIGS:
+            raise ValueError(
+                "Both base and chat models must be in MODEL_CONFIGS. Ensure that both models are in MODEL_CONFIGS."
+            )
+        if not args.skip_token_level_replacement:
             token_level_replacement = MODEL_CONFIGS[args.base_model][
                 "token_level_replacement"
             ]
             logger.info(f"Using token level replacement: {token_level_replacement}")
         else:
-            if args.base_model in MODEL_CONFIGS:
-                logger.info(
-                    f"Skipping token level replacement for {args.base_model} as --skip-token-level-replacement flag is set"
-                )
-            else:
-                logger.info(
-                    f"Skipping token level replacement for {args.base_model} as it is not in MODEL_CONFIGS"
-                )
+            logger.info(
+                f"Skipping token level replacement for {args.base_model} as --skip-token-level-replacement flag is set"
+            )
             token_level_replacement = None
+        ignore_first_n_tokens = MODEL_CONFIGS[args.base_model][
+            "ignore_first_n_tokens_per_sample"
+        ]
+        if (
+            ignore_first_n_tokens
+            != MODEL_CONFIGS[args.chat_model]["ignore_first_n_tokens_per_sample"]
+        ):
+            raise ValueError(
+                f"Weird, ignore_first_n_tokens_per_sample for {args.base_model} and {args.chat_model} are different. If it's expected, you need to adapt the code to handle this."
+            )
+        logger.info(
+            f"Using ignore_first_n_tokens: {ignore_first_n_tokens} for {args.base_model} and {args.chat_model}"
+        )
+
         kl_experiment(
             dictionary=dictionary,
             base_model=base_model,
@@ -416,6 +429,7 @@ if __name__ == "__main__":
             batch_size=args.batch_size_kl,
             test=args.test,
             token_level_replacement=token_level_replacement,
+            ignore_first_n_tokens=ignore_first_n_tokens,
             is_difference_sae=args.is_difference_sae,
             num_sae_latents=args.num_effective_chat_only_latents // 2,
             sae_model=args.sae_model,
