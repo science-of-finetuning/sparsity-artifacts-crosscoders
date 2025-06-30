@@ -170,7 +170,17 @@ if __name__ == "__main__":
         required=True,
         help="Target to train the SAE on. 'chat': train on chat model activations, 'base': train on base model activations, 'difference_bc': train on (base - chat) activation differences, 'difference_cb': train on (chat - base) activation differences",
     )
-
+    parser.add_argument(
+        "--pretrained-ae",
+        type=str,
+        default=None,
+        help="Path to pretrained AE model",
+    )
+    parser.add_argument(
+        "--from-hub",
+        action="store_true",
+        help="Load pretrained AE model from hub",
+    )
     args = parser.parse_args()
 
     print(f"Training args: {args}")
@@ -298,6 +308,7 @@ if __name__ == "__main__":
         f"SAE-{args.target}-{args.base_model.split('/')[-1]}-L{args.layer}-k{args.k}-x{args.expansion_factor}-lr{args.lr:.0e}"
         + (f"-{args.run_name}" if args.run_name is not None else "")
         + ("-local-shuffling" if args.local_shuffling else "")
+        + (f"-ft-{args.target}" if args.pretrained_ae is not None else "")
     )
 
     device = "cuda" if th.cuda.is_available() else "cpu"
@@ -317,6 +328,11 @@ if __name__ == "__main__":
         "wandb_name": name,
         "k": args.k,
         "steps": args.max_steps,
+        "pretrained_ae": (
+            BatchTopKSAE.from_pretrained(args.pretrained_ae, from_hub=args.from_hub)
+            if args.pretrained_ae is not None
+            else None
+        ),
     }
 
     print(f"Training on {len(train_dataset)} token activations.")

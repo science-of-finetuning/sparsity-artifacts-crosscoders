@@ -166,6 +166,7 @@ def compute_quantile_activating_examples(
     test=False,
     log_time=False,
     use_random_replacement=True,
+    file_name: str = "examples",
 ) -> dict:
     """Compute examples that activate features at different quantile levels.
 
@@ -360,7 +361,7 @@ def compute_quantile_activating_examples(
     # Sort and finalize results
     print(f"Sorting {len(quantile_examples)} quantiles")
     quantile_examples = sort_quantile_examples(quantile_examples)
-    name = "test_examples" if test else "examples"
+    name = ("test_" if test else "") + file_name
     # Save to database
     if save_path is not None:
         print(f"Saving to {save_path / f'{name}.db'}")
@@ -397,6 +398,7 @@ def collect_activating_examples(
     save_path: Path = Path("results/quantile_examples"),
     only_upload: bool = False,
     test: bool = False,
+    file_name: str = "examples",
 ) -> None:
     """
     Collect and save examples that activate latent features at different quantiles.
@@ -454,6 +456,7 @@ def collect_activating_examples(
             min_threshold=min_threshold,
             n=n,
             save_path=save_path,
+            file_name=file_name,
             test=test,
         )
 
@@ -464,7 +467,7 @@ def collect_activating_examples(
     if not test:
         print(f"Uploading to HuggingFace Hub: {repo}")
         for ftype in ["pt", "db"]:
-            name = "test_examples" if test else "examples"
+            name = ("test_" if test else "") + file_name
             file_path = save_path / f"{name}.{ftype}"
             print(f"Uploading {file_path} to {repo}")
             if file_path.exists():
@@ -479,6 +482,7 @@ def collect_activating_examples(
 if __name__ == "__main__":
     import os
 
+    # python scripts/collect_activating_examples.py SAE-base-gemma-2-2b-L13-k100-x32-lr1e-04-local-shuffling --latent-activation-cache-path $DATASTORE/latent_activations --file-name "examples_from_base" --latent-activation-cache-suffix "from_base"
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
     parser = argparse.ArgumentParser()
@@ -486,6 +490,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--latent-activation-cache-path", type=Path, default="./data/latent_activations"
     )
+    parser.add_argument("--latent-activation-cache-suffix", type=str, default="")
     parser.add_argument("--bos-token-id", type=int, default=2)
     parser.add_argument("--n", type=int, default=100)
     parser.add_argument("--min-threshold", type=float, default=1e-4)
@@ -497,14 +502,20 @@ if __name__ == "__main__":
     )
     parser.add_argument("--only-upload", action="store_true")
     parser.add_argument("--test", action="store_true")
+    parser.add_argument("--file-name", type=str, default="examples")
+
     args = parser.parse_args()
     # Load latent activation cache
     if args.only_upload:
         latent_activation_cache = None
     else:
         device = "cuda" if th.cuda.is_available() else "cpu"
+        path = args.latent_activation_cache_path / args.crosscoder
+        if args.latent_activation_cache_suffix:
+            path = path / args.latent_activation_cache_suffix
         latent_activation_cache = LatentActivationCache(
-            args.latent_activation_cache_path / args.crosscoder, expand=False
+            path,
+            expand=False,
         ).to(device)
     collect_activating_examples(
         crosscoder=args.crosscoder,
@@ -516,4 +527,5 @@ if __name__ == "__main__":
         save_path=args.save_path,
         only_upload=args.only_upload,
         test=args.test,
+        file_name=args.file_name,
     )

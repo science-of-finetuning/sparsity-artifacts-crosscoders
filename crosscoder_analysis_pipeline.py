@@ -336,17 +336,22 @@ if __name__ == "__main__":
         latent_activation_cache.to(auto_device())
 
         tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
-        collect_activating_examples(
-            crosscoder=args.dictionary,
-            bos_token_id=tokenizer.bos_token_id,
-            latent_activation_cache=latent_activation_cache,
-            n=100,
-            min_threshold=1e-4,
-            quantiles=[0.25, 0.5, 0.75, 0.95, 1.0],
-            save_path=Path("results/quantile_examples"),
-            test=args.test,
-            only_upload=False,
-        )
+        quantile_examples_path = Path("results/quantile_examples") / args.dictionary
+        if (
+            not (quantile_examples_path / "examples.pt").exists()
+            or not (quantile_examples_path / "examples.db").exists()
+        ):
+            collect_activating_examples(
+                crosscoder=args.dictionary,
+                bos_token_id=tokenizer.bos_token_id,
+                latent_activation_cache=latent_activation_cache,
+                n=100,
+                min_threshold=1e-4,
+                quantiles=[0.25, 0.5, 0.75, 0.95, 1.0],
+                save_path=Path("results/quantile_examples"),
+                test=args.test,
+                only_upload=False,
+            )
         compute_latent_stats(
             crosscoder=args.dictionary,
             latent_activation_cache=latent_activation_cache,

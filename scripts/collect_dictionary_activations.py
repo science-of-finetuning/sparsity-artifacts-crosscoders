@@ -203,6 +203,7 @@ def collect_dictionary_activations(
     is_sae: bool = False,
     is_difference_sae: bool = False,
     sae_model_idx: int | None = None,
+    cache_suffix: str = "",
 ) -> None:
     """
     Compute and save latent activations for a given dictionary model.
@@ -244,7 +245,10 @@ def collect_dictionary_activations(
         raise ValueError(
             "sae_model_idx must be provided if is_sae is True. This is the index of the model activations to use for the SAE."
         )
-    out_dir = Path(latent_activations_dir) / f"{dictionary_model_name}"
+
+    out_dir = Path(latent_activations_dir) / dictionary_model_name
+    if cache_suffix:
+        out_dir = out_dir / cache_suffix
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # Load the activation dataset
@@ -382,30 +386,36 @@ def collect_dictionary_activations(
             print(f"Created repository {repo_id}")
 
         # Upload all tensors to HF Hub directly from saved files
+        def hf_path(name: str):
+            if cache_suffix:
+                return f"{cache_suffix}/{name}"
+            else:
+                return name
+
         api.upload_file(
             path_or_fileobj=str(out_dir / "out_acts.pt"),
-            path_in_repo="activations.pt",
+            path_in_repo=hf_path("activations.pt"),
             repo_id=repo_id,
             repo_type="dataset",
         )
 
         api.upload_file(
             path_or_fileobj=str(out_dir / "out_ids.pt"),
-            path_in_repo="indices.pt",
+            path_in_repo=hf_path("indices.pt"),
             repo_id=repo_id,
             repo_type="dataset",
         )
 
         api.upload_file(
             path_or_fileobj=str(out_dir / "padded_sequences.pt"),
-            path_in_repo="sequences.pt",
+            path_in_repo=hf_path("sequences.pt"),
             repo_id=repo_id,
             repo_type="dataset",
         )
 
         api.upload_file(
             path_or_fileobj=str(out_dir / "latent_ids.pt"),
-            path_in_repo="latent_ids.pt",
+            path_in_repo=hf_path("latent_ids.pt"),
             repo_id=repo_id,
             repo_type="dataset",
         )
@@ -413,7 +423,7 @@ def collect_dictionary_activations(
         # Upload max activations and indices
         api.upload_file(
             path_or_fileobj=str(out_dir / "max_activations.pt"),
-            path_in_repo="max_activations.pt",
+            path_in_repo=hf_path("max_activations.pt"),
             repo_id=repo_id,
             repo_type="dataset",
         )
@@ -452,9 +462,17 @@ if __name__ == "__main__":
         help="Load precomputed activations from disk instead of recomputing. Useful if you forgot to upload to hub in previous run.",
     )
     parser.add_argument(
-        "--is-chat-sae", action="store_true"
+        "--is-sae", action="store_true"
     )  # TODO: allow base sae by changing the model_idx in add_get_activations_sae
+    parser.add_argument("--is-difference-sae", action="store_true")
+    parser.add_argument("--sae-model-idx", type=int, default=None)
+    parser.add_argument("--cache-suffix", type=str, default="")
     args = parser.parse_args()
+    if args.is_sae or args.is_difference_sae:
+        if args.sae_model_idx is None:
+            raise ValueError(
+                "sae_model_idx must be provided if is_sae or is_difference_sae is True. This is the index of the model activations to use for the SAE. 0 for base, 1 for chat."
+            )
     indices_root = Path(args.indices_root)
     if len(args.target_set) == 0:
         latent_ids = None
@@ -477,5 +495,8 @@ if __name__ == "__main__":
         upload_to_hub=args.upload_to_hub,
         split=args.split,
         load_from_disk=args.load_from_disk,
-        is_sae=args.is_chat_sae,
+        is_sae=args.is_sae,
+        is_difference_sae=args.is_difference_sae,
+        sae_model_idx=args.sae_model_idx,
+        cache_suffix=args.cache_suffix,
     )

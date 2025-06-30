@@ -55,20 +55,12 @@ with open(
 ) as f:
     CUSTOMIZABLE_CTRL_TEMPLATE = f.read()
 GEMMA_TOKENIZER = AutoTokenizer.from_pretrained("google/gemma-2-2b-it")
-GEMMA_START_OF_TURN_TOKEN = GEMMA_TOKENIZER.encode(
+GEMMA_START_OF_TURN_TOKEN_ID = GEMMA_TOKENIZER.encode(
     "<start_of_turn>", add_special_tokens=False
-)
-assert (
-    len(GEMMA_START_OF_TURN_TOKEN) == 1
-), f"start of turn token must be a single token: {GEMMA_START_OF_TURN_TOKEN}"
-GEMMA_START_OF_TURN_TOKEN = GEMMA_START_OF_TURN_TOKEN[0]
-GEMMA_END_OF_TURN_TOKEN = GEMMA_TOKENIZER.encode(
+)[0]
+GEMMA_END_OF_TURN_TOKEN_ID = GEMMA_TOKENIZER.encode(
     "<end_of_turn>", add_special_tokens=False
-)
-assert (
-    len(GEMMA_END_OF_TURN_TOKEN) == 1
-), f"end of turn token must be a single token: {GEMMA_END_OF_TURN_TOKEN}"
-GEMMA_END_OF_TURN_TOKEN = GEMMA_END_OF_TURN_TOKEN[0]
+)[0]
 
 sample_batch = [
     [
@@ -91,19 +83,21 @@ sample_batch = [
 def patch_tokenizer(
     tokenizer,
     model_name: str,
-    ctrl_template: str = None,
-    chat_template: str = None,
-    end_of_turn_token: int = None,
-    start_of_turn_token: int = None,
-    pad_token: str = None,
+    ctrl_template: str | None = None,
+    chat_template: str | None = None,
+    end_of_turn_token: str | None = None,
+    start_of_turn_token: str | None = None,
+    pad_token: str | None = None,
 ):
-    if "google/gemma-2" in model_name:
-        tokenizer.chat_template = GEMMA_CHAT_TEMPLATE
-        tokenizer.ctrl_template = GEMMA_CTRL_TEMPLATE
-        tokenizer.start_of_turn_token = GEMMA_START_OF_TURN_TOKEN
-
-        tokenizer.end_of_turn_token = GEMMA_END_OF_TURN_TOKEN
-        return tokenizer
+    if "gemma-2" in model_name.lower():
+        if chat_template is None:
+            chat_template = GEMMA_CHAT_TEMPLATE
+        if ctrl_template is None:
+            ctrl_template = GEMMA_CTRL_TEMPLATE
+        if start_of_turn_token is None:
+            start_of_turn_token = "<start_of_turn>"
+        if end_of_turn_token is None:
+            end_of_turn_token = "<end_of_turn>"
     elif (
         "meta-llama/Meta-Llama-3.1".lower() in model_name.lower()
         or "meta-llama/Llama-3.2".lower() in model_name.lower()
@@ -342,8 +336,6 @@ def custom_chat_template(
 def tokens_to_conv(
     tokens: list[int],
     tokenizer: AutoTokenizer,
-    start_of_turn_token: int,
-    end_of_turn_token: int,
     skip_n_after_sot: int = 0,
     skip_n_after_eot: int = 0,
 ) -> list[dict[str, str]]:
@@ -359,12 +351,14 @@ def tokens_to_conv(
     if tokens[0] == tokenizer.bos_token_id:
         tokens = tokens[1:]
     assert (
-        tokens[0] == start_of_turn_token
+        tokens[0] == tokenizer.start_of_turn_token_id
     ), f"Expected start of turn token after bos token, got {tokens[0]}: {tokenizer.convert_ids_to_tokens(tokens[0])} of\n```{tokenizer.decode(tokens)}```"
     conversation = []
     role = "user"
     role_switch = {"user": "assistant", "assistant": "user"}
-    eot_indexs = [i for i, t in enumerate(tokens) if t == end_of_turn_token]
+    eot_indexs = [
+        i for i, t in enumerate(tokens) if t == tokenizer.end_of_turn_token_id
+    ]
     last_index = 1 + skip_n_after_sot  # skip the first start of turn tokens
     for i, eot_index in enumerate(eot_indexs):
         if last_index == eot_index:
@@ -380,16 +374,16 @@ def tokens_to_conv(
         last_index = eot_index + skip_n_after_eot + 1
         if last_index < len(tokens):
             assert (
-                tokens[last_index] == start_of_turn_token
+                tokens[last_index] == tokenizer.start_of_turn_token_id
             ), f"Expected start of turn token after end of turn token, got {tokens[last_index]}: {tokenizer.convert_ids_to_tokens(tokens[last_index])}"
         last_index += skip_n_after_sot + 1
         role = role_switch[role]
-    if tokens[-1] != end_of_turn_token:
+    if tokens[-1] != tokenizer.end_of_turn_token_id:
         conversation.append(
             {
                 "role": role,
                 "content": tokenizer.decode(tokens[last_index:])
-                + tokenizer.convert_ids_to_tokens(tokenizer.end_of_turn_token),
+                + tokenizer.end_of_turn_token,
             }
         )  # add <end_of_turn> to protect \n from being trimmed when applying the chat template
     assert (
@@ -452,12 +446,13 @@ def gemma_tokens_to_conv(
     tokenizer: AutoTokenizer | None = None,
 ):
     if tokenizer is None:
-        tokenizer = AutoTokenizer.from_pretrained("google/gemma-2-2b-it")
+        tokenizer = patch_tokenizer(
+            AutoTokenizer.from_pretrained("google/gemma-2-2b-it"),
+            model_name="google/gemma-2-2b-it",
+        )
     return tokens_to_conv(
         tokens,
         tokenizer,
-        GEMMA_START_OF_TURN_TOKEN,
-        GEMMA_END_OF_TURN_TOKEN,
         skip_n_after_sot=2,
         skip_n_after_eot=1,
     )

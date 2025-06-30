@@ -41,11 +41,11 @@ def stats_repo_id(crosscoder, author=HF_NAME):
     return f"{author}/diffing-stats-{crosscoder}"
 
 
-def latent_df_exists(crosscoder_or_path, author=HF_NAME):
+def latent_df_exists(crosscoder_or_path, author=HF_NAME, df_name="feature_df"):
     if crosscoder_or_path in df_hf_repo_legacy:
         return file_exists(
             repo_id=df_hf_repo_legacy[crosscoder_or_path],
-            filename="feature_df.csv",
+            filename=f"{df_name}.csv",
             repo_type="dataset",
         )
     elif Path(crosscoder_or_path).exists():
@@ -53,18 +53,18 @@ def latent_df_exists(crosscoder_or_path, author=HF_NAME):
     else:
         return file_exists(
             repo_id=stats_repo_id(crosscoder_or_path),
-            filename="feature_df.csv",
+            filename=f"{df_name}.csv",
             repo_type="dataset",
         )
 
 
-def load_latent_df(crosscoder_or_path, author=HF_NAME):
+def load_latent_df(crosscoder_or_path, author=HF_NAME, df_name="feature_df"):
     """Load the latent_df for the given crosscoder."""
     if crosscoder_or_path in df_hf_repo_legacy:
         # LEGACY SUPPORT
         df_path = hf_hub_download(
             repo_id=df_hf_repo_legacy[crosscoder_or_path],
-            filename="feature_df.csv",
+            filename=f"{df_name}.csv",
             repo_type="dataset",
         )
     elif Path(crosscoder_or_path).exists():
@@ -77,14 +77,14 @@ def load_latent_df(crosscoder_or_path, author=HF_NAME):
                 f"Repository {repo_id} does not exist, can't load latent_df"
             )
         if not file_exists(
-            repo_id=repo_id, filename="feature_df.csv", repo_type="dataset"
+            repo_id=repo_id, filename=f"{df_name}.csv", repo_type="dataset"
         ):
             raise ValueError(
-                f"File feature_df.csv does not exist in repository {repo_id}, can't load latent_df"
+                f"File {df_name}.csv does not exist in repository {repo_id}, can't load latent_df"
             )
         df_path = hf_hub_download(
             repo_id=repo_id,
-            filename="feature_df.csv",
+            filename=f"{df_name}.csv",
             repo_type="dataset",
         )
     df = pd.read_csv(df_path, index_col=0)
@@ -100,6 +100,7 @@ def push_latent_df(
     confirm=True,
     create_repo_if_missing=False,
     author=HF_NAME,
+    filename="feature_df",
 ):
     """
     Push a new feature_df.csv to the hub.
@@ -115,8 +116,10 @@ def push_latent_df(
     """
     if crosscoder is None:
         crosscoder = "l13_crosscoder"
-    if (not force or confirm) and latent_df_exists(crosscoder):
-        original_df = load_latent_df(crosscoder)
+    if (not force or confirm) and latent_df_exists(
+        crosscoder, df_name=filename, author=author
+    ):
+        original_df = load_latent_df(crosscoder, df_name=filename, author=author)
         original_columns = set(original_df.columns)
         new_columns = set(df.columns)
         allow_remove_columns = (
@@ -199,12 +202,12 @@ def push_latent_df(
         repo_id = stats_repo_id(crosscoder)
 
     with TemporaryDirectory() as tmpdir:
-        df.to_csv(Path(tmpdir) / "feature_df.csv")
+        df.to_csv(Path(tmpdir) / f"{filename}.csv")
         try:
             hf_api.upload_file(
                 repo_id=repo_id,
-                path_or_fileobj=Path(tmpdir) / "feature_df.csv",
-                path_in_repo="feature_df.csv",
+                path_or_fileobj=Path(tmpdir) / f"{filename}.csv",
+                path_in_repo=f"{filename}.csv",
                 repo_type="dataset",
                 commit_message=commit_message,
             )
@@ -224,8 +227,8 @@ def push_latent_df(
             # Try uploading again
             hf_api.upload_file(
                 repo_id=repo_id,
-                path_or_fileobj=Path(tmpdir) / "feature_df.csv",
-                path_in_repo="feature_df.csv",
+                path_or_fileobj=Path(tmpdir) / f"{filename}.csv",
+                path_in_repo=f"{filename}.csv",
                 repo_type="dataset",
                 commit_message=commit_message or f"Initial upload for {crosscoder}",
             )
@@ -781,7 +784,11 @@ class QuantileExamplesDB:
 
 
 def offline_dashboard(
-    crosscoder, max_example_per_quantile=20, tokenizer=None, db_path=None
+    crosscoder,
+    max_example_per_quantile=20,
+    tokenizer=None,
+    db_path=None,
+    filename="examples",
 ):
     """
     Returns an offline_dashboard showing activations from different quantile
@@ -794,10 +801,10 @@ def offline_dashboard(
         db_path = hf_hub_download(
             repo_id=stats_repo_id(crosscoder),
             repo_type="dataset",
-            filename="examples.db",
+            filename=f"{filename}.db",
         )
     else:
-        db_path = db_path / crosscoder / "examples.db"
+        db_path = db_path / crosscoder / f"{filename}.db"
     if tokenizer is None:
         assert (
             "gemma-2" in crosscoder

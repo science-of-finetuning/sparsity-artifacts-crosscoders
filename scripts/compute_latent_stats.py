@@ -7,6 +7,7 @@ import torch as th
 import numpy as np
 from dictionary_learning.cache import PairedActivationCache
 from dictionary_learning import CrossCoder
+import pandas as pd
 
 sys.path.append(str(Path(__file__).parent.parent))
 from tools.utils import (
@@ -111,6 +112,7 @@ def compute_stats(
 
 def main(
     crosscoder: str,
+    latent_activation_cache_suffix: str = "",
     activation_cache_path: Path = Path("./activations"),
     device: str = "cuda",
     layer: int = 13,
@@ -120,7 +122,9 @@ def main(
     latent_activation_cache_path: Path | None = None,
     latent_activation_cache: LatentActivationCache | None = None,
     use_sparse_tensor: bool = False,
-) -> None:
+    push_to_hub: bool = True,
+    df_filename: str = "feature_df",
+) -> tuple[pd.DataFrame, dict]:
     results = {}
 
     # Use LatentActivationCache if path is provided
@@ -132,6 +136,8 @@ def main(
         )
         if latent_activation_cache is None:
             split_path = latent_activation_cache_path / crosscoder
+            if latent_activation_cache_suffix:
+                split_path = split_path / latent_activation_cache_suffix
 
             print(f"Processing {split} split")
             latent_activation_cache = LatentActivationCache(
@@ -184,7 +190,7 @@ def main(
     save_json(results, path)
 
     # Update latent dataframe with max activation values
-    df = load_latent_df(crosscoder)
+    df = load_latent_df(crosscoder, df_name=df_filename)
 
     if latent_activation_cache_path or latent_activation_cache:
         # For LatentActivationCache approach
@@ -235,20 +241,23 @@ def main(
             df["freq_fw_val"] = results["validation"]["frequencies_fw"]
         message = "Added max activations and frequencies for all splits and datasets"
 
-    push_latent_df(
-        df,
-        crosscoder=crosscoder,
-        commit_message=message,
-        confirm=confirm,
-    )
+    if push_to_hub:
+        push_latent_df(
+            df,
+            crosscoder=crosscoder,
+            commit_message=message,
+            confirm=confirm,
+            filename=df_filename,
+        )
+    return df, results
 
 
 if __name__ == "__main__":
     parser = ArgumentParser()
+    parser.add_argument("crosscoder", type=str)
     parser.add_argument(
         "--activation-cache-path", "-p", type=Path, default="./activations"
     )
-    parser.add_argument("--crosscoder", type=str, default="l13_crosscoder")
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--layer", type=int, default=13)
     parser.add_argument("--batch-size", type=int, default=2048)
@@ -260,9 +269,20 @@ if __name__ == "__main__":
         help="Path to latent activations directory. If provided, will use LatentActivationCache instead.",
     )
     parser.add_argument(
+        "--latent-activation-cache-suffix",
+        type=str,
+        default="",
+    )
+    parser.add_argument(
         "--use-sparse-tensor",
         action="store_true",
         help="Use sparse tensor representation for latent activations",
+    )
+    parser.add_argument(
+        "--df-filename",
+        type=str,
+        default="feature_df",
+        help="Filename for the feature dataframe",
     )
     args = parser.parse_args()
 
@@ -275,5 +295,7 @@ if __name__ == "__main__":
         num_workers=args.num_workers,
         confirm=args.confirm,
         latent_activation_cache_path=args.latent_activation_cache_path,
+        latent_activation_cache_suffix=args.latent_activation_cache_suffix,
         use_sparse_tensor=args.use_sparse_tensor,
+        df_filename=args.df_filename,
     )

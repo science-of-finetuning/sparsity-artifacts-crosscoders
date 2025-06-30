@@ -465,7 +465,12 @@ class ActivationStats:
 
 
 def process_stats(
-    stats: ComputedActivationStats, crosscoder: str, save_path, verbose=1, test=False
+    stats: ComputedActivationStats,
+    crosscoder: str,
+    save_path,
+    verbose=1,
+    test=False,
+    df_name="feature_df",
 ):
     if verbose:
         # compute simple statistics, like bucket frequency
@@ -579,7 +584,7 @@ def process_stats(
     fig.write_html(plot_dir / "ctrl_percentage_dist.html")
     fig.write_image(plot_dir / "ctrl_percentage_dist.png", scale=3)
 
-    latent_df = load_latent_df(crosscoder)
+    latent_df = load_latent_df(crosscoder, df_name=df_name)
     new_stats = latent_stats.xs(-1, level="bucket")
     intersection_columns = set(new_stats.columns) & set(latent_df.columns)
     for col in intersection_columns:
@@ -594,15 +599,16 @@ def process_stats(
     new_stats = new_stats.merge(latent_df, left_index=True, right_index=True)
     # Reorder columns to group related metrics
     # fmt: off
+    new_stats["lmsys_avg_act"] = new_stats["ctrl_mean"] * new_stats["lmsys_ctrl_%"] + new_stats["non_ctrl_mean"] * (1 - new_stats["lmsys_ctrl_%"])
     ordered_cols = [  
         "tag", "dead", "dec_norm_diff", "base uselessness score", "avg_activation", 
         "lmsys_ctrl_%", "lmsys_bos_%", "lmsys_user_%", "lmsys_assistant_%",
         # Frequencies
         "lmsys_dead", "fw_dead","freq","lmsys_freq","lmsys_ctrl_freq", "lmsys_non_ctrl_freq", "fw_freq", "bos_freq",
         # Mean activations
-        "lmsys_avg_act", "lmsys_ctrl_avg_act", "lmsys_non_ctrl_avg_act", "fw_avg_act",
+        "lmsys_avg_act", "ctrl_mean", "non_ctrl_mean", "fw_avg_act",
         # Max activations  
-        "lmsys_max_act", "lmsys_ctrl_max_act", "lmsys_non_ctrl_max_act",
+        "lmsys_max_act", "ctrl_max", "non_ctrl_max",
         # Cosine similarities
         "dec_cos_sim", "enc_cos_sim",
         # Norm differences
@@ -612,10 +618,10 @@ def process_stats(
     all_cols = [col for col in all_cols if col in new_stats.columns]
     # fmt: on
     new_stats = new_stats[all_cols]
-    # # add enc base norm latent
     new_stats.to_csv(save_path / "latent_stats_global.csv")
+    print(f"Saved to {save_path / 'latent_stats_global.csv'}")
     if not test:
-        push_latent_df(new_stats, crosscoder, confirm=False)
+        push_latent_df(new_stats, crosscoder, confirm=False, filename=df_name)
 
 
 @th.no_grad()
@@ -627,6 +633,7 @@ def compute_latents_template_stats(
     save_path,
     max_num_tokens=1_000_000_000,
     test=False,
+    df_name="feature_df",
 ):
     device = "cuda" if th.cuda.is_available() else "cpu"
     latent_activation_cache.to(device)
@@ -639,7 +646,10 @@ def compute_latents_template_stats(
     num_tokens = 0
     max_num_tokens = max_num_tokens if not test else 100_000
     for i in range(len(latent_activation_cache)):
-        if tokenizer.start_of_turn_token_id in latent_activation_cache.get_sequence(i)[:2]:
+        if (
+            tokenizer.start_of_turn_token_id
+            in latent_activation_cache.get_sequence(i)[:2]
+        ):
             latent_activation_cache.offset = latent_activation_cache.offset + i
             break
     print(f"Using offset {latent_activation_cache.offset}")
@@ -710,16 +720,21 @@ def compute_latents_template_stats(
         if save_path is not None:
             save_path.mkdir(exist_ok=True)
             computed_stats.save(save_path)
-    process_stats(computed_stats, crosscoder, save_path, verbose=1, test=test)
+    process_stats(
+        computed_stats, crosscoder, save_path, verbose=1, test=test, df_name=df_name
+    )
     return computed_stats
 
 
 if __name__ == "__main__":
+    # python scripts/latents_template_stats.py SAE-base-gemma-2-2b-L13-k100-x32-lr1e-04-local-shuffling --latent-activation-cache-path $DATASTORE/latent_activations --df-name "feature_df_from_base" --latent-activation-cache-suffix "from_base"
     parser = ArgumentParser()
     parser.add_argument("crosscoder", type=str)
     parser.add_argument(
         "--latent-activation-cache-path", type=Path, default="./data/latent_activations"
     )
+    parser.add_argument("--df-name", type=str, default="feature_df")
+    parser.add_argument("--latent-activation-cache-suffix", type=str, default="")
     parser.add_argument("--test", "-t", action="store_true")
     parser.add_argument("--use-precomputed-stats", "--skip", action="store_true")
     parser.add_argument("--name", type=str, default="")
@@ -743,9 +758,10 @@ if __name__ == "__main__":
     patch_tokenizer(tokenizer, "gemma-2-2b-it")
 
     # Load latent activation cache and max activations
-    latent_activation_cache = LatentActivationCache(
-        args.latent_activation_cache_path / args.crosscoder, expand=False
-    )
+    l_act_path = args.latent_activation_cache_path / args.crosscoder
+    if args.latent_activation_cache_suffix:
+        l_act_path = l_act_path / args.latent_activation_cache_suffix
+    latent_activation_cache = LatentActivationCache(l_act_path, expand=False)
     max_activations = latent_activation_cache.max_activations
 
     stats = compute_latents_template_stats(
@@ -755,4 +771,5 @@ if __name__ == "__main__":
         max_activations,
         save_path=output_dir,
         test=args.test,
+        df_name=args.df_name,
     )
