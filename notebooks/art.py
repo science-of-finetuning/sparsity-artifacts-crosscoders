@@ -252,8 +252,6 @@ plot_decoder_norm_diff(
     figsize=figsize,
 )
 
-# %%
-
 
 # %%
 df_cc = load_latent_df("gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04")
@@ -329,13 +327,26 @@ sae_df = load_latent_df("SAE-chat-gemma-2-2b-L13-k100-lr1e-04-local-shuffling")
 sae_diff_df = load_latent_df(
     "SAE-difference-gemma-2-2b-L13-k100-lr1e-04-local-shuffling"
 )
+sae_diff_x1_df = load_latent_df(
+    "SAE-difference_cb-gemma-2-2b-L13-k100-x1-lr1e-04-local-shuffling"
+)
+sae_diff_x2_df = load_latent_df(
+    "SAE-difference_cb-gemma-2-2b-L13-k100-x2-lr1e-04-local-shuffling"
+)
 # %%
 green = "limegreen"
 
 thresholds = np.linspace(0, 1, 100)
-dfs = [df_cc, df_topk_decoupled, sae_df, sae_diff_df]
+dfs = [df_cc, df_topk_decoupled, sae_df, sae_diff_df, sae_diff_x1_df, sae_diff_x2_df]
 counts = [[] for _ in range(len(dfs))]
-names = ["L1 Crosscoder", "BatchTopK Crosscoder", "chat SAE", "diff-SAE"]
+names = [
+    "L1 Crosscoder",
+    "BatchTopK Crosscoder",
+    "chat SAE",
+    "diff-SAE",
+    "diff-SAE-x1",
+    "diff-SAE-x2",
+]
 
 for t in thresholds:
     for i, df in enumerate(dfs):
@@ -344,8 +355,15 @@ for t in thresholds:
 for t in [0.3, 0.6]:
     print(f"Threshold: {t}")
     for i, df in enumerate(dfs):
+        df["lmsys_mean_act"] = (
+            df["lmsys_ctrl_%"] * df["ctrl_mean"]
+            + (1 - df["lmsys_ctrl_%"]) * df["non_ctrl_mean"]
+        )
         count = np.sum((df["beta_activation_ratio"].abs() < t))
-        print(f"{names[i]}: {count}")
+        mask = df["beta_activation_ratio"].abs() < t
+        cum_freq = np.sum(df["lmsys_freq"][mask])
+        cum_freq_mean = np.sum(df["lmsys_freq"][mask] * df["lmsys_mean_act"][mask])
+        print(f"{names[i]}: {count} | {cum_freq} | {cum_freq_mean}")
     print("-" * 10 + "\n")
 
 plt.figure(figsize=(10, 6))
@@ -1558,5 +1576,3 @@ plt.tight_layout()
 plt.savefig(Path("results") / "decoder_norm_diff.pdf", bbox_inches="tight")
 
 plt.show()
-
-

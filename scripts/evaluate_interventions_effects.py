@@ -692,13 +692,20 @@ if __name__ == "__main__":
         df = None
         chat_only_indices = None
     if (args.base_model in MODEL_CONFIGS) != (args.chat_model in MODEL_CONFIGS):
-        not_in_model_configs = args.base_model if args.chat_model in MODEL_CONFIGS else args.chat_model
+        not_in_model_configs = (
+            args.base_model if args.chat_model in MODEL_CONFIGS else args.chat_model
+        )
         raise ValueError(
             f"Weird, one of the models is in MODEL_CONFIGS and the other is not. Ensure that both models are in MODEL_CONFIGS. {not_in_model_configs} is not in MODEL_CONFIGS."
         )
     if args.base_model in MODEL_CONFIGS:
-        ignore_first_n_tokens = MODEL_CONFIGS[args.base_model]["ignore_first_n_tokens_per_sample"]
-        if ignore_first_n_tokens != MODEL_CONFIGS[args.chat_model]["ignore_first_n_tokens_per_sample"]:
+        ignore_first_n_tokens = MODEL_CONFIGS[args.base_model][
+            "ignore_first_n_tokens_per_sample"
+        ]
+        if (
+            ignore_first_n_tokens
+            != MODEL_CONFIGS[args.chat_model]["ignore_first_n_tokens_per_sample"]
+        ):
             raise ValueError(
                 f"Weird, ignore_first_n_tokens_per_sample for {args.base_model} and {args.chat_model} are different. If it's expected, you need to adapt the code to handle this."
             )

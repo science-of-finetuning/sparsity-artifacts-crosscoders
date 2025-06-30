@@ -70,7 +70,9 @@ def process_response(response: str, prompt_length: int, tokenizer):
         cleaned_response = cleaned_response[: -len(tokenizer.end_of_turn_token)]
         is_truncated = False
     else:
-        cleaned_response = re.sub(rf'{re.escape(tokenizer.pad_token)}+$', '', cleaned_response)
+        cleaned_response = re.sub(
+            rf"{re.escape(tokenizer.pad_token)}+$", "", cleaned_response
+        )
 
     return cleaned_response, is_truncated
 
