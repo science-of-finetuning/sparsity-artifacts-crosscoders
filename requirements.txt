@@ -1,4 +1,4 @@
-nnterp
+nnterp<1.0.0
 jupyter
 seaborn
 coolname
