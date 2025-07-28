@@ -13,3 +13,4 @@ kaleido
 wandb
 loguru
 pytest
+dotenv
