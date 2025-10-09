@@ -254,6 +254,13 @@ plot_decoder_norm_diff(
 
 
 # %%
+"""
+======================================================
+Latents vs Threshold  of both error and reconstruction
+======================================================
+"""
+
+
 df_cc = load_latent_df("gemma-2-2b-crosscoder-l13-mu4.1e-02-lr1e-04")
 df_cc = df_cc[df_cc["tag"] == "IT only"]
 df_topk = load_latent_df("gemma-2-2b-L13-k100-lr1e-04-local-shuffling-CCLoss")
@@ -266,7 +273,6 @@ df_topk_decoupled = df_topk_decoupled.sort_values(by="dec_norm_diff", ascending=
 df_topk_decoupled = df_topk_decoupled.iloc[: len(df_cc)]
 sae_df = load_latent_df("SAE-chat-gemma-2-2b-L13-k100-lr1e-04-local-shuffling")
 
-# %%
 # Create line plot showing number of latents vs threshold
 plt.figure(figsize=(7, 2.3))
 
@@ -324,6 +330,7 @@ df_topk_decoupled = load_latent_df(
     "gemma-2-2b-L13-k100-lr1e-04-local-shuffling-Decoupled"
 )
 sae_df = load_latent_df("SAE-chat-gemma-2-2b-L13-k100-lr1e-04-local-shuffling")
+base_sae_df = load_latent_df("SAE-base-gemma-2-2b-L13-k100-x32-lr1e-04-local-shuffling")
 sae_diff_df = load_latent_df(
     "SAE-difference-gemma-2-2b-L13-k100-lr1e-04-local-shuffling"
 )
@@ -337,14 +344,15 @@ sae_diff_x2_df = load_latent_df(
 green = "limegreen"
 
 thresholds = np.linspace(0, 1, 100)
-dfs = [df_cc, df_topk_decoupled, sae_df, sae_diff_df, sae_diff_x1_df, sae_diff_x2_df]
+dfs = [df_cc, df_topk_decoupled, sae_df, base_sae_df, sae_diff_df, sae_diff_x2_df]
 counts = [[] for _ in range(len(dfs))]
 names = [
     "L1 Crosscoder",
     "BatchTopK Crosscoder",
     "chat SAE",
+    "base SAE",
     "diff-SAE",
-    "diff-SAE-x1",
+    # "diff-SAE-x1",
     "diff-SAE-x2",
 ]
 
@@ -380,7 +388,12 @@ plt.yscale("log")
 plt.legend()
 plt.title("SAE have more chat-specific latents than crosscoders")
 plt.tight_layout()
-plt.savefig("results/latents_vs_threshold_activation_logscale.svg", bbox_inches="tight")
+plt.savefig("results/latents_vs_threshold_activation_logscale.pdf", bbox_inches="tight")
+plt.savefig(
+    "results/latents_vs_threshold_activation_logscale.png",
+    bbox_inches="tight",
+    dpi=300,
+)
 plt.show()
 # %%
 
