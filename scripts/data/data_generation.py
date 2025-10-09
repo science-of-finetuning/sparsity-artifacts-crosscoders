@@ -50,7 +50,7 @@ def setup_model(
 
 def filter_dataset(dataset, tokenizer, max_text_length=1024, min_response_length=128):
     """Filter dataset based on text length constraints."""
-    toks = tokenizer.apply_chat_template(dataset, add_generation_prompt=True)
+    toks = tokenizer.apply_chat_template(list(dataset), add_generation_prompt=True)
     return [
         prompt
         for prompt, tok in zip(dataset, toks)
@@ -83,7 +83,7 @@ def generate_responses(
     dataset,
     to_generate_tokens=200_000,
     batch_size=64,
-    max_length=1024,
+    max_new_tokens=1024,
     device="cuda",
 ):
     """Generate responses using the model."""
@@ -118,14 +118,12 @@ def generate_responses(
                 batch,
                 add_generation_prompt=True,
                 tokenize=True,
-                truncation=True,
-                max_length=max_length,
             )
         )
 
         out = model.generate(
             **tokenized,
-            max_new_tokens=max_length - min_length,
+            max_new_tokens=max_new_tokens,
             do_sample=False,
             stop_strings=[tokenizer.end_of_turn_token],
             tokenizer=tokenizer,
@@ -159,9 +157,12 @@ def create_dataset(
     gen_column_name: str,
 ):
     """Create final dataset with configurable column names."""
-    assert (
-        len(generated_data) == len(original_dataset) == len(truncation_status)
-    ), f"Lengths are not equal: {len(generated_data)}, {len(original_dataset)}, {len(truncation_status)}"
+    assert len(generated_data) == len(
+        truncation_status
+    ), f"Lengths are not equal: {len(generated_data)}, {len(truncation_status)}"
+    assert len(generated_data) <= len(
+        original_dataset
+    ), f"Generated data is longer than original dataset: {len(generated_data)}, {len(original_dataset)}"
     dataset_list = [
         {
             gen_column_name: gen_conv,
@@ -181,9 +182,10 @@ def generate_dataset_responses(
     dataset_name: str,
     dataset_split: str = "test_sft",
     gen_column_name: str = "messages",
+    dataset_column_name: str = "messages",
     to_generate_tokens: int = 200_000,
     batch_size: int = 64,
-    max_length: int = 1024,
+    max_new_tokens: int = 1024,
     max_text_length: int = 1024,
     min_response_length: int = 128,
     end_of_turn_token: str | None = None,
@@ -203,7 +205,7 @@ def generate_dataset_responses(
         print("No dataset specified, please provide --dataset_name")
         return
 
-    raw_dataset = load_dataset(dataset_name)[dataset_split]["messages"]
+    raw_dataset = load_dataset(dataset_name)[dataset_split][dataset_column_name]
     print(f"Loaded dataset: {dataset_name}, split: {dataset_split}")
 
     filtered_dataset = filter_dataset(
@@ -223,7 +225,7 @@ def generate_dataset_responses(
         filtered_dataset,
         to_generate_tokens=to_generate_tokens,
         batch_size=batch_size,
-        max_length=max_length,
+        max_new_tokens=max_new_tokens,
     )
 
     # Create and save dataset
@@ -272,7 +274,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--dataset-name",
         type=str,
-        default="science-of-finetuning/ultrachat_200k_generated",
+        default="HuggingFaceH4/ultrachat_200k",
         help="Dataset name to load",
     )
     parser.add_argument(
@@ -280,6 +282,12 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--gen-column-name",
+        type=str,
+        default="messages",
+        help="Name for the column to store generated messages",
+    )
+    parser.add_argument(
+        "--dataset-column-name",
         type=str,
         default="messages",
         help="Name for the column to store generated messages",
@@ -294,7 +302,7 @@ if __name__ == "__main__":
         "--batch-size", type=int, default=64, help="Batch size for generation"
     )
     parser.add_argument(
-        "--max-length", type=int, default=1024, help="Maximum sequence length"
+        "--max-new-tokens", type=int, default=1024, help="Maximum new tokens"
     )
     parser.add_argument(
         "--max-text-length",
@@ -332,9 +340,10 @@ if __name__ == "__main__":
         dataset_name=args.dataset_name,
         dataset_split=args.dataset_split,
         gen_column_name=args.gen_column_name,
+        dataset_column_name=args.dataset_column_name,
         to_generate_tokens=args.to_generate_tokens,
         batch_size=args.batch_size,
-        max_length=args.max_length,
+        max_new_tokens=args.max_new_tokens,
         max_text_length=args.max_text_length,
         min_response_length=args.min_response_length,
         end_of_turn_token=args.end_of_turn_token,

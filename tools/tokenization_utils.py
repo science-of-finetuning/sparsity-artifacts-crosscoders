@@ -99,8 +99,8 @@ def patch_tokenizer(
         if end_of_turn_token is None:
             end_of_turn_token = "<end_of_turn>"
     elif (
-        "meta-llama/Meta-Llama-3.1".lower() in model_name.lower()
-        or "meta-llama/Llama-3.2".lower() in model_name.lower()
+        "meta-llama/Meta-Llama-3.".lower() in model_name.lower()
+        or "meta-llama/Llama-3.".lower() in model_name.lower()
     ):
         if chat_template is None:
             chat_template = LLAMA3_1_CHAT_TEMPLATE

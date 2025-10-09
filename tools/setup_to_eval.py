@@ -20,6 +20,7 @@ from tools.halfway_interventions import (
     SAEDifferenceReconstruction,
     SAEDifferenceReconstructionError,
     SAEDifferenceBiasSteering,
+    SAEReconstruction,
 )
 from tools.cc_utils import load_latent_df
 
@@ -715,6 +716,17 @@ def sae_steering_half_fns(
             continue_with="chat",
             steer_activations_of="base",
             sae_model=sae_model,
+        )
+    else:
+        half_fns["patch_chat_recon_cchat"] = SAEReconstruction(
+            sae,
+            use_reconstruction_of="chat",
+            continue_with="chat",
+        )
+        half_fns["patch_base_recon_cchat"] = SAEReconstruction(
+            sae,
+            use_reconstruction_of="base",
+            continue_with="chat",
         )
     infos["is_difference_sae"] = is_difference_sae
     return half_fns, infos

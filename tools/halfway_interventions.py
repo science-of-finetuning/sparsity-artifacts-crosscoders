@@ -554,6 +554,59 @@ class CrossCoderOutProjection(IdentityPreprocessFn):
         return self.project_out(activation)
 
 
+class SAEReconstruction(IdentityPreprocessFn):
+    """Use reconstruction of a model + reconstruction error of the other.
+
+    Args:
+        sae: The SAE model to use
+        use_reconstruction_of: Which model's activations reconstruction to use
+        continue_with: Which model should continue generation after steering
+        model_dtype: The dtype of the model
+    """
+
+    can_edit_single_activation = False
+
+    def __init__(
+        self,
+        sae: Dictionary,
+        use_reconstruction_of: Literal["base", "chat"],
+        continue_with: Literal["base", "chat"],
+        model_dtype: th.dtype = th.bfloat16,
+    ):
+        super().__init__(continue_with, model_dtype)
+        self.sae = sae
+        self.use_reconstruction_of = ensure_model(use_reconstruction_of)
+
+    def preprocess(self, base_activations, chat_activations, **kwargs):
+        # Choose which activations to reconstruct
+        if self.use_reconstruction_of == "base":
+            activations_to_reconstruct = base_activations
+            other_activations = chat_activations
+        else:
+            activations_to_reconstruct = chat_activations
+            other_activations = base_activations
+
+        # Reshape for SAE processing
+        b, s, d = activations_to_reconstruct.shape
+        flat_activations = einops.rearrange(
+            activations_to_reconstruct, "b s d -> (b s) d"
+        ).float()
+        reconstructed = self.sae(flat_activations)
+        reconstructed = einops.rearrange(reconstructed, "(b s) d -> b s d", b=b)
+
+        other_flat = einops.rearrange(other_activations, "b s d -> (b s) d").float()
+        other_reconstructed = self.sae(other_flat)
+        other_reconstructed = einops.rearrange(
+            other_reconstructed, "(b s) d -> b s d", b=b
+        )
+        reconstruction_error = other_activations - other_reconstructed
+
+        # Combine reconstruction + reconstruction error
+        result = reconstructed + reconstruction_error
+
+        return self.continue_with_model(result.to(self.model_dtype))
+
+
 class SAEAdditiveSteering(IdentityPreprocessFn):
     """Preprocessing function that adds activations using SAE activations and decoder weights.
 
