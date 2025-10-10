@@ -1,4 +1,5 @@
 nnterp<1.0.0
+nnsight<0.5  # because of nnterp <1.0.0
 transformers<4.54
 jupyter
 seaborn
@@ -6,7 +7,7 @@ coolname
 papermill
 pycolors @ git+https://github.com/jkminder/pycolors.git
 torchmetrics
-dictionary_learning @ git+https://github.com/jkminder/dictionary_learning.git
+dictionary_learning @ git+https://github.com/science-of-finetuning/crosscoder_learning.git
 ipykernel
 tiny_dashboard
 datasets

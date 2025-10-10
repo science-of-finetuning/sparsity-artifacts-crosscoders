@@ -21,9 +21,8 @@ from dictionary_learning.trainers.batch_top_k import BatchTopKSAE
 from nnterp import load_model
 from tiny_dashboard import OfflineFeatureCentricDashboard
 from tiny_dashboard.dashboard_implementations import CrosscoderOnlineFeatureDashboard
-from .configs import REPO_ROOT
 
-sys.path.append(str(REPO_ROOT))
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 from tools.configs import HF_NAME
 
