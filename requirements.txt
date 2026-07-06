@@ -7,7 +7,7 @@ coolname
 papermill
 pycolors @ git+https://github.com/jkminder/pycolors.git
 torchmetrics
-dictionary_learning @ git+https://github.com/science-of-finetuning/crosscoder_learning.git
+dictionary_learning @ git+https://github.com/science-of-finetuning/crosscoder_learning.git@d7a65dc00a3572e10f18d09aec88580f8a80e89a  # need specific  commit because later version ened nnsight >0.5
 ipykernel
 tiny_dashboard
 datasets
